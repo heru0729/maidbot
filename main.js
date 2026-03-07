@@ -179,7 +179,7 @@ client.on('messageCreate', async m => {
         return m.reply(header + list);
     }
     
-    }
+    };
     if (m.content === '!serverlist') {
         const list = client.guilds.cache.map(g => `${g.name} (${g.id}) - ${g.memberCount}人`).join('\n');
         return m.reply(`サーバー一覧:\n${list.slice(0, 1900)}`);
