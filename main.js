@@ -11,7 +11,7 @@ const path = require('path');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-const { TOKEN, CLIENT_ID, CLIENT_SECRET, REDIRECT_URI } = process.env;
+const { TOKEN, CLIENT_ID, CLIENT_SECRET, REDIRECT_URI, SUPPORT_URL, INVITE_URL } = process.env;
 
 const DATA_DIR = path.join(__dirname, "data");
 const USERS_FILE = path.join(DATA_DIR, "users.json");
@@ -104,7 +104,14 @@ app.get('/callback', async (req, res) => {
             ).catch(() => {});
         }
 
-        res.send("<body style='background:#23272A;color:white;text-align:center;padding-top:100px;font-family:sans-serif;'><h2>✅ 認証完了</h2><p>Discordに戻ってください。</p></body>");
+        res.send(`
+            <body style="background: radial-gradient(circle at center, #1b2735 0%, #090a0f 100%); color: white; display: flex; justify-content: center; align-items: center; height: 100vh; font-family: sans-serif; margin: 0;">
+                <div style="text-align: center; border: 2px solid #5865F2; padding: 40px; border-radius: 15px; background: rgba(0, 0, 0, 0.7); box-shadow: 0 0 30px rgba(88, 101, 242, 0.5);">
+                    <h1 style="color: #5865F2;">✅ 認証完了</h1>
+                    <p style="font-size: 1.1em;">ゲートウェイが承認されました。<br>Discordに戻ってください。</p>
+                </div>
+            </body>
+        `);
     } catch (err) { res.status(500).send("Auth Error."); }
 });
 
@@ -152,12 +159,21 @@ client.on('interactionCreate', async interaction => {
 
         const aEmbed = new EmbedBuilder()
             .setTitle("🛡️ メンバー認証")
-            .setDescription(`下のボタンから認証を完了させてください。\n付与ロール: ${role}`).setColor(0x2F3136);
+            .setDescription(`下のボタンから認証を完了させてください。\n付与ロール: ${role}`)
+            .setColor(0x5865F2);
 
         const row = new ActionRowBuilder().addComponents(
             new ButtonBuilder()
                 .setLabel("認証を開始")
                 .setURL(`https://discord.com/api/oauth2/authorize?client_id=${CLIENT_ID}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&response_type=code&scope=identify%20guilds.join&state=${guild.id}`)
+                .setStyle(ButtonStyle.Link),
+            new ButtonBuilder()
+                .setLabel("サポートサーバー")
+                .setURL(SUPPORT_URL || "https://discord.gg/")
+                .setStyle(ButtonStyle.Link),
+            new ButtonBuilder()
+                .setLabel("Botを導入")
+                .setURL(INVITE_URL || `https://discord.com/api/oauth2/authorize?client_id=${CLIENT_ID}&permissions=8&scope=bot%20applications.commands`)
                 .setStyle(ButtonStyle.Link)
         );
 
