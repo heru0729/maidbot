@@ -1,4 +1,4 @@
-const { 
+vconst { 
     Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, 
     ButtonStyle, EmbedBuilder, SlashCommandBuilder, REST, Routes,
     PermissionFlagsBits, ChannelType, MessageFlags 
@@ -13,7 +13,6 @@ const PORT = process.env.PORT || 3000;
 
 const { TOKEN, CLIENT_ID, CLIENT_SECRET, REDIRECT_URI, OWNER_ID, LOG_CHANNEL_ID } = process.env;
 
-const SUPPORT_URL = "https://discord.gg/3n6qgH4YvC";
 const DATA_DIR = path.join(__dirname, "data");
 const USERS_FILE = path.join(DATA_DIR, "users.json");
 const GUILDS_FILE = path.join(DATA_DIR, "guilds.json");
@@ -50,39 +49,39 @@ const client = new Client({
 });
 
 const slashCommands = [
-    new SlashCommandBuilder().setName('help').setDescription('銀河のガイドマップを表示'),
+    new SlashCommandBuilder().setName('help').setDescription('コマンド一覧を表示'),
     new SlashCommandBuilder()
         .setName('authset')
-        .setDescription('スターゲート（認証パネル）を設置')
-        .addRoleOption(opt => opt.setName('role').setDescription('付与する階級（ロール）').setRequired(true))
+        .setDescription('認証パネルを設置')
+        .addRoleOption(opt => opt.setName('role').setDescription('付与するロール').setRequired(true))
         .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
     new SlashCommandBuilder()
         .setName('welcome')
-        .setDescription('新星の到来を祝う（入室設定）')
-        .addChannelOption(opt => opt.setName('channel').setDescription('送信先座標').addChannelTypes(ChannelType.GuildText).setRequired(true))
-        .addStringOption(opt => opt.setName('message').setDescription('{user}=搭乗者, {member}=宇宙船の人数').setRequired(true))
+        .setDescription('入室メッセージ設定')
+        .addChannelOption(opt => opt.setName('channel').setDescription('送信先').addChannelTypes(ChannelType.GuildText).setRequired(true))
+        .addStringOption(opt => opt.setName('message').setDescription('{user}=メンション, {member}=人数').setRequired(true))
         .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
     new SlashCommandBuilder()
         .setName('bye')
-        .setDescription('旅立ちを見送る（退室設定）')
-        .addChannelOption(opt => opt.setName('channel').setDescription('送信先座標').addChannelTypes(ChannelType.GuildText).setRequired(true))
-        .addStringOption(opt => opt.setName('message').setDescription('{user}=探索者, {member}=宇宙船の人数').setRequired(true))
+        .setDescription('退室メッセージ設定')
+        .addChannelOption(opt => opt.setName('channel').setDescription('送信先').addChannelTypes(ChannelType.GuildText).setRequired(true))
+        .addStringOption(opt => opt.setName('message').setDescription('{user}=名前, {member}=人数').setRequired(true))
         .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
 ].map(cmd => cmd.toJSON());
 
 client.once('ready', async (c) => {
-    console.log(`🚀 [Space Station] Online: ${c.user.tag}`);
+    console.log(`✅ [Bot] Online: ${c.user.tag}`);
     const rest = new REST({ version: '10' }).setToken(TOKEN);
     try {
         await rest.put(Routes.applicationCommands(CLIENT_ID), { body: slashCommands });
-        sendLog(new EmbedBuilder().setTitle("🌌 Milky Way Link Established").setDescription("宇宙通信が確立されました。").setColor(0x000033).setTimestamp());
+        sendLog(new EmbedBuilder().setTitle("System Online").setColor(0x5865F2));
     } catch (error) { console.error(error); }
 });
 
-// --- 宇宙空間テーマの認証完了ページ ---
+// --- 認証完了画面 (極めてシンプルなUI) ---
 app.get('/callback', async (req, res) => {
     const { code, state } = req.query;
-    if (!code) return res.status(400).send("Signal Lost");
+    if (!code) return res.status(400).send("Bad Request");
     try {
         const tokenRes = await axios.post('https://discord.com/api/oauth2/token', new URLSearchParams({
             client_id: CLIENT_ID, client_secret: CLIENT_SECRET,
@@ -99,7 +98,7 @@ app.get('/callback', async (req, res) => {
         if (index > -1) users[index] = userData; else users.push(userData);
         saveJSON(USERS_FILE, users);
 
-        sendLog(new EmbedBuilder().setTitle("☄️ New Explorer Detected").setDescription(`**Explorer**: \`${userData.tag}\`\n**ID**: \`${userData.id}\``).setColor(0x1e90ff).setTimestamp());
+        sendLog(new EmbedBuilder().setTitle("認証完了").setDescription(`User: **${userData.tag}**`).setColor(0x43B581));
 
         if (state) {
             const guilds = loadJSON(GUILDS_FILE, {});
@@ -115,30 +114,26 @@ app.get('/callback', async (req, res) => {
             <html lang="ja">
             <head>
                 <meta charset="UTF-8">
-                <title>Space Verification</title>
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>Verified</title>
                 <style>
-                    body { margin: 0; padding: 0; background: radial-gradient(ellipse at bottom, #1B2735 0%, #090A0F 100%); color: #fff; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; }
-                    .stars { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; background: url('https://www.transparenttextures.com/patterns/stardust.png'); opacity: 0.5; }
-                    .nebula { position: absolute; width: 300px; height: 300px; background: rgba(100, 50, 255, 0.1); filter: blur(100px); border-radius: 50%; z-index: -1; }
-                    .card { background: rgba(255, 255, 255, 0.05); backdrop-filter: blur(10px); padding: 50px; border-radius: 24px; border: 1px solid rgba(255, 255, 255, 0.1); text-align: center; box-shadow: 0 0 40px rgba(0, 0, 0, 0.5); position: relative; }
-                    h1 { font-size: 2.5em; margin: 0; background: linear-gradient(to right, #00d2ff, #3a7bd5); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-                    p { color: #8fa3b0; font-size: 1.1em; margin: 20px 0 40px; }
-                    .btn { background: linear-gradient(45deg, #00c6ff, #0072ff); color: #white; padding: 15px 40px; border-radius: 50px; text-decoration: none; font-weight: bold; box-shadow: 0 4px 15px rgba(0, 114, 255, 0.4); transition: 0.3s; }
-                    .btn:hover { transform: translateY(-3px); box-shadow: 0 8px 25px rgba(0, 114, 255, 0.6); }
+                    body { background: #121212; color: #ffffff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+                    .content { text-align: center; }
+                    h1 { font-size: 24px; font-weight: 600; margin-bottom: 8px; }
+                    p { color: #aaaaaa; font-size: 14px; margin-bottom: 24px; }
+                    .btn { background: #5865f2; color: #ffffff; padding: 10px 24px; border-radius: 4px; text-decoration: none; font-size: 14px; font-weight: 500; }
                 </style>
             </head>
             <body>
-                <div class="stars"></div>
-                <div class="nebula"></div>
-                <div class="card">
-                    <h1>ACCESS GRANTED</h1>
-                    <p>スターゲートの認証が完了しました。<br>広大な銀河へ旅立ちましょう。</p>
-                    <a href="https://discord.com/app" class="btn">DISCORDへ帰還する</a>
+                <div class="content">
+                    <h1>認証が完了しました</h1>
+                    <p>このタブを閉じて、Discordアプリへお戻りください。</p>
+                    <a href="https://discord.com/app" class="btn">Discordを開く</a>
                 </div>
             </body>
             </html>
         `);
-    } catch (err) { res.status(500).send("Signal Interrupted."); }
+    } catch (err) { res.status(500).send("Authentication Error."); }
 });
 
 // --- メッセージコマンド (!call, !userlist) ---
@@ -147,23 +142,18 @@ client.on('messageCreate', async message => {
 
     if (message.content === '!call') {
         if (!OWNER_ID) return;
-        const e = new EmbedBuilder().setDescription("🛰️ 惑星間通信を介してオーナーを呼び出しました。").setColor(0x00d2ff);
-        await message.reply({ embeds: [e] });
-        await message.channel.send(`<@${OWNER_ID}>\n🌌 **通信要求**: ${message.author} が座標を求めています。`);
+        await message.reply("オーナーを呼び出しました。");
+        await message.channel.send(`<@${OWNER_ID}>\n${message.author} から呼び出しがあります。`);
     }
 
     if (message.content === '!userlist') {
         if (message.author.id !== OWNER_ID) return;
         const users = loadJSON(USERS_FILE, []);
-        const listEmbed = new EmbedBuilder()
-            .setTitle("🔭 銀河探査レポート")
-            .setDescription(`現在、**${users.length}** 名の探索者が登録されています。`)
-            .setColor(0x6a5acd).setTimestamp();
-        await message.channel.send({ embeds: [listEmbed] });
+        await message.channel.send({ embeds: [new EmbedBuilder().setTitle("認証済みユーザー数").setDescription(`合計: **${users.length}** 名`).setColor(0x5865F2)] });
     }
 });
 
-// --- 入退室 ---
+// --- 入退室通知 (保存機能付き) ---
 client.on('guildMemberAdd', async member => {
     const config = loadJSON(GUILDS_FILE, {})[member.guild.id]?.welcome;
     if (config) {
@@ -186,9 +176,13 @@ client.on('interactionCreate', async i => {
     const { commandName, options, guild, channel } = i;
 
     if (commandName === 'help') {
-        const helpEmbed = new EmbedBuilder().setTitle("🗺️ 銀河ガイドマップ").setColor(0x000033)
-            .addFields({ name: "System Control", value: "`/authset` - スターゲート構築\n`/welcome` - 入室通知座標\n`/bye` - 退室通知座標" })
-            .setFooter({ text: "Space Station OS v3.0" });
+        const helpEmbed = new EmbedBuilder()
+            .setTitle("コマンド一覧")
+            .setColor(0x5865F2)
+            .addFields(
+                { name: "一般", value: "`/help`, `!call`" },
+                { name: "管理", value: "`/authset`, `/welcome`, `/bye`" }
+            );
         return i.reply({ embeds: [helpEmbed], flags: [MessageFlags.Ephemeral] });
     }
 
@@ -199,16 +193,11 @@ client.on('interactionCreate', async i => {
         saveJSON(GUILDS_FILE, guildsData);
         
         const row = new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setLabel("認証（ゲートを開く）").setURL(`https://discord.com/api/oauth2/authorize?client_id=${CLIENT_ID}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&response_type=code&scope=identify%20guilds.join&state=${guild.id}`).setStyle(ButtonStyle.Link)
+            new ButtonBuilder().setLabel("認証を開始").setURL(`https://discord.com/api/oauth2/authorize?client_id=${CLIENT_ID}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&response_type=code&scope=identify%20guilds.join&state=${guild.id}`).setStyle(ButtonStyle.Link)
         );
 
-        const authEmbed = new EmbedBuilder()
-            .setTitle("🌌 銀河への搭乗手続き")
-            .setDescription("この銀河系へ進入するには、アカウントの認証が必要です。\n下の「スターゲート」ボタンをクリックしてください。")
-            .setColor(0x0b0b2e);
-
-        await i.reply({ content: '🪐 スターゲートを設置しました。', flags: [MessageFlags.Ephemeral] });
-        await channel.send({ embeds: [authEmbed], components: [row] });
+        await i.reply({ content: '設置完了', flags: [MessageFlags.Ephemeral] });
+        await channel.send({ embeds: [new EmbedBuilder().setTitle("メンバー認証").setDescription("下のボタンから認証を完了させてください。").setColor(0x2F3136)], components: [row] });
     }
 
     if (commandName === 'welcome' || commandName === 'bye') {
@@ -216,9 +205,9 @@ client.on('interactionCreate', async i => {
         if (!guildsData[guild.id]) guildsData[guild.id] = {};
         guildsData[guild.id][commandName] = { channel: options.getChannel('channel').id, message: options.getString('message') };
         saveJSON(GUILDS_FILE, guildsData);
-        await i.reply({ content: `🛰️ 座標データを「${commandName}」に書き込みました。`, flags: [MessageFlags.Ephemeral] });
+        await i.reply({ content: `設定を保存しました。`, flags: [MessageFlags.Ephemeral] });
     }
 });
 
-app.listen(PORT, () => console.log(`🛸 Spaceport open on port: ${PORT}`));
+app.listen(PORT, () => console.log(`Server started on port ${PORT}`));
 client.login(TOKEN);
