@@ -92,7 +92,6 @@ client.on('interactionCreate', async i => {
         const embed = new EmbedBuilder().setTitle('📖 ヘルプメニュー').addFields(
             { name: '管理コマンド', value: '`/rp create`, `/authset`, `/log`, `/welcome`, `/bye`, `/check`' },
             { name: '一般コマンド', value: '`/omikuji`, `/help`' },
-            { name: 'オーナー限定(!)', value: '`!call`, `!userlist`, `!serverlist`' }
         ).setColor(COLORS.PRIMARY);
         return i.reply({ embeds: [embed] });
     }
