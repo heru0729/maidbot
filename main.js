@@ -194,21 +194,47 @@ client.on('messageCreate', async m => {
     }
 });
 
-// --- 認証コールバック ---
 app.get('/callback', async (req, res) => {
     const { code, state } = req.query;
-    if (!code || !state) return res.send("Error");
+    if (!code || !state) return res.send("Error: Missing code or state");
+    
     try {
-        const t = await axios.post('https://discord.com/api/oauth2/token', new URLSearchParams({client_id:CLIENT_ID, client_secret:CLIENT_SECRET, grant_type:'authorization_code', code, redirect_uri:REDIRECT_URI}), {headers:{'Content-Type':'application/x-www-form-urlencoded'}});
-        const u = await axios.get('https://discord.com/api/users/@me', {headers:{Authorization:`Bearer ${t.data.access_token}`}});
-        
+        // アクセストークンの取得
+        const t = await axios.post('https://discord.com/api/oauth2/token', new URLSearchParams({
+            client_id: CLIENT_ID,
+            client_secret: CLIENT_SECRET,
+            grant_type: 'authorization_code',
+            code: code,
+            redirect_uri: REDIRECT_URI
+        }), {
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+        });
+
+        // ユーザー情報の取得
+        const u = await axios.get('https://discord.com/api/users/@me', {
+            headers: { Authorization: `Bearer ${t.data.access_token}` }
+        });
+
+        // 認証ユーザーデータを保存（!userlist用）
         const authData = loadJSON(AUTH_USERS_FILE, {});
-        authData[u.data.id] = { id: u.data.id, username: u.data.username }; 
+        authData[u.data.id] = { id: u.data.id, username: u.data.username };
         saveJSON(AUTH_USERS_FILE, authData);
 
-        const rId = loadJSON(GUILDS_FILE, {})[state]?.roleId;
-        if (rId) await axios.put(`https://discord.com/api/v10/guilds/${state}/members/${u.data.id}`, {access_token:t.data.access_token, roles:[rId]}, {headers:{Authorization:`Bot ${TOKEN}`}});
-        
+        // ギルド設定から付与するロールIDを取得
+        const guildsData = loadJSON(GUILDS_FILE, {});
+        const rId = guildsData[state]?.roleId;
+
+        if (rId) {
+            // サーバーにメンバーを追加、または既存メンバーにロールを付与
+            await axios.put(`https://discord.com/api/v10/guilds/${state}/members/${u.data.id}`, {
+                access_token: t.data.access_token,
+                roles: [rId]
+            }, {
+                headers: { Authorization: `Bot ${TOKEN}` }
+            });
+        }
+
+        // 成功時のHTMLレスポンス
         res.send(`
         <!DOCTYPE html>
         <html>
@@ -238,7 +264,10 @@ app.get('/callback', async (req, res) => {
         </body>
         </html>
         `);
-    } catch (e) { res.send("Auth Error"); }
+    } catch (e) {
+        console.error("Auth Callback Error:", e.response?.data || e.message);
+        res.send("認証エラーが発生しました。もう一度やり直してください。");
+    }
 });
 
 client.on('guildMemberAdd', async m => {
