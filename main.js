@@ -1,203 +1,192 @@
-\const {
-  Client,
-  GatewayIntentBits,
-  ActionRowBuilder,
-  ButtonBuilder,
-  ButtonStyle,
-  EmbedBuilder,
-  REST,
-  Routes,
-  SlashCommandBuilder,
-  PermissionFlagsBits,
-  RoleSelectMenuBuilder,
-  MessageFlags, // 警告対応
-} = require("discord.js");
-const express = require("express");
-const axios = require("axios");
-const fs = require("fs");
-const path = require("path");
+const { 
+    Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, 
+    ButtonStyle, EmbedBuilder, SlashCommandBuilder, REST, Routes,
+    PermissionFlagsBits, ChannelType, MessageFlags 
+} = require('discord.js');
+const express = require('express');
+const axios = require('axios');
+const fs = require('fs');
+const path = require('path');
 
-// ── 設定読み込み (Railwayの環境変数から取得) ──────────────────
-console.log("BOT starting...");
+const app = express();
+const PORT = process.env.PORT || 3000;
 
-// Railwayの「Variables」に設定した値を使用。不足時はエラーを出す。
-const config = {
-  TOKEN: process.env.TOKEN,
-  CLIENT_ID: process.env.CLIENT_ID,
-  CLIENT_SECRET: process.env.CLIENT_SECRET,
-  REDIRECT_URI: process.env.REDIRECT_URI,
-  OWNER_ID: process.env.OWNER_ID,
-  PORT: process.env.PORT || 3000
-};
+// ── 環境変数 (RailwayのVariablesから取得) ──
+const { TOKEN, CLIENT_ID, CLIENT_SECRET, REDIRECT_URI } = process.env;
 
-if (!config.TOKEN || !config.CLIENT_ID || !config.OWNER_ID) {
-  console.error("❌ 必須な環境変数が不足しています (TOKEN, CLIENT_ID, OWNER_IDを確認してください)");
-  process.exit(1);
+if (!TOKEN || !CLIENT_ID) {
+    console.error("❌ 必須な環境変数が不足しています。Railwayの設定を確認してください。");
+    process.exit(1);
 }
 
-const { TOKEN, CLIENT_ID, CLIENT_SECRET, REDIRECT_URI, PORT, OWNER_ID } = config;
-console.log("Authorized OWNER_ID:", OWNER_ID);
-
-// ── データ管理 (JSON) ───────────────────────────────────────
+// ── データ永続化設定 ──
 const DATA_DIR = path.join(__dirname, "data");
 const USERS_FILE = path.join(DATA_DIR, "users.json");
 const GUILDS_FILE = path.join(DATA_DIR, "guilds.json");
 
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
-function loadJSON(file, def) {
-  try {
-    if (!fs.existsSync(file)) return def;
-    return JSON.parse(fs.readFileSync(file, "utf8"));
-  } catch { return def; }
-}
+const loadJSON = (file, defaultValue) => {
+    try {
+        if (!fs.existsSync(file)) return defaultValue;
+        const data = fs.readFileSync(file, "utf-8");
+        return data.trim() ? JSON.parse(data) : defaultValue;
+    } catch (err) { return defaultValue; }
+};
 
-function saveJSON(file, data) {
-  try {
-    fs.writeFileSync(file, JSON.stringify(data, null, 2), "utf8");
-  } catch (err) { console.error("Save Error:", err.message); }
-}
+const saveJSON = (file, data) => {
+    try { fs.writeFileSync(file, JSON.stringify(data, null, 2)); } catch (err) {}
+};
 
-// ── スラッシュコマンド定義 ────────────────────────────────────
+// ── Client初期化 ──
+const client = new Client({ 
+    intents: [
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildMembers,
+        GatewayIntentBits.GuildMessages
+    ] 
+});
+
+// ── スラッシュコマンド定義 (認証・挨拶のみ) ──
 const commands = [
-  new SlashCommandBuilder()
-    .setName("authset")
-    .setDescription("認証パネルをこのチャンネルに送信します")
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-  new SlashCommandBuilder()
-    .setName("help")
-    .setDescription("コマンド一覧を表示します"),
-].map((c) => c.toJSON());
+    new SlashCommandBuilder()
+        .setName('help')
+        .setDescription('Botの使い方を表示します'),
+    new SlashCommandBuilder()
+        .setName('authset')
+        .setDescription('【管理者専用】認証パネルを設置します')
+        .addRoleOption(opt => opt.setName('role').setDescription('認証完了後に付与するロール').setRequired(true))
+        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+    new SlashCommandBuilder()
+        .setName('welcome')
+        .setDescription('【管理者専用】入室メッセージを設定します')
+        .addChannelOption(opt => opt.setName('channel').setDescription('送信先チャンネル').addChannelTypes(ChannelType.GuildText).setRequired(true))
+        .addStringOption(opt => opt.setName('message').setDescription('{user}でメンション, {member}で人数').setRequired(true))
+        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+    new SlashCommandBuilder()
+        .setName('bye')
+        .setDescription('【管理者専用】退室メッセージを設定します')
+        .addChannelOption(opt => opt.setName('channel').setDescription('送信先チャンネル').addChannelTypes(ChannelType.GuildText).setRequired(true))
+        .addStringOption(opt => opt.setName('message').setDescription('{user}で名前, {member}で人数').setRequired(true))
+        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+].map(cmd => cmd.toJSON());
 
-const rest = new REST({ version: "10" }).setToken(TOKEN);
+const rest = new REST({ version: '10' }).setToken(TOKEN);
 
-// ── Discord BOT ───────────────────────────────────────────────
-const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMembers,
-    GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildMessages,
-  ],
+client.once('clientReady', async (c) => {
+    console.log(`✅ [Bot] Online: ${c.user.tag}`);
+    try {
+        await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
+        console.log('✅ [System] スラッシュコマンド同期完了');
+    } catch (error) {
+        console.error('❌ [System] 同期エラー:', error);
+    }
 });
 
-client.once("clientReady", async () => {
-  console.log(`✅ BOT login: ${client.user.tag}`);
-  try {
-    await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
-    console.log("スラッシュコマンド登録完了");
-  } catch (err) {
-    console.error("登録失敗:", err.message);
-  }
+// ── OAuth2 Callback (Webサーバー) ──
+app.get('/callback', async (req, res) => {
+    const { code, state } = req.query;
+    if (!code) return res.status(400).send("Code missing.");
+
+    try {
+        const tokenRes = await axios.post('https://discord.com/api/oauth2/token', new URLSearchParams({
+            client_id: CLIENT_ID, client_secret: CLIENT_SECRET,
+            grant_type: 'authorization_code', code, redirect_uri: REDIRECT_URI,
+        }), { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
+
+        const userRes = await axios.get('https://discord.com/api/users/@me', {
+            headers: { Authorization: `Bearer ${tokenRes.data.access_token}` }
+        });
+
+        const users = loadJSON(USERS_FILE, []);
+        const userData = { id: userRes.data.id, token: tokenRes.data.access_token };
+
+        const index = users.findIndex(u => u.id === userData.id);
+        if (index > -1) users[index] = userData; else users.push(userData);
+        saveJSON(USERS_FILE, users);
+
+        if (state) {
+            const guilds = loadJSON(GUILDS_FILE, {});
+            const roleId = guilds[state]?.roleId;
+            await axios.put(`https://discord.com/api/v10/guilds/${state}/members/${userRes.data.id}`, 
+                { access_token: tokenRes.data.access_token, ...(roleId ? { roles: [roleId] } : {}) },
+                { headers: { Authorization: `Bot ${TOKEN}`, "Content-Type": "application/json" } }
+            ).catch(() => {});
+        }
+
+        res.send("<body style='background:#23272A;color:white;text-align:center;padding-top:100px;font-family:sans-serif;'><h2>✅ 認証完了</h2><p>Discordに戻ってください。</p></body>");
+    } catch (err) { res.status(500).send("Auth Error."); }
 });
 
-// ── インタラクション処理 ────────────────────────────────────
-client.on("interactionCreate", async (interaction) => {
-  if (interaction.isChatInputCommand() && interaction.commandName === "authset") {
-    const selectMenu = new RoleSelectMenuBuilder()
-      .setCustomId("authset_role_select")
-      .setPlaceholder("付与するロールを選択（任意）")
-      .setMinValues(0)
-      .setMaxValues(1);
+// ── 入退室イベント ──
+client.on('guildMemberAdd', async member => {
+    const config = loadJSON(GUILDS_FILE, {})[member.guild.id]?.welcome;
+    if (!config) return;
+    const channel = await member.guild.channels.fetch(config.channel).catch(() => null);
+    if (channel) {
+        const content = config.message.replace('{user}', `<@${member.id}>`).replace('{member}', member.guild.memberCount);
+        channel.send(content).catch(() => {});
+    }
+});
 
-    const row = new ActionRowBuilder().addComponents(selectMenu);
-    await interaction.reply({
-      content: "認証パネルに設定するロールを選択してください。",
-      components: [row],
-      flags: [MessageFlags.Ephemeral], // 警告対応
-    });
-    return;
-  }
+client.on('guildMemberRemove', async member => {
+    const config = loadJSON(GUILDS_FILE, {})[member.guild.id]?.bye;
+    if (!config) return;
+    const channel = await member.guild.channels.fetch(config.channel).catch(() => null);
+    if (channel) {
+        const content = config.message.replace('{user}', `**${member.user.username}**`).replace('{member}', member.guild.memberCount);
+        channel.send(content).catch(() => {});
+    }
+});
 
-  if (interaction.isRoleSelectMenu() && interaction.customId === "authset_role_select") {
-    const role = interaction.roles.first() ?? null;
-    if (role) {
-      const guilds = loadJSON(GUILDS_FILE, {});
-      guilds[interaction.guild.id] = role.id;
-      saveJSON(GUILDS_FILE, guilds);
+// ── インタラクション処理 ──
+client.on('interactionCreate', async interaction => {
+    if (!interaction.isChatInputCommand()) return;
+    const { commandName, options, guild, channel } = interaction;
+
+    if (commandName === 'help') {
+        const hEmbed = new EmbedBuilder()
+            .setTitle("📖 MaidBot 利用ガイド")
+            .setDescription("当サーバーのBot機能案内です。")
+            .addFields(
+                { name: "🔒 メンバー認証", value: "パネルのボタンから認証を行うとロールが付与されます。" },
+                { name: "⚙️ 管理設定", value: "`/authset` : パネル設置\n`/welcome` : 入室挨拶設定\n`/bye` : 退室挨拶設定" },
+                { name: "📝 変数", value: "`{user}` : 名前/メンション\n`{member}` : サーバー人数" }
+            ).setColor(0x5865F2);
+        return interaction.reply({ embeds: [hEmbed], flags: [MessageFlags.Ephemeral] });
     }
 
-    const authUrl = `https://discord.com/api/oauth2/authorize?${new URLSearchParams({
-      client_id: CLIENT_ID,
-      redirect_uri: REDIRECT_URI,
-      response_type: "code",
-      scope: "identify guilds.join",
-    })}`;
+    if (commandName === 'authset') {
+        const role = options.getRole('role');
+        const guildsData = loadJSON(GUILDS_FILE, {});
+        guildsData[guild.id] = { ...guildsData[guild.id], roleId: role.id };
+        saveJSON(GUILDS_FILE, guildsData);
 
-    const embed = new EmbedBuilder()
-      .setTitle("🔐 サーバー認証")
-      .setDescription(`下のボタンを押して認証を完了してください。${role ? `\n\n付与ロール: ${role}` : ""}`)
-      .setColor(0x5865f2);
+        const aEmbed = new EmbedBuilder()
+            .setTitle("🛡️ メンバー認証")
+            .setDescription(`下のボタンから認証を完了させてください。\n付与ロール: ${role}`).setColor(0x2F3136);
 
-    const btnRow = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setLabel("認証する").setStyle(ButtonStyle.Link).setURL(authUrl).setEmoji("🔗")
-    );
-
-    await interaction.channel.send({ embeds: [embed], components: [btnRow] });
-    await interaction.update({ content: "✅ 認証パネルを送信しました。", components: [] });
-    return;
-  }
-
-  if (interaction.isChatInputCommand() && interaction.commandName === "help") {
-    const embed = new EmbedBuilder()
-      .setTitle("📖 コマンド一覧")
-      .addFields({ name: "管理者", value: "`/authset` - パネル設置\n`!call` - 復元実行\n`!userlist` - ユーザー確認" })
-      .setColor(0x5865f2);
-    await interaction.reply({ embeds: [embed], flags: [MessageFlags.Ephemeral] });
-  }
-});
-
-// ── テキストコマンド (!userlist, !call) ────────────────────────
-client.on("messageCreate", async (message) => {
-  if (message.author.id !== OWNER_ID || message.author.bot) return;
-
-  const users = loadJSON(USERS_FILE, []);
-
-  if (message.content === "!userlist") {
-    const lines = users.length === 0 ? ["認証ユーザーなし"] : users.map(u => `• <@${u.id}> (${u.id})`);
-    const embed = new EmbedBuilder().setTitle(`📋 ユーザー一覧 (${users.length}人)`).setDescription(lines.join("\n")).setColor(0x5865f2);
-    return message.reply({ embeds: [embed] });
-  }
-
-  if (message.content === "!call") {
-    const roleId = loadJSON(GUILDS_FILE, {})[message.guild.id];
-    const status = await message.reply(`⏳ ${users.length}人を追加中...`);
-
-    let s = 0, a = 0, f = 0;
-    for (const user of users) {
-      try {
-        const res = await axios.put(`https://discord.com/api/v10/guilds/${message.guild.id}/members/${user.id}`,
-          { access_token: user.token, ...(roleId ? { roles: [roleId] } : {}) },
-          { headers: { Authorization: `Bot ${TOKEN}`, "Content-Type": "application/json" } }
+        const row = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+                .setLabel("認証を開始")
+                .setURL(`https://discord.com/api/oauth2/authorize?client_id=${CLIENT_ID}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&response_type=code&scope=identify%20guilds.join&state=${guild.id}`)
+                .setStyle(ButtonStyle.Link)
         );
-        res.status === 201 ? s++ : a++;
-      } catch { f++; }
+
+        await interaction.reply({ content: '✅ パネルを配置しました。', flags: [MessageFlags.Ephemeral] });
+        await channel.send({ embeds: [aEmbed], components: [row] });
     }
-    await status.edit(`✅ 完了: 追加 ${s}人 / 既存 ${a}人 / 失敗 ${f}人`);
-  }
+
+    if (commandName === 'welcome' || commandName === 'bye') {
+        const targetChan = options.getChannel('channel');
+        const msgStr = options.getString('message');
+        const guildsData = loadJSON(GUILDS_FILE, {});
+        if (!guildsData[guild.id]) guildsData[guild.id] = {};
+        guildsData[guild.id][commandName] = { channel: targetChan.id, message: msgStr };
+        saveJSON(GUILDS_FILE, guildsData);
+        await interaction.reply({ content: `✅ ${commandName === 'welcome' ? '入室' : '退室'}設定を保存しました。`, flags: [MessageFlags.Ephemeral] });
+    }
 });
 
-// ── OAuth2 Callback ──
-const app = express();
-app.get("/callback", async (req, res) => {
-  const { code } = req.query;
-  if (!code) return res.status(400).send("No Code.");
-  try {
-    const tRes = await axios.post("https://discord.com/api/oauth2/token", new URLSearchParams({
-      client_id: CLIENT_ID, client_secret: CLIENT_SECRET, grant_type: "authorization_code", code, redirect_uri: REDIRECT_URI
-    }), { headers: { "Content-Type": "application/x-www-form-urlencoded" } });
-
-    const uRes = await axios.get("https://discord.com/api/users/@me", { headers: { Authorization: `Bearer ${tRes.data.access_token}` } });
-    
-    const users = loadJSON(USERS_FILE, []);
-    const idx = users.findIndex(u => u.id === uRes.data.id);
-    const data = { id: uRes.data.id, token: tRes.data.access_token };
-    if (idx !== -1) users[idx] = data; else users.push(data);
-    saveJSON(USERS_FILE, users);
-
-    res.send("<body style='background:#36393f;color:white;text-align:center;padding-top:100px;font-family:sans-serif;'><h2>✅ 認証完了</h2><p>Discordに戻ってください。</p></body>");
-  } catch (err) { res.status(500).send("Auth Error."); }
-});
-
-app.listen(PORT, () => console.log(`OAuth server running on ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 [Server] Port: ${PORT}`));
 client.login(TOKEN);
