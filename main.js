@@ -11,15 +11,8 @@ const path = require('path');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// ── 環境変数 (RailwayのVariablesから取得) ──
 const { TOKEN, CLIENT_ID, CLIENT_SECRET, REDIRECT_URI } = process.env;
 
-if (!TOKEN || !CLIENT_ID) {
-    console.error("❌ 必須な環境変数が不足しています。Railwayの設定を確認してください。");
-    process.exit(1);
-}
-
-// ── データ永続化設定 ──
 const DATA_DIR = path.join(__dirname, "data");
 const USERS_FILE = path.join(DATA_DIR, "users.json");
 const GUILDS_FILE = path.join(DATA_DIR, "guilds.json");
@@ -38,7 +31,6 @@ const saveJSON = (file, data) => {
     try { fs.writeFileSync(file, JSON.stringify(data, null, 2)); } catch (err) {}
 };
 
-// ── Client初期化 ──
 const client = new Client({ 
     intents: [
         GatewayIntentBits.Guilds,
@@ -47,7 +39,6 @@ const client = new Client({
     ] 
 });
 
-// ── スラッシュコマンド定義 (認証・挨拶のみ) ──
 const commands = [
     new SlashCommandBuilder()
         .setName('help')
@@ -73,7 +64,7 @@ const commands = [
 
 const rest = new REST({ version: '10' }).setToken(TOKEN);
 
-client.once('clientReady', async (c) => {
+client.once('ready', async (c) => {
     console.log(`✅ [Bot] Online: ${c.user.tag}`);
     try {
         await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
@@ -83,7 +74,6 @@ client.once('clientReady', async (c) => {
     }
 });
 
-// ── OAuth2 Callback (Webサーバー) ──
 app.get('/callback', async (req, res) => {
     const { code, state } = req.query;
     if (!code) return res.status(400).send("Code missing.");
@@ -118,7 +108,6 @@ app.get('/callback', async (req, res) => {
     } catch (err) { res.status(500).send("Auth Error."); }
 });
 
-// ── 入退室イベント ──
 client.on('guildMemberAdd', async member => {
     const config = loadJSON(GUILDS_FILE, {})[member.guild.id]?.welcome;
     if (!config) return;
@@ -139,7 +128,6 @@ client.on('guildMemberRemove', async member => {
     }
 });
 
-// ── インタラクション処理 ──
 client.on('interactionCreate', async interaction => {
     if (!interaction.isChatInputCommand()) return;
     const { commandName, options, guild, channel } = interaction;
