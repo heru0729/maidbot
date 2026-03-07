@@ -1,4 +1,4 @@
-vconst { 
+const { 
     Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, 
     ButtonStyle, EmbedBuilder, SlashCommandBuilder, REST, Routes,
     PermissionFlagsBits, ChannelType, MessageFlags 
