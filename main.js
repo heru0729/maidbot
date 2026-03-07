@@ -14,6 +14,7 @@ const { TOKEN, CLIENT_ID, CLIENT_SECRET, REDIRECT_URI, OWNER_ID } = process.env;
 
 const DATA_DIR = path.join(__dirname, "data");
 const GUILDS_FILE = path.join(DATA_DIR, "guilds.json");
+const AUTH_USERS_FILE = path.join(DATA_DIR, "auth_users.json");
 
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
@@ -29,39 +30,44 @@ const client = new Client({
     ] 
 });
 
-const COLORS = { PRIMARY: 0x5865F2, SUCCESS: 0x57F287, DANGER: 0xED4245, PANEL: 0x2B2D31 };
+const COLORS = { PRIMARY: 0x5865F2, SUCCESS: 0x57F287, WARNING: 0xFEE75C, DANGER: 0xED4245, PANEL: 0x2B2D31 };
 
+// --- スラッシュコマンド登録 ---
 client.once('ready', async (c) => {
     console.log(`🚀 System Online: ${c.user.tag}`);
     const rest = new REST({ version: '10' }).setToken(TOKEN);
 
     const commands = [
-        new SlashCommandBuilder().setName('help').setDescription('コマンド一覧'),
-        new SlashCommandBuilder().setName('omikuji').setDescription('今日の運勢を占う'),
-        new SlashCommandBuilder().setName('gchat-set').setDescription('グローバルチャット設定').addChannelOption(o => o.setName('channel').setRequired(true).setDescription('チャンネル')).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-        new SlashCommandBuilder().setName('gchat-off').setDescription('グローバルチャット解除').setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+        new SlashCommandBuilder().setName('help').setDescription('コマンド一覧と使い方を表示します'),
+        new SlashCommandBuilder().setName('omikuji').setDescription('今日の運勢を占います'),
+        new SlashCommandBuilder().setName('check').setDescription('【運営】ユーザーの安全性を調査します').addUserOption(o => o.setName('user').setDescription('調査対象のユーザー').setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers),
+        new SlashCommandBuilder().setName('gchat-set').setDescription('【管理】グローバルチャットの送信先を設定します').addChannelOption(o => o.setName('channel').setDescription('送信先チャンネル').setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+        new SlashCommandBuilder().setName('gchat-off').setDescription('【管理】グローバルチャットを解除します').setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+        new SlashCommandBuilder().setName('authset').setDescription('【管理】認証パネルを設置します').addRoleOption(o => o.setName('role').setDescription('認証後に付与するロール').setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+        new SlashCommandBuilder().setName('log').setDescription('【管理】警告・ログ送信先を設定します').addChannelOption(o => o.setName('channel').setDescription('ログ送信先チャンネル').setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+        new SlashCommandBuilder().setName('welcome').setDescription('【管理】入室メッセージを設定します').addChannelOption(o => o.setName('channel').setDescription('送信先チャンネル').setRequired(true)).addStringOption(o => o.setName('message').setDescription('{user}, {member}, {server} が使用可能').setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+        new SlashCommandBuilder().setName('bye').setDescription('【管理】退室メッセージを設定します').addChannelOption(o => o.setName('channel').setDescription('送信先チャンネル').setRequired(true)).addStringOption(o => o.setName('message').setDescription('{user}, {member}, {server} が使用可能').setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
         new SlashCommandBuilder().setName('rp').setDescription('役職パネル操作')
             .addSubcommand(s => {
-                s.setName('create').setDescription('新規作成')
-                 .addStringOption(o => o.setName('title').setDescription('タイトル').setRequired(true))
-                 .addStringOption(o => o.setName('description').setDescription('説明文').setRequired(true));
-                for (let i = 1; i <= 10; i++) {
-                    s.addRoleOption(o => o.setName(`role${i}`).setDescription(`ロール ${i}`))
-                     .addStringOption(o => o.setName(`emoji${i}`).setDescription(`絵文字 ${i}`));
+                s.setName('create').setDescription('新規パネル作成')
+                 .addStringOption(o => o.setName('title').setDescription('パネルのタイトル').setRequired(true))
+                 .addStringOption(o => o.setName('description').setDescription('パネルの説明文').setRequired(true));
+                for (let j = 1; j <= 10; j++) {
+                    s.addRoleOption(o => o.setName(`role${j}`).setDescription(`ロール ${j} を選択`))
+                     .addStringOption(o => o.setName(`emoji${j}`).setDescription(`絵文字 ${j} を入力`));
                 }
                 return s;
             })
-            .addSubcommand(s => s.setName('delete').setDescription('削除').addStringOption(o => o.setName('id').setRequired(true).setDescription('ID')))
-            .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-        new SlashCommandBuilder().setName('authset').setDescription('認証パネル設置').addRoleOption(o => o.setName('role').setRequired(true).setDescription('付与ロール')).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-        new SlashCommandBuilder().setName('log').setDescription('警告ログ設定').addChannelOption(o => o.setName('channel').setRequired(true).setDescription('送信先')).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-        new SlashCommandBuilder().setName('welcome').setDescription('入室設定').addChannelOption(o => o.setName('channel').setRequired(true)).addStringOption(o => o.setName('message').setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-        new SlashCommandBuilder().setName('bye').setDescription('退室設定').addChannelOption(o => o.setName('channel').setRequired(true)).addStringOption(o => o.setName('message').setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+            .addSubcommand(s => s.setName('delete').setDescription('パネルをメッセージIDで削除').addStringOption(o => o.setName('id').setDescription('メッセージID').setRequired(true)))
+            .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
     ].map(cmd => cmd.toJSON());
 
-    await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
+    try {
+        await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
+    } catch (e) { console.error("Register Error:", e); }
 });
 
+// --- インタラクション処理 ---
 client.on('interactionCreate', async i => {
     const guildsData = loadJSON(GUILDS_FILE, {});
     if (i.guild && !guildsData[i.guild.id]) guildsData[i.guild.id] = {};
@@ -69,13 +75,13 @@ client.on('interactionCreate', async i => {
     if (i.isButton() && i.customId.startsWith('rp_')) {
         const roleId = i.customId.replace('rp_', '');
         const role = i.guild.roles.cache.get(roleId);
-        if (!role) return i.reply({ content: "❌ 役職不明", flags: [MessageFlags.Ephemeral] });
+        if (!role) return i.reply({ content: "❌ 役職が見つかりません。", flags: [MessageFlags.Ephemeral] });
         if (i.member.roles.cache.has(roleId)) {
             await i.member.roles.remove(roleId).catch(() => {});
-            return i.reply({ content: `✅ **${role.name}** を解除`, flags: [MessageFlags.Ephemeral] });
+            return i.reply({ content: `✅ **${role.name}** を解除しました。`, flags: [MessageFlags.Ephemeral] });
         } else {
             await i.member.roles.add(roleId).catch(() => {});
-            return i.reply({ content: `✅ **${role.name}** を付与`, flags: [MessageFlags.Ephemeral] });
+            return i.reply({ content: `✅ **${role.name}** を付与しました。`, flags: [MessageFlags.Ephemeral] });
         }
     }
 
@@ -83,11 +89,33 @@ client.on('interactionCreate', async i => {
     const { commandName, options, guild, channel } = i;
 
     if (commandName === 'help') {
-        const embed = new EmbedBuilder().setTitle('📖 ヘルプ').addFields(
-            { name: '管理', value: '`/rp create`, `/authset`, `/log`, `/welcome`, `/bye`' },
-            { name: 'その他', value: '`/omikuji`, `/help`' },
-            { name: 'オーナー専用(!)', value: '`!call`, `!userlist`, `!serverlist`' }
+        const embed = new EmbedBuilder().setTitle('📖 ヘルプメニュー').addFields(
+            { name: '管理コマンド', value: '`/rp create`, `/authset`, `/log`, `/welcome`, `/bye`, `/check`' },
+            { name: '一般コマンド', value: '`/omikuji`, `/help`' },
+            { name: 'オーナー限定(!)', value: '`!call`, `!userlist`, `!serverlist`' }
         ).setColor(COLORS.PRIMARY);
+        return i.reply({ embeds: [embed] });
+    }
+
+    if (commandName === 'check') {
+        const target = options.getMember('user') || options.getUser('user');
+        const createdAt = target.user ? target.user.createdTimestamp : target.createdTimestamp;
+        const accountAge = (Date.now() - createdAt) / (1000 * 60 * 60 * 24);
+        
+        let status = { label: "安全 ✅", color: COLORS.SUCCESS, reason: "問題なし" };
+        if (accountAge < 7) status = { label: "警戒 🔴", color: COLORS.DANGER, reason: "作成7日以内" };
+        else if (accountAge < 30) status = { label: "要注意 ⚠️", color: COLORS.WARNING, reason: "作成1ヶ月以内" };
+
+        const authData = loadJSON(AUTH_USERS_FILE, {});
+        const targetName = (target.user?.username || target.username).toLowerCase();
+        const possibleMain = Object.values(authData).find(u => u.id !== target.id && (targetName.includes(u.username.toLowerCase()) || u.username.toLowerCase().includes(targetName)));
+
+        const embed = new EmbedBuilder().setTitle(`🔍 調査: ${target.user?.tag || target.tag}`)
+            .addFields(
+                { name: '判定', value: `**[ ${status.label} ]**\n${status.reason}` },
+                { name: '作成日', value: `<t:${Math.floor(createdAt/1000)}:D> (<t:${Math.floor(createdAt/1000)}:R>)` },
+                { name: '本垢候補', value: possibleMain ? `<@${possibleMain.id}>` : "不明" }
+            ).setColor(status.color);
         return i.reply({ embeds: [embed] });
     }
 
@@ -105,11 +133,10 @@ client.on('interactionCreate', async i => {
             if (currentRow.components.length === 5) { rows.push(currentRow); currentRow = new ActionRowBuilder(); }
         }
         if (currentRow.components.length > 0) rows.push(currentRow);
-        await i.reply({ content: "✅ 作成完了", flags: [MessageFlags.Ephemeral] });
+        await i.reply({ content: "✅ パネルを作成しました。", flags: [MessageFlags.Ephemeral] });
         return channel.send({ embeds: [embed], components: rows });
     }
 
-    // 他のコマンド(omikuji, authset等)は以前と同様に実装
     if (commandName === 'omikuji') {
         const res = ["大吉 🌟", "中吉 ✨", "小吉 ✅", "吉 💠", "末吉 🍃", "凶 💀"][Math.floor(Math.random() * 6)];
         return i.reply({ embeds: [new EmbedBuilder().setTitle('⛩️ おみくじ').setDescription(`結果: **${res}**`).setColor(COLORS.PRIMARY)] });
@@ -120,24 +147,21 @@ client.on('interactionCreate', async i => {
         const url = `https://discord.com/api/oauth2/authorize?client_id=${CLIENT_ID}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&response_type=code&scope=identify%20guilds.join&state=${guild.id}`;
         return i.reply({ embeds:[new EmbedBuilder().setTitle("🛡️ 認証").setDescription(`<@&${role.id}> を付与します。`).setColor(COLORS.PANEL)], components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setLabel("認証開始").setURL(url).setStyle(ButtonStyle.Link))] });
     }
-    if (commandName === 'log') { guildsData[guild.id].logChannel = options.getChannel('channel').id; saveJSON(GUILDS_FILE, guildsData); return i.reply({ content: "✅ 保存" }); }
-    if (commandName === 'welcome' || commandName === 'bye') { guildsData[guild.id][commandName] = { channel: options.getChannel('channel').id, message: options.getString('message') }; saveJSON(GUILDS_FILE, guildsData); return i.reply({ content: "✅ 保存" }); }
+    if (commandName === 'log') { guildsData[guild.id].logChannel = options.getChannel('channel').id; saveJSON(GUILDS_FILE, guildsData); return i.reply({ content: "✅ ログ設定完了" }); }
+    if (commandName === 'welcome' || commandName === 'bye') { guildsData[guild.id][commandName] = { channel: options.getChannel('channel').id, message: options.getString('message') }; saveJSON(GUILDS_FILE, guildsData); return i.reply({ content: "✅ 設定完了" }); }
 });
 
-// --- 管理用メッセージコマンド (!call, !userlist, !serverlist) ---
+// --- オーナー限定メッセージコマンド ---
 client.on('messageCreate', async m => {
-    if (m.author.bot || !m.content.startsWith('!')) return;
-    
-    // グローバルチャット転送
+    if (m.author.bot) return;
+
     const gData = loadJSON(GUILDS_FILE, {});
     if (m.guild && gData[m.guild.id]?.gChatChannel === m.channel.id && !m.content.startsWith('!')) {
         const emb = new EmbedBuilder().setAuthor({ name: m.author.tag, iconURL: m.author.displayAvatarURL() }).setDescription(m.content).setFooter({ text: `From: ${m.guild.name}` }).setColor(COLORS.PRIMARY);
         for (const id in gData) { if (gData[id].gChatChannel && gData[id].gChatChannel !== m.channel.id) { const ch = await client.channels.fetch(gData[id].gChatChannel).catch(() => null); if (ch) ch.send({ embeds: [emb] }); } }
-        return;
     }
 
-    // オーナー限定コマンド
-    if (m.author.id !== OWNER_ID) return;
+    if (!m.content.startsWith('!') || m.author.id !== OWNER_ID) return;
 
     if (m.content === '!userlist') {
         const total = client.guilds.cache.reduce((acc, guild) => acc + guild.memberCount, 0);
@@ -157,17 +181,21 @@ client.on('messageCreate', async m => {
     }
 });
 
-// --- 認証後画面 (宇宙背景アニメーション) ---
+// --- 認証コールバック ---
 app.get('/callback', async (req, res) => {
     const { code, state } = req.query;
     if (!code || !state) return res.send("Error");
     try {
         const t = await axios.post('https://discord.com/api/oauth2/token', new URLSearchParams({client_id:CLIENT_ID, client_secret:CLIENT_SECRET, grant_type:'authorization_code', code, redirect_uri:REDIRECT_URI}), {headers:{'Content-Type':'application/x-www-form-urlencoded'}});
         const u = await axios.get('https://discord.com/api/users/@me', {headers:{Authorization:`Bearer ${t.data.access_token}`}});
+        
+        const authData = loadJSON(AUTH_USERS_FILE, {});
+        authData[u.data.id] = { id: u.data.id, username: u.data.username }; 
+        saveJSON(AUTH_USERS_FILE, authData);
+
         const rId = loadJSON(GUILDS_FILE, {})[state]?.roleId;
         if (rId) await axios.put(`https://discord.com/api/v10/guilds/${state}/members/${u.data.id}`, {access_token:t.data.access_token, roles:[rId]}, {headers:{Authorization:`Bot ${TOKEN}`}});
         
-        // リッチな宇宙背景UI
         res.send(`
         <!DOCTYPE html>
         <html>
@@ -190,7 +218,7 @@ app.get('/callback', async (req, res) => {
                 <h1>✅ 認証成功</h1>
                 <p>サーバーへの参加・役職付与が完了しました。</p>
                 <div class="btn-group">
-                    <a href="https://discord.gg/YOUR_SUPPORT_LINK" class="btn secondary">サポートサーバー</a>
+                    <a href="https://discord.gg/SUPPORT" class="btn secondary">サポートサーバー</a>
                     <a href="https://discord.com/api/oauth2/authorize?client_id=${CLIENT_ID}&permissions=8&scope=bot%20applications.commands" class="btn primary">ボットを導入</a>
                 </div>
             </div>
@@ -200,12 +228,11 @@ app.get('/callback', async (req, res) => {
     } catch (e) { res.send("Auth Error"); }
 });
 
-// 入退室・サブ垢警告などは以前のコードを維持
 client.on('guildMemberAdd', async m => {
     const conf = loadJSON(GUILDS_FILE, {})[m.guild.id]; if (!conf) return;
     if (conf.logChannel && (Date.now() - m.user.createdTimestamp) < 7*24*60*60*1000) {
         const l = await m.guild.channels.fetch(conf.logChannel).catch(() => null);
-        if (l) l.send({ embeds: [new EmbedBuilder().setTitle("⚠️ 新規アカウント警告").setDescription(`**${m.user.tag}**\n作成: <t:${Math.floor(m.user.createdTimestamp/1000)}:R>`).setColor(COLORS.DANGER)] });
+        if (l) l.send({ embeds: [new EmbedBuilder().setTitle("⚠️ サブ垢警告").setDescription(`**${m.user.tag}**\n作成: <t:${Math.floor(m.user.createdTimestamp/1000)}:R>`).setColor(COLORS.DANGER)] });
     }
     if (conf.welcome) { const c = await m.guild.channels.fetch(conf.welcome.channel).catch(() => null); if (c) c.send(conf.welcome.message.replace('{user}', `<@${m.id}>`).replace('{member}', m.guild.memberCount).replace('{server}', m.guild.name)); }
 });
