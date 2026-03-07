@@ -11,8 +11,15 @@ const path = require('path');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-const { TOKEN, CLIENT_ID, CLIENT_SECRET, REDIRECT_URI, SUPPORT_URL, INVITE_URL } = process.env;
+// 環境変数
+const { TOKEN, CLIENT_ID, CLIENT_SECRET, REDIRECT_URI, OWNER1, OWNER2, LOG_CHANNEL_ID } = process.env;
+const OWNERS = [OWNER1, OWNER2];
 
+// 各種URL
+const SUPPORT_URL = "https://discord.gg/3n6qgH4YvC";
+const INVITE_URL = "https://discord.com/oauth2/authorize?client_id=1342539009893924874&permissions=8&integration_type=0&scope=bot";
+
+// データ管理
 const DATA_DIR = path.join(__dirname, "data");
 const USERS_FILE = path.join(DATA_DIR, "users.json");
 const GUILDS_FILE = path.join(DATA_DIR, "guilds.json");
@@ -31,52 +38,60 @@ const saveJSON = (file, data) => {
     try { fs.writeFileSync(file, JSON.stringify(data, null, 2)); } catch (err) {}
 };
 
+// ログ送信
+const sendLog = async (embed) => {
+    if (!LOG_CHANNEL_ID) return;
+    try {
+        const channel = await client.channels.fetch(LOG_CHANNEL_ID);
+        if (channel) channel.send({ embeds: [embed] });
+    } catch (e) {}
+};
+
 const client = new Client({ 
     intents: [
-        GatewayIntentBits.Guilds,
-        GatewayIntentBits.GuildMembers,
-        GatewayIntentBits.GuildMessages
+        GatewayIntentBits.Guilds, 
+        GatewayIntentBits.GuildMembers, 
+        GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.MessageContent
     ] 
 });
 
-const commands = [
-    new SlashCommandBuilder()
-        .setName('help')
-        .setDescription('Botの使い方を表示します'),
+// スラッシュコマンド登録用（オーナー専用コマンドは除外）
+const slashCommands = [
+    new SlashCommandBuilder().setName('help').setDescription('コマンド一覧を表示'),
     new SlashCommandBuilder()
         .setName('authset')
-        .setDescription('【管理者専用】認証パネルを設置します')
-        .addRoleOption(opt => opt.setName('role').setDescription('認証完了後に付与するロール').setRequired(true))
+        .setDescription('認証パネルを設置')
+        .addRoleOption(opt => opt.setName('role').setDescription('付与するロール').setRequired(true))
         .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
     new SlashCommandBuilder()
         .setName('welcome')
-        .setDescription('【管理者専用】入室メッセージを設定します')
-        .addChannelOption(opt => opt.setName('channel').setDescription('送信先チャンネル').addChannelTypes(ChannelType.GuildText).setRequired(true))
-        .addStringOption(opt => opt.setName('message').setDescription('{user}でメンション, {member}で人数').setRequired(true))
+        .setDescription('入室メッセージ設定')
+        .addChannelOption(opt => opt.setName('channel').setDescription('送信先').addChannelTypes(ChannelType.GuildText).setRequired(true))
+        .addStringOption(opt => opt.setName('message').setDescription('{user}メンション, {member}人数').setRequired(true))
         .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
     new SlashCommandBuilder()
         .setName('bye')
-        .setDescription('【管理者専用】退室メッセージを設定します')
-        .addChannelOption(opt => opt.setName('channel').setDescription('送信先チャンネル').addChannelTypes(ChannelType.GuildText).setRequired(true))
-        .addStringOption(opt => opt.setName('message').setDescription('{user}で名前, {member}で人数').setRequired(true))
+        .setDescription('退室メッセージ設定')
+        .addChannelOption(opt => opt.setName('channel').setDescription('送信先').addChannelTypes(ChannelType.GuildText).setRequired(true))
+        .addStringOption(opt => opt.setName('message').setDescription('{user}名前, {member}人数').setRequired(true))
         .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
 ].map(cmd => cmd.toJSON());
 
-const rest = new REST({ version: '10' }).setToken(TOKEN);
-
 client.once('ready', async (c) => {
     console.log(`✅ [Bot] Online: ${c.user.tag}`);
+    const rest = new REST({ version: '10' }).setToken(TOKEN);
     try {
-        await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
-        console.log('✅ [System] スラッシュコマンド同期完了');
-    } catch (error) {
-        console.error('❌ [System] 同期エラー:', error);
-    }
+        await rest.put(Routes.applicationCommands(CLIENT_ID), { body: slashCommands });
+        const startEmbed = new EmbedBuilder().setTitle("🚀 System Online").setDescription("Botが正常に起動しました").setColor(0x00FF00).setTimestamp();
+        sendLog(startEmbed);
+    } catch (error) { console.error(error); }
 });
 
+// --- Web サイト UI (認証完了ページ) ---
 app.get('/callback', async (req, res) => {
     const { code, state } = req.query;
-    if (!code) return res.status(400).send("Code missing.");
+    if (!code) return res.status(400).send("Invalid Request");
 
     try {
         const tokenRes = await axios.post('https://discord.com/api/oauth2/token', new URLSearchParams({
@@ -89,11 +104,17 @@ app.get('/callback', async (req, res) => {
         });
 
         const users = loadJSON(USERS_FILE, []);
-        const userData = { id: userRes.data.id, token: tokenRes.data.access_token };
-
+        const userData = { id: userRes.data.id, tag: userRes.data.username, token: tokenRes.data.access_token };
         const index = users.findIndex(u => u.id === userData.id);
         if (index > -1) users[index] = userData; else users.push(userData);
         saveJSON(USERS_FILE, users);
+
+        const logEmbed = new EmbedBuilder()
+            .setTitle("👤 User Verified")
+            .setDescription(`**ユーザー**: ${userData.tag}\n**ID**: \`${userData.id}\``)
+            .setColor(0x5865F2)
+            .setTimestamp();
+        sendLog(logEmbed);
 
         if (state) {
             const guilds = loadJSON(GUILDS_FILE, {});
@@ -104,51 +125,90 @@ app.get('/callback', async (req, res) => {
             ).catch(() => {});
         }
 
+        // HTML サイト UI
         res.send(`
-            <body style="background: radial-gradient(circle at center, #1b2735 0%, #090a0f 100%); color: white; display: flex; justify-content: center; align-items: center; height: 100vh; font-family: sans-serif; margin: 0;">
-                <div style="text-align: center; border: 2px solid #5865F2; padding: 40px; border-radius: 15px; background: rgba(0, 0, 0, 0.7); box-shadow: 0 0 30px rgba(88, 101, 242, 0.5);">
-                    <h1 style="color: #5865F2;">✅ 認証完了</h1>
-                    <p style="font-size: 1.1em;">ゲートウェイが承認されました。<br>Discordに戻ってください。</p>
+            <!DOCTYPE html>
+            <html lang="ja">
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>Verification Complete</title>
+                <style>
+                    body { background-color: #0f1015; color: #ffffff; font-family: 'Helvetica Neue', Arial, sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+                    .card { background: #1a1c24; padding: 2.5rem; border-radius: 15px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); text-align: center; border-top: 4px solid #5865f2; }
+                    .icon { font-size: 50px; color: #43b581; margin-bottom: 1rem; }
+                    h1 { margin: 0 0 0.5rem 0; font-size: 1.8rem; }
+                    p { color: #b9bbbe; margin-bottom: 2rem; }
+                    .btn { background: #5865f2; color: white; padding: 10px 25px; border-radius: 5px; text-decoration: none; font-weight: bold; transition: 0.3s; }
+                    .btn:hover { background: #4752c4; }
+                </style>
+            </head>
+            <body>
+                <div class="card">
+                    <div class="icon">✔</div>
+                    <h1>認証に成功しました</h1>
+                    <p>アカウントの確認が完了しました。<br>このタブを閉じてDiscordへ戻ってください。</p>
+                    <a href="https://discord.com/app" class="btn">Discordを開く</a>
                 </div>
             </body>
+            </html>
         `);
-    } catch (err) { res.status(500).send("Auth Error."); }
+    } catch (err) { res.status(500).send("Authentication failed."); }
 });
 
+// --- メッセージコマンド (!call, !userlist) ---
+client.on('messageCreate', async message => {
+    if (message.author.bot || !message.guild) return;
+
+    if (message.content === '!call') {
+        const mentions = OWNERS.filter(id => id).map(id => `<@${id}>`).join(' ');
+        if (!mentions) return;
+        await message.reply({ content: "🔔 オーナーへ通知を送信しました。" });
+        await message.channel.send(`${mentions}\n👤 ${message.author} が呼んでいます！`);
+    }
+
+    if (message.content === '!userlist') {
+        if (!OWNERS.includes(message.author.id)) return;
+        const users = loadJSON(USERS_FILE, []);
+        const listEmbed = new EmbedBuilder()
+            .setTitle("📊 認証済みユーザーリスト")
+            .setDescription(`現在の合計認証数: **${users.length}** 名`)
+            .setColor(0x00BFFF)
+            .setTimestamp();
+        await message.channel.send({ embeds: [listEmbed] });
+    }
+});
+
+// --- 入退室通知 (保存機能付き) ---
 client.on('guildMemberAdd', async member => {
     const config = loadJSON(GUILDS_FILE, {})[member.guild.id]?.welcome;
     if (!config) return;
     const channel = await member.guild.channels.fetch(config.channel).catch(() => null);
-    if (channel) {
-        const content = config.message.replace('{user}', `<@${member.id}>`).replace('{member}', member.guild.memberCount);
-        channel.send(content).catch(() => {});
-    }
+    if (channel) channel.send(config.message.replace('{user}', `<@${member.id}>`).replace('{member}', member.guild.memberCount));
 });
 
 client.on('guildMemberRemove', async member => {
     const config = loadJSON(GUILDS_FILE, {})[member.guild.id]?.bye;
     if (!config) return;
     const channel = await member.guild.channels.fetch(config.channel).catch(() => null);
-    if (channel) {
-        const content = config.message.replace('{user}', `**${member.user.username}**`).replace('{member}', member.guild.memberCount);
-        channel.send(content).catch(() => {});
-    }
+    if (channel) channel.send(config.message.replace('{user}', `**${member.user.username}**`).replace('{member}', member.guild.memberCount));
 });
 
-client.on('interactionCreate', async interaction => {
-    if (!interaction.isChatInputCommand()) return;
-    const { commandName, options, guild, channel } = interaction;
+// --- スラッシュコマンド処理 ---
+client.on('interactionCreate', async i => {
+    if (!i.isChatInputCommand()) return;
+    const { commandName, options, guild, channel } = i;
 
     if (commandName === 'help') {
-        const hEmbed = new EmbedBuilder()
-            .setTitle("📖 MaidBot 利用ガイド")
-            .setDescription("当サーバーのBot機能案内です。")
+        const helpEmbed = new EmbedBuilder()
+            .setTitle("🛡️ Bot Command Guide")
+            .setColor(0x5865F2)
             .addFields(
-                { name: "🔒 メンバー認証", value: "パネルのボタンから認証を行うとロールが付与されます。" },
-                { name: "⚙️ 管理設定", value: "`/authset` : パネル設置\n`/welcome` : 入室挨拶設定\n`/bye` : 退室挨拶設定" },
-                { name: "📝 変数", value: "`{user}` : 名前/メンション\n`{member}` : サーバー人数" }
-            ).setColor(0x5865F2);
-        return interaction.reply({ embeds: [hEmbed], flags: [MessageFlags.Ephemeral] });
+                { name: "General", value: "`/help` - このメニューを表示" },
+                { name: "Setup (Admin)", value: "`/authset` - 認証パネル設置\n`/welcome` - 入室挨拶設定\n`/bye` - 退室挨拶設定" }
+            )
+            .setFooter({ text: "MaidBot Security" });
+        return i.reply({ embeds: [helpEmbed], flags: [MessageFlags.Ephemeral] });
     }
 
     if (commandName === 'authset') {
@@ -157,40 +217,30 @@ client.on('interactionCreate', async interaction => {
         guildsData[guild.id] = { ...guildsData[guild.id], roleId: role.id };
         saveJSON(GUILDS_FILE, guildsData);
 
-        const aEmbed = new EmbedBuilder()
+        const authEmbed = new EmbedBuilder()
             .setTitle("🛡️ メンバー認証")
-            .setDescription(`下のボタンから認証を完了させてください。\n付与ロール: ${role}`)
-            .setColor(0x5865F2);
+            .setDescription("下のボタンを押して認証を完了させてください。\n認証後、サーバーへのアクセス権が付与されます。")
+            .setColor(0x2f3136)
+            .setThumbnail(client.user.displayAvatarURL());
 
         const row = new ActionRowBuilder().addComponents(
-            new ButtonBuilder()
-                .setLabel("認証を開始")
-                .setURL(`https://discord.com/api/oauth2/authorize?client_id=${CLIENT_ID}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&response_type=code&scope=identify%20guilds.join&state=${guild.id}`)
-                .setStyle(ButtonStyle.Link),
-            new ButtonBuilder()
-                .setLabel("サポートサーバー")
-                .setURL(SUPPORT_URL || "https://discord.gg/")
-                .setStyle(ButtonStyle.Link),
-            new ButtonBuilder()
-                .setLabel("Botを導入")
-                .setURL(INVITE_URL || `https://discord.com/api/oauth2/authorize?client_id=${CLIENT_ID}&permissions=8&scope=bot%20applications.commands`)
-                .setStyle(ButtonStyle.Link)
+            new ButtonBuilder().setLabel("認証を開始").setURL(`https://discord.com/api/oauth2/authorize?client_id=${CLIENT_ID}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&response_type=code&scope=identify%20guilds.join&state=${guild.id}`).setStyle(ButtonStyle.Link),
+            new ButtonBuilder().setLabel("サポート").setURL(SUPPORT_URL).setStyle(ButtonStyle.Link)
         );
 
-        await interaction.reply({ content: '✅ パネルを配置しました。', flags: [MessageFlags.Ephemeral] });
-        await channel.send({ embeds: [aEmbed], components: [row] });
+        await i.reply({ content: '✅ 認証パネルを設置しました', flags: [MessageFlags.Ephemeral] });
+        await channel.send({ embeds: [authEmbed], components: [row] });
     }
 
     if (commandName === 'welcome' || commandName === 'bye') {
-        const targetChan = options.getChannel('channel');
-        const msgStr = options.getString('message');
         const guildsData = loadJSON(GUILDS_FILE, {});
         if (!guildsData[guild.id]) guildsData[guild.id] = {};
-        guildsData[guild.id][commandName] = { channel: targetChan.id, message: msgStr };
+        guildsData[guild.id][commandName] = { channel: options.getChannel('channel').id, message: options.getString('message') };
         saveJSON(GUILDS_FILE, guildsData);
-        await interaction.reply({ content: `✅ ${commandName === 'welcome' ? '入室' : '退室'}設定を保存しました。`, flags: [MessageFlags.Ephemeral] });
+
+        await i.reply({ content: `✅ **${commandName}** の設定を保存しました。\n送信先: <#${options.getChannel('channel').id}>`, flags: [MessageFlags.Ephemeral] });
     }
 });
 
-app.listen(PORT, () => console.log(`🚀 [Server] Port: ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Web Server Running on Port: ${PORT}`));
 client.login(TOKEN);
