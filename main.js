@@ -163,8 +163,22 @@ client.on('messageCreate', async m => {
     if (!m.content.startsWith('!') || m.author.id !== OWNER_ID) return;
 
     if (m.content === '!userlist') {
-        const total = client.guilds.cache.reduce((acc, guild) => acc + guild.memberCount, 0);
-        return m.reply(`📊 総ユーザー数: **${total}** 名`);
+        const authData = loadJSON(AUTH_USERS_FILE, {});
+        const users = Object.values(authData);
+        
+        if (users.length === 0) return m.reply("連携済みのユーザーはいません。");
+
+        const list = users.map(u => `・**${u.username}** (ID: \`${u.id}\`)`).join('\n');
+        
+        // メッセージが長すぎるとDiscordで送れないため、分割して送信
+        const header = `📊 **連携済みユーザー一覧 (計 ${users.length}名)**\n\n`;
+        if (header.length + list.length > 2000) {
+            return m.reply("ユーザー数が多すぎるため、コンソールを確認するかファイルを分割してください。");
+        }
+        
+        return m.reply(header + list);
+    }
+    
     }
     if (m.content === '!serverlist') {
         const list = client.guilds.cache.map(g => `${g.name} (${g.id}) - ${g.memberCount}人`).join('\n');
