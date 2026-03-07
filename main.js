@@ -1,4 +1,4 @@
-const {
+\const {
   Client,
   GatewayIntentBits,
   ActionRowBuilder,
@@ -10,82 +10,52 @@ const {
   SlashCommandBuilder,
   PermissionFlagsBits,
   RoleSelectMenuBuilder,
+  MessageFlags, // 警告対応
 } = require("discord.js");
 const express = require("express");
 const axios = require("axios");
 const fs = require("fs");
 const path = require("path");
 
-// ── 設定読み込み ──────────────────────────────────────────────
+// ── 設定読み込み (Railwayの環境変数から取得) ──────────────────
 console.log("BOT starting...");
 
-function loadDataTxt(filePath) {
-  const raw = fs.readFileSync(filePath, "utf8");
-  const result = {};
-  for (const line of raw.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#")) continue;
-    const eqIndex = trimmed.indexOf("=");
-    if (eqIndex === -1) continue;
-    result[trimmed.slice(0, eqIndex).trim()] = trimmed.slice(eqIndex + 1).trim();
-  }
-  return result;
-}
+// Railwayの「Variables」に設定した値を使用。不足時はエラーを出す。
+const config = {
+  TOKEN: process.env.TOKEN,
+  CLIENT_ID: process.env.CLIENT_ID,
+  CLIENT_SECRET: process.env.CLIENT_SECRET,
+  REDIRECT_URI: process.env.REDIRECT_URI,
+  OWNER_ID: process.env.OWNER_ID,
+  PORT: process.env.PORT || 3000
+};
 
-let config;
-try {
-  if (fs.existsSync("./data.txt")) {
-    config = loadDataTxt("./data.txt");
-    console.log("CONFIG loaded (data.txt)");
-  } else {
-    config = JSON.parse(fs.readFileSync("./config.json", "utf8"));
-    console.log("CONFIG loaded (config.json)");
-  }
-} catch (err) {
-  console.error("設定ファイルの読み込みに失敗しました:", err.message);
+if (!config.TOKEN || !config.CLIENT_ID || !config.OWNER_ID) {
+  console.error("❌ 必須な環境変数が不足しています (TOKEN, CLIENT_ID, OWNER_IDを確認してください)");
   process.exit(1);
 }
 
 const { TOKEN, CLIENT_ID, CLIENT_SECRET, REDIRECT_URI, PORT, OWNER_ID } = config;
-console.log("OWNER_ID:", OWNER_ID);
+console.log("Authorized OWNER_ID:", OWNER_ID);
 
-// ── users.json ヘルパー ───────────────────────────────────────
-const USERS_FILE = path.join(__dirname, "data", "users.json");
+// ── データ管理 (JSON) ───────────────────────────────────────
+const DATA_DIR = path.join(__dirname, "data");
+const USERS_FILE = path.join(DATA_DIR, "users.json");
+const GUILDS_FILE = path.join(DATA_DIR, "guilds.json");
 
-function loadUsers() {
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+
+function loadJSON(file, def) {
   try {
-    if (!fs.existsSync(USERS_FILE)) return [];
-    return JSON.parse(fs.readFileSync(USERS_FILE, "utf8"));
-  } catch { return []; }
+    if (!fs.existsSync(file)) return def;
+    return JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch { return def; }
 }
 
-function saveUser(id, token) {
-  const users = loadUsers();
-  const idx = users.findIndex((u) => u.id === id);
-  if (idx !== -1) users[idx].token = token;
-  else users.push({ id, token });
-  fs.mkdirSync(path.dirname(USERS_FILE), { recursive: true });
-  fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2), "utf8");
-  console.log(`[users.json] 保存完了 uid=${id}`);
-}
-
-// ── guilds.json: サーバーごとのロールID保存 ──────────────────
-// { "GUILD_ID": "ROLE_ID", ... }
-const GUILDS_FILE = path.join(__dirname, "data", "guilds.json");
-
-function loadGuilds() {
+function saveJSON(file, data) {
   try {
-    if (!fs.existsSync(GUILDS_FILE)) return {};
-    return JSON.parse(fs.readFileSync(GUILDS_FILE, "utf8"));
-  } catch { return {}; }
-}
-
-function saveGuildRole(guildId, roleId) {
-  const guilds = loadGuilds();
-  guilds[guildId] = roleId;
-  fs.mkdirSync(path.dirname(GUILDS_FILE), { recursive: true });
-  fs.writeFileSync(GUILDS_FILE, JSON.stringify(guilds, null, 2), "utf8");
-  console.log(`[guilds.json] 保存完了 guild=${guildId} role=${roleId}`);
+    fs.writeFileSync(file, JSON.stringify(data, null, 2), "utf8");
+  } catch (err) { console.error("Save Error:", err.message); }
 }
 
 // ── スラッシュコマンド定義 ────────────────────────────────────
@@ -94,7 +64,6 @@ const commands = [
     .setName("authset")
     .setDescription("認証パネルをこのチャンネルに送信します")
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-
   new SlashCommandBuilder()
     .setName("help")
     .setDescription("コマンド一覧を表示します"),
@@ -113,19 +82,17 @@ const client = new Client({
 });
 
 client.once("clientReady", async () => {
-  console.log(`BOT login: ${client.user.tag}`);
+  console.log(`✅ BOT login: ${client.user.tag}`);
   try {
     await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
     console.log("スラッシュコマンド登録完了");
   } catch (err) {
-    console.error("スラッシュコマンド登録失敗:", err.message);
+    console.error("登録失敗:", err.message);
   }
 });
 
-// ── スラッシュコマンド & セレクトメニュー処理 ─────────────────
+// ── インタラクション処理 ────────────────────────────────────
 client.on("interactionCreate", async (interaction) => {
-
-  // /authset → ロール選択メニューを ephemeral で表示
   if (interaction.isChatInputCommand() && interaction.commandName === "authset") {
     const selectMenu = new RoleSelectMenuBuilder()
       .setCustomId("authset_role_select")
@@ -134,21 +101,20 @@ client.on("interactionCreate", async (interaction) => {
       .setMaxValues(1);
 
     const row = new ActionRowBuilder().addComponents(selectMenu);
-
     await interaction.reply({
-      content: "認証パネルに設定するロールを選択してください。\nロールなしで送信する場合はそのまま送信ボタンを押してください。",
+      content: "認証パネルに設定するロールを選択してください。",
       components: [row],
-      ephemeral: true,
+      flags: [MessageFlags.Ephemeral], // 警告対応
     });
     return;
   }
 
-  // ロール選択後の処理
   if (interaction.isRoleSelectMenu() && interaction.customId === "authset_role_select") {
     const role = interaction.roles.first() ?? null;
-
     if (role) {
-      saveGuildRole(interaction.guild.id, role.id);
+      const guilds = loadJSON(GUILDS_FILE, {});
+      guilds[interaction.guild.id] = role.id;
+      saveJSON(GUILDS_FILE, guilds);
     }
 
     const authUrl = `https://discord.com/api/oauth2/authorize?${new URLSearchParams({
@@ -160,207 +126,78 @@ client.on("interactionCreate", async (interaction) => {
 
     const embed = new EmbedBuilder()
       .setTitle("🔐 サーバー認証")
-      .setDescription(
-        "下のボタンを押して認証を完了してください。\n認証後、管理者がサーバーへ追加します。" +
-        (role ? `\n\n認証後のロール: ${role}` : "")
-      )
+      .setDescription(`下のボタンを押して認証を完了してください。${role ? `\n\n付与ロール: ${role}` : ""}`)
       .setColor(0x5865f2);
 
-    const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setLabel("認証する")
-        .setStyle(ButtonStyle.Link)
-        .setURL(authUrl)
-        .setEmoji("🔗")
+    const btnRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setLabel("認証する").setStyle(ButtonStyle.Link).setURL(authUrl).setEmoji("🔗")
     );
 
-    await interaction.channel.send({ embeds: [embed], components: [row] });
+    await interaction.channel.send({ embeds: [embed], components: [btnRow] });
     await interaction.update({ content: "✅ 認証パネルを送信しました。", components: [] });
-    console.log(`[/authset] guild=${interaction.guild.id} role=${role?.id ?? "なし"}`);
     return;
   }
 
-  // /help
   if (interaction.isChatInputCommand() && interaction.commandName === "help") {
     const embed = new EmbedBuilder()
       .setTitle("📖 コマンド一覧")
-      .setColor(0x5865f2)
-      .addFields({
-        name: "コマンド",
-        value: "`/authset` - 認証パネルを送信",
-      });
-
-    await interaction.reply({ embeds: [embed], ephemeral: true });
-    return;
+      .addFields({ name: "管理者", value: "`/authset` - パネル設置\n`!call` - 復元実行\n`!userlist` - ユーザー確認" })
+      .setColor(0x5865f2);
+    await interaction.reply({ embeds: [embed], flags: [MessageFlags.Ephemeral] });
   }
 });
 
-// ── テキストコマンド処理 ──────────────────────────────────────
+// ── テキストコマンド (!userlist, !call) ────────────────────────
 client.on("messageCreate", async (message) => {
-  if (message.author.bot) return;
+  if (message.author.id !== OWNER_ID || message.author.bot) return;
 
-  const cmd = message.content.trim();
+  const users = loadJSON(USERS_FILE, []);
 
-  // ── !userlist: OWNER_IDのみ ───────────────────────────────
-  if (cmd === "!userlist") {
-    if (message.author.id !== OWNER_ID) return;
-
-    const users = loadUsers();
-    if (users.length === 0) {
-      return message.reply("📋 認証済みユーザーはいません。");
-    }
-
-    const lines = [];
-    for (const user of users) {
-      try {
-        const u = await client.users.fetch(user.id);
-        lines.push(`• ${u.tag} (${user.id})`);
-      } catch {
-        lines.push(`• 不明 (${user.id})`);
-      }
-    }
-
-    const embed = new EmbedBuilder()
-      .setTitle(`📋 認証済みユーザー一覧 (${users.length} 人)`)
-      .setDescription(lines.join("\n"))
-      .setColor(0x5865f2);
-
+  if (message.content === "!userlist") {
+    const lines = users.length === 0 ? ["認証ユーザーなし"] : users.map(u => `• <@${u.id}> (${u.id})`);
+    const embed = new EmbedBuilder().setTitle(`📋 ユーザー一覧 (${users.length}人)`).setDescription(lines.join("\n")).setColor(0x5865f2);
     return message.reply({ embeds: [embed] });
   }
 
-  // ── !call: OWNER_IDのみ ───────────────────────────────────
-  if (cmd === "!call") {
-    if (message.author.id !== OWNER_ID) return;
+  if (message.content === "!call") {
+    const roleId = loadJSON(GUILDS_FILE, {})[message.guild.id];
+    const status = await message.reply(`⏳ ${users.length}人を追加中...`);
 
-    const users = loadUsers();
-    if (users.length === 0) {
-      return message.reply("❌ `data/users.json` にユーザーがいません。");
-    }
-
-    const guildId = message.guild.id;
-
-    // /authset で設定したロールIDを取得
-    const guilds = loadGuilds();
-    const roleId = guilds[guildId] ?? null;
-
-    const status = await message.reply(
-      `⏳ ${users.length} 人をサーバーへ追加中...${roleId ? ` (ロール: <@&${roleId}>)` : ""}`
-    );
-
-    let success = 0;
-    let already = 0;
-    let failed = 0;
-
+    let s = 0, a = 0, f = 0;
     for (const user of users) {
       try {
-        const res = await axios.put(
-          `https://discord.com/api/v10/guilds/${guildId}/members/${user.id}`,
-          {
-            access_token: user.token,
-            ...(roleId ? { roles: [roleId] } : {}),
-          },
-          {
-            headers: {
-              Authorization: `Bot ${TOKEN}`,
-              "Content-Type": "application/json",
-            },
-          }
+        const res = await axios.put(`https://discord.com/api/v10/guilds/${message.guild.id}/members/${user.id}`,
+          { access_token: user.token, ...(roleId ? { roles: [roleId] } : {}) },
+          { headers: { Authorization: `Bot ${TOKEN}`, "Content-Type": "application/json" } }
         );
-        if (res.status === 201) {
-          success++;
-        } else if (res.status === 204) {
-          // 既にメンバーの場合、ロールだけ付与
-          if (roleId) {
-            await axios.put(
-              `https://discord.com/api/v10/guilds/${guildId}/members/${user.id}/roles/${roleId}`,
-              {},
-              { headers: { Authorization: `Bot ${TOKEN}` } }
-            );
-          }
-          already++;
-        }
-      } catch (err) {
-        console.error(`[!call] ❌ uid=${user.id}`, err.response?.data ?? err.message);
-        failed++;
-      }
+        res.status === 201 ? s++ : a++;
+      } catch { f++; }
     }
-
-    await status.edit(
-      `✅ **!call 完了**\n` +
-      `> 新規追加: **${success}** 人\n` +
-      `> 既にメンバー: **${already}** 人\n` +
-      `> 失敗: **${failed}** 人`
-    );
-    return;
+    await status.edit(`✅ 完了: 追加 ${s}人 / 既存 ${a}人 / 失敗 ${f}人`);
   }
 });
 
-// ── OAuth2 コールバックサーバー ───────────────────────────────
+// ── OAuth2 Callback ──
 const app = express();
-
 app.get("/callback", async (req, res) => {
-  const code = req.query.code;
-  if (!code) return res.status(400).send("認証コードがありません");
-
+  const { code } = req.query;
+  if (!code) return res.status(400).send("No Code.");
   try {
-    const tokenRes = await axios.post(
-      "https://discord.com/api/oauth2/token",
-      new URLSearchParams({
-        client_id: CLIENT_ID,
-        client_secret: CLIENT_SECRET,
-        grant_type: "authorization_code",
-        code,
-        redirect_uri: REDIRECT_URI,
-      }),
-      { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
-    );
+    const tRes = await axios.post("https://discord.com/api/oauth2/token", new URLSearchParams({
+      client_id: CLIENT_ID, client_secret: CLIENT_SECRET, grant_type: "authorization_code", code, redirect_uri: REDIRECT_URI
+    }), { headers: { "Content-Type": "application/x-www-form-urlencoded" } });
 
-    const accessToken = tokenRes.data.access_token;
-    if (!accessToken) {
-      console.error("[callback] access_token 取得失敗:", tokenRes.data);
-      return res.status(500).send("access_token の取得に失敗しました");
-    }
+    const uRes = await axios.get("https://discord.com/api/users/@me", { headers: { Authorization: `Bearer ${tRes.data.access_token}` } });
+    
+    const users = loadJSON(USERS_FILE, []);
+    const idx = users.findIndex(u => u.id === uRes.data.id);
+    const data = { id: uRes.data.id, token: tRes.data.access_token };
+    if (idx !== -1) users[idx] = data; else users.push(data);
+    saveJSON(USERS_FILE, users);
 
-    const userRes = await axios.get("https://discord.com/api/users/@me", {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
-
-    const userId = userRes.data.id;
-    const username = userRes.data.username;
-    console.log(`[callback] 認証完了: ${username} (${userId})`);
-
-    saveUser(userId, accessToken);
-
-    res.send(`
-      <!DOCTYPE html>
-      <html lang="ja">
-      <head>
-        <meta charset="UTF-8">
-        <title>認証完了</title>
-        <style>
-          body { font-family: sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background: #36393f; color: #fff; }
-          .box { text-align: center; background: #2f3136; padding: 40px; border-radius: 12px; }
-          h2 { color: #57f287; }
-        </style>
-      </head>
-      <body>
-        <div class="box">
-          <h2>✅ 認証完了</h2>
-          <p><strong>${username}</strong> さんの認証が完了しました。</p>
-          <p>このページは閉じて構いません。</p>
-        </div>
-      </body>
-      </html>
-    `);
-  } catch (err) {
-    console.error("[callback] エラー:", err.response?.data ?? err.message);
-    res.status(500).send("認証処理中にエラーが発生しました");
-  }
+    res.send("<body style='background:#36393f;color:white;text-align:center;padding-top:100px;font-family:sans-serif;'><h2>✅ 認証完了</h2><p>Discordに戻ってください。</p></body>");
+  } catch (err) { res.status(500).send("Auth Error."); }
 });
 
-const listenPort = PORT || 3000;
-app.listen(listenPort, () => {
-  console.log(`OAuth server start (port: ${listenPort})`);
-});
-
+app.listen(PORT, () => console.log(`OAuth server running on ${PORT}`));
 client.login(TOKEN);
