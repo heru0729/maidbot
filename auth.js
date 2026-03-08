@@ -1,78 +1,60 @@
+const express = require('express');
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
-const express = require('express');
+const app = express();
 
-// 環境変数
-const { CLIENT_ID, CLIENT_SECRET, REDIRECT_URI, TOKEN } = process.env;
-
-// JSONファイルパス
+const CLIENT_ID = '1352238055012040828';
+const CLIENT_SECRET = 'YOUR_CLIENT_SECRET';
+const REDIRECT_URI = 'http://localhost:3000/callback';
 const USERS_FILE = path.join(__dirname, 'data', 'users.json');
-const SERVERS_FILE = path.join(__dirname, 'data', 'servers.json');
 
-// JSONロード関数
-function loadJSON(filePath, defaultValue) {
+function loadUsers() {
+    if (!fs.existsSync(USERS_FILE)) return {};
+    return JSON.parse(fs.readFileSync(USERS_FILE, 'utf8'));
+}
+
+function saveUsers(data) {
+    fs.writeFileSync(USERS_FILE, JSON.stringify(data, null, 4));
+}
+
+app.get('/login', (req, res) => {
+    const url = `https://discord.com/oauth2/authorize?client_id=${CLIENT_ID}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&response_type=code&scope=identify%20guilds.join`;
+    res.redirect(url);
+});
+
+app.get('/callback', async (req, res) => {
+    const code = req.query.code;
+    if (!code) return res.send('No code provided');
+
     try {
-        const data = fs.readFileSync(filePath, 'utf8');
-        return JSON.parse(data);
-    } catch {
-        return defaultValue;
+        const tokenResponse = await axios.post('https://discord.com/api/oauth2/token', new URLSearchParams({
+            client_id: CLIENT_ID,
+            client_secret: CLIENT_SECRET,
+            grant_type: 'authorization_code',
+            code: code,
+            redirect_uri: REDIRECT_URI,
+        }), { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
+
+        const { access_token, refresh_token } = tokenResponse.data;
+
+        const userResponse = await axios.get('https://discord.com/api/users/@me', {
+            headers: { authorization: `Bearer ${access_token}` }
+        });
+
+        const users = loadUsers();
+        users[userResponse.data.id] = {
+            username: userResponse.data.username,
+            accessToken: access_token,
+            refreshToken: refresh_token
+        };
+        saveUsers(users);
+
+        res.sendFile(path.join(__dirname, 'auth.html'));
+    } catch (error) {
+        console.error(error);
+        res.send('認証エラーが発生しました。');
     }
-}
+});
 
-// JSON保存関数
-function saveJSON(filePath, data) {
-    fs.writeFileSync(filePath, JSON.stringify(data, null, 4));
-}
-
-// Expressアプリを返す関数
-module.exports = (app) => {
-    app.get('/callback', async (req, res) => {
-        const { code, state } = req.query;
-        if (!code || !state) return res.status(400).send("認証エラー: code または state が不足しています。");
-
-        try {
-            // Discordからアクセストークン取得
-            const tokenResponse = await axios.post('https://discord.com/api/oauth2/token', new URLSearchParams({
-                client_id: CLIENT_ID,
-                client_secret: CLIENT_SECRET,
-                grant_type: 'authorization_code',
-                code: code,
-                redirect_uri: REDIRECT_URI
-            }), { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
-
-            const accessToken = tokenResponse.data.access_token;
-
-            // Discordユーザー情報取得
-            const userResponse = await axios.get('https://discord.com/api/users/@me', {
-                headers: { Authorization: `Bearer ${accessToken}` }
-            });
-            const user = userResponse.data;
-
-            // users.jsonに保存
-            const usersData = loadJSON(USERS_FILE, {});
-            usersData[user.id] = { id: user.id, username: user.username };
-            saveJSON(USERS_FILE, usersData);
-
-            // サーバーのロール付与
-            const serversData = loadJSON(SERVERS_FILE, {});
-            const roleId = serversData[state]?.roleId;
-            if (roleId) {
-                await axios.put(`https://discord.com/api/v10/guilds/${state}/members/${user.id}`, {
-                    access_token: accessToken,
-                    roles: [roleId]
-                }, {
-                    headers: { Authorization: `Bot ${TOKEN}` }
-                });
-            }
-
-            // 認証完了ページ表示
-            let html = fs.readFileSync(path.join(__dirname, 'auth.html'), 'utf8');
-            res.send(html);
-
-        } catch (error) {
-            console.error("Auth Callback Error:", error.response?.data || error.message);
-            res.status(500).send("認証プロセスでエラーが発生しました。");
-        }
-    });
-};
+app.listen(3000, () => console.log('Auth server running on port 3000'));
