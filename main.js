@@ -93,8 +93,13 @@ client.on(Events.InteractionCreate, async (i) => {
     if (i.isChatInputCommand()) {
         const { commandName, options: o } = i;
         if (commandName === 'help') {
-            const embed1 = new EmbedBuilder().setTitle('コマンド一覧').setColor(0x7289DA).addFields({ name: '🛠 管理機能', value: '`/log`, `/log-set`, `/welcome`, `/bye`, `/ngword`, `/chatlock`' });
-            const embed2 = new EmbedBuilder().setTitle('コマンド一覧').setColor(0x7289DA).addFields({ name: '👤 認証 & パネル', value: '`/authset`, `/ticket`, `/rp create`, `/rp delete`' }, { name: '🌐 交流', value: '`/gset`, `/gdel`, `/omikuji`' });
+            const embed1 = new EmbedBuilder().setTitle('コマンド一覧').setColor(0x7289DA).addFields(
+                { name: '🛠 管理機能', value: '`/log`: ログ送信先設定\n`/log-set`: ログ項目のON/OFF切替\n`/welcome`: 入室時の挨拶設定\n`/bye`: 退室時の挨拶設定\n`/ngword`: 特定ワードの自動削除設定\n`/chatlock`: 指定秒間のチャット制限' }
+            );
+            const embed2 = new EmbedBuilder().setTitle('コマンド一覧').setColor(0x7289DA).addFields(
+                { name: '👤 認証 & パネル', value: '`/authset`: Webサイト連携の認証パネル作成\n`/ticket`: ボタン式の問い合わせ受付\n`/rp create`: 最大10個の役職付与パネル作成\n`/rp delete`: 作成したパネルの削除ボタン' },
+                { name: '🌐 交流', value: '`/gset`: 他サーバーと繋がるチャット設定\n`/gdel`: グローバルチャット解除\n`/omikuji`: 今日の運勢' }
+            );
             await i.reply({ embeds: [embed1, embed2], ephemeral: true }); 
         }
         if (commandName === 'log') { s[gid].logChannel = o.getChannel('channel').id; saveData(SERVERS_FILE, s); await i.reply('ログ送信先を設定しました。'); }
