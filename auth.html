@@ -5,107 +5,108 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>認証完了</title>
 <style>
-  html, body {
+  /* 星空背景 */
+  body {
     margin: 0;
-    padding: 0;
+    height: 100vh;
     overflow: hidden;
-    height: 100%;
-    font-family: Arial, sans-serif;
-    color: white;
     background: black;
+    color: white;
+    font-family: Arial, sans-serif;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    flex-direction: column;
   }
 
   canvas {
-    position: absolute;
+    position: fixed;
     top: 0;
     left: 0;
     z-index: -1;
   }
 
-  .container {
-    position: relative;
-    height: 100%;
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    align-items: center;
-    gap: 20px;
-  }
-
   h1 {
-    font-size: 2em;
-    text-align: center;
+    font-size: 3rem;
+    margin-bottom: 0.5rem;
   }
 
-  .button {
-    padding: 12px 24px;
-    font-size: 16px;
-    border: none;
-    border-radius: 8px;
-    cursor: pointer;
-    background: #7289da;
-    color: white;
-    transition: background 0.3s;
+  p {
+    font-size: 0.8rem;
+    margin-bottom: 2rem;
+  }
+
+  .buttons {
+    display: flex;
+    gap: 1rem;
+  }
+
+  .buttons a {
     text-decoration: none;
+    color: white;
+    background-color: #5865F2;
+    padding: 0.8rem 1.2rem;
+    border-radius: 5px;
+    font-weight: bold;
+    transition: 0.2s;
   }
 
-  .button:hover {
-    background: #5b6eae;
+  .buttons a:hover {
+    background-color: #4752c4;
   }
 </style>
 </head>
 <body>
-<canvas id="stars"></canvas>
 
-<div class="container">
-  <h1>✅ 認証完了</h1>
-  <div>
-    <a class="button" href="https://discord.gg/FUAFeusY6F" target="_blank">サポートサーバー</a>
-    <a class="button" href="https://discord.com/oauth2/authorize?client_id=1352238055012040828&permissions=8&integration_type=0&scope=bot" target="_blank">導入</a>
-  </div>
+<h1>認証完了 ✅</h1>
+<p style="font-size:0.7rem;">このページは閉じていただいて大丈夫です。</p>
+
+<div class="buttons">
+  <a href="https://discord.gg/FUAFeusY6F" target="_blank">サポートサーバー</a>
+  <a href="https://discord.com/oauth2/authorize?client_id=1352238055012040828&permissions=8&integration_type=0&scope=bot" target="_blank">導入</a>
 </div>
 
+<canvas id="starfield"></canvas>
+
 <script>
-const canvas = document.getElementById('stars');
+const canvas = document.getElementById('starfield');
 const ctx = canvas.getContext('2d');
-canvas.width = window.innerWidth;
-canvas.height = window.innerHeight;
+let stars = [];
 
-const stars = [];
-const STAR_COUNT = 150;
-
-for(let i = 0; i < STAR_COUNT; i++){
-  stars.push({
-    x: Math.random() * canvas.width,
-    y: Math.random() * canvas.height,
-    radius: Math.random() * 1.5,
-    speed: Math.random() * 0.5
-  });
+function resizeCanvas() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
 }
+window.addEventListener('resize', resizeCanvas);
+resizeCanvas();
+
+function createStars(count) {
+  stars = [];
+  for (let i = 0; i < count; i++) {
+    stars.push({
+      x: Math.random() * canvas.width,
+      y: Math.random() * canvas.height,
+      radius: Math.random() * 1.5,
+      speed: Math.random() * 0.5 + 0.1
+    });
+  }
+}
+createStars(200);
 
 function animate() {
-  ctx.fillStyle = 'rgba(0,0,0,0.3)';
-  ctx.fillRect(0,0,canvas.width,canvas.height);
-  
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
   ctx.fillStyle = 'white';
   stars.forEach(star => {
     ctx.beginPath();
     ctx.arc(star.x, star.y, star.radius, 0, Math.PI * 2);
     ctx.fill();
-    
-    star.y -= star.speed;
-    if(star.y < 0) star.y = canvas.height;
+    star.y += star.speed;
+    if (star.y > canvas.height) star.y = 0;
   });
-  
   requestAnimationFrame(animate);
 }
-
 animate();
-
-window.addEventListener('resize', () => {
-  canvas.width = window.innerWidth;
-  canvas.height = window.innerHeight;
-});
 </script>
+
 </body>
 </html>
