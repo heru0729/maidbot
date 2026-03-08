@@ -17,7 +17,7 @@ const client = new Client({
 });
 
 const TOKEN = process.env.TOKEN; 
-const OWNER_IDS = process.env.OWNER_ID ? process.env.OWNER_ID.split(',') : [];
+const OWNER_IDS = process.env.OWNER_ID ? process.env.OWNER_ID.split(',').map(id => id.trim()) : [];
 const CLIENT_ID = process.env.CLIENT_ID; 
 const CLIENT_SECRET = process.env.CLIENT_SECRET;
 const REDIRECT_URI = process.env.REDIRECT_URI;
@@ -25,7 +25,6 @@ const REDIRECT_URI = process.env.REDIRECT_URI;
 const SERVERS_FILE = path.join(__dirname, 'data', 'servers.json');
 const USERS_FILE = path.join(__dirname, 'data', 'users.json');
 
-// --- データ管理 ---
 function loadData(f) {
     if (!fs.existsSync(path.dirname(f))) fs.mkdirSync(path.dirname(f), { recursive: true });
     return fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')) : {};
@@ -57,53 +56,37 @@ function createLogConfigRow(c) {
     );
 }
 
-// --- サーバー起動 ---
 setupAuth(app, loadData, saveData, USERS_FILE, CLIENT_ID, CLIENT_SECRET);
 app.listen(process.env.PORT || 3000, '0.0.0.0', () => console.log('Web Server Ready'));
 
-// --- コマンド登録 ---
 client.once(Events.ClientReady, async () => {
     console.log(`${client.user.tag} ログイン完了`);
-    
-    const rpCommand = new SlashCommandBuilder()
-        .setName('rp')
-        .setDescription('役職パネル管理')
-        .addSubcommand(sub => {
-            sub.setName('create').setDescription('役職パネル作成')
-               .addStringOption(o => o.setName('title').setDescription('パネルの題名').setRequired(true))
-               .addStringOption(o => o.setName('description').setDescription('パネルの説明文').setRequired(true));
-            for (let i = 1; i <= 10; i++) {
-                sub.addRoleOption(o => o.setName(`role${i}`).setDescription(`ロール ${i}`))
-                   .addStringOption(o => o.setName(`emoji${i}`).setDescription(`絵文字 ${i}`));
-            }
-            return sub;
-        })
-        .addSubcommand(sub => sub.setName('delete').setDescription('パネル削除ボタン表示'));
-
     const commands = [
         new SlashCommandBuilder().setName('help').setDescription('コマンド一覧を表示'),
         new SlashCommandBuilder().setName('log').setDescription('ログ送信先設定').addChannelOption(o => o.setName('channel').setDescription('送信先').setRequired(true)),
         new SlashCommandBuilder().setName('log-set').setDescription('ログ項目切替'),
-        new SlashCommandBuilder().setName('welcome').setDescription('入室通知設定').addChannelOption(o => o.setName('channel').setDescription('送信先').setRequired(true)).addStringOption(o => o.setName('message').setDescription('{user}{server}{members}')),
-        new SlashCommandBuilder().setName('bye').setDescription('退室通知設定').addChannelOption(o => o.setName('channel').setDescription('送信先').setRequired(true)).addStringOption(o => o.setName('message').setDescription('{user}{server}{members}')),
-        new SlashCommandBuilder().setName('authset').setDescription('Web連携認証パネル作成').addStringOption(o => o.setName('title').setDescription('題名').setRequired(true)).addStringOption(o => o.setName('description').setDescription('説明').setRequired(true)).addStringOption(o => o.setName('button').setDescription('ボタン名').setRequired(true)).addRoleOption(o => o.setName('role').setDescription('付与ロール').setRequired(true)),
-        new SlashCommandBuilder().setName('ticket').setDescription('お問合せパネル作成').addStringOption(o => o.setName('title').setDescription('題名').setRequired(true)).addStringOption(o => o.setName('description').setDescription('説明').setRequired(true)).addStringOption(o => o.setName('button').setDescription('ボタン名').setRequired(true)).addRoleOption(o => o.setName('mention-role').setDescription('通知先ロール').setRequired(true)),
-        new SlashCommandBuilder().setName('gset').setDescription('グローバルチャット設定').addChannelOption(o => o.setName('channel').setDescription('送信先').setRequired(true)),
+        new SlashCommandBuilder().setName('welcome').setDescription('入室通知設定').addChannelOption(o => o.setName('channel').setRequired(true)).addStringOption(o => o.setName('message').setRequired(true)),
+        new SlashCommandBuilder().setName('bye').setDescription('退室通知設定').addChannelOption(o => o.setName('channel').setRequired(true)).addStringOption(o => o.setName('message').setRequired(true)),
+        new SlashCommandBuilder().setName('authset').setDescription('Web連携認証パネル作成').addStringOption(o => o.setName('title').setRequired(true)).addStringOption(o => o.setName('description').setRequired(true)).addStringOption(o => o.setName('button').setRequired(true)).addRoleOption(o => o.setName('role').setRequired(true)),
+        new SlashCommandBuilder().setName('ticket').setDescription('お問合せパネル作成').addStringOption(o => o.setName('title').setRequired(true)).addStringOption(o => o.setName('description').setRequired(true)).addStringOption(o => o.setName('button').setRequired(true)).addRoleOption(o => o.setName('mention-role').setRequired(true)),
+        new SlashCommandBuilder().setName('gset').setDescription('グローバルチャット設定').addChannelOption(o => o.setName('channel').setRequired(true)),
         new SlashCommandBuilder().setName('gdel').setDescription('グローバルチャット解除'),
-        new SlashCommandBuilder().setName('ngword').setDescription('NGワード設定')
-            .addSubcommand(s => s.setName('create').setDescription('追加').addStringOption(o => o.setName('word').setDescription('ワード').setRequired(true)))
-            .addSubcommand(s => s.setName('delete').setDescription('削除').addStringOption(o => o.setName('word').setDescription('ワード').setRequired(true)))
-            .addSubcommand(s => s.setName('list').setDescription('一覧')),
-        new SlashCommandBuilder().setName('chatlock').setDescription('チャット一時ロック').addIntegerOption(o => o.setName('seconds').setDescription('ロック秒数').setRequired(true)),
+        new SlashCommandBuilder().setName('ngword').setDescription('NGワード設定').addSubcommand(s => s.setName('create').setDescription('追加').addStringOption(o => o.setName('word').setRequired(true))).addSubcommand(s => s.setName('delete').setDescription('削除').addStringOption(o => o.setName('word').setRequired(true))).addSubcommand(s => s.setName('list').setDescription('一覧')),
+        new SlashCommandBuilder().setName('chatlock').setDescription('チャット一時ロック').addIntegerOption(o => o.setName('seconds').setRequired(true)),
         new SlashCommandBuilder().setName('omikuji').setDescription('おみくじ'),
-        rpCommand
+        new SlashCommandBuilder().setName('rp').setDescription('役職パネル管理').addSubcommand(sub => {
+            sub.setName('create').setDescription('役職パネル作成').addStringOption(o => o.setName('title').setRequired(true)).addStringOption(o => o.setName('description').setRequired(true));
+            for (let i = 1; i <= 10; i++) {
+                sub.addRoleOption(o => o.setName(`role${i}`).setDescription(`ロール ${i}`)).addStringOption(o => o.setName(`emoji${i}`).setDescription(`絵文字 ${i}`));
+            }
+            return sub;
+        }).addSubcommand(sub => sub.setName('delete').setDescription('パネル削除ボタン表示'))
     ].map(c => c.toJSON());
 
     const rest = new REST({ version: '10' }).setToken(TOKEN);
     try { await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands }); } catch (e) { console.error(e); }
 });
 
-// --- インタラクション ---
 client.on(Events.InteractionCreate, async (i) => {
     const s = loadData(SERVERS_FILE); 
     const gid = i.guildId;
@@ -111,35 +94,25 @@ client.on(Events.InteractionCreate, async (i) => {
 
     if (i.isChatInputCommand()) {
         const { commandName, options: o } = i;
-
         if (commandName === 'help') {
-            const embed1 = new EmbedBuilder().setTitle('コマンド一覧').setColor(0x7289DA)
-                .addFields({ name: '🛠 管理機能', value: '`/log`: ログ出力先設定\n`/log-set`: ログ項目切替\n`/welcome`: 入室通知設定\n`/bye`: 退室通知設定\n`/ngword`: NGワード設定 (create/delete/list)\n`/chatlock`: 指定秒数のチャットロック' });
-            const embed2 = new EmbedBuilder().setTitle('コマンド一覧').setColor(0x7289DA)
-                .addFields(
-                    { name: '👤 認証 & パネル', value: '`/authset`: Web連携認証パネル作成\n`/ticket`: お問合せパネル作成\n`/rp create`: 役職パネル作成 (ロールと絵文字を最大10セット)\n`/rp delete`: パネル削除ボタン表示' },
-                    { name: '🌐 交流 & その他', value: '`/gset`: グローバルチャット設定\n`/gdel`: グローバルチャット解除\n`/omikuji`: おみくじ' }
-                );
+            const embed1 = new EmbedBuilder().setTitle('コマンド一覧').setColor(0x7289DA).addFields({ name: '🛠 管理機能', value: '`/log`: ログ出力先設定\n`/log-set`: ログ項目切替\n`/welcome`: 入室通知設定\n`/bye`: 退室通知設定\n`/ngword`: NGワード設定\n`/chatlock`: チャットロック' });
+            const embed2 = new EmbedBuilder().setTitle('コマンド一覧').setColor(0x7289DA).addFields({ name: '👤 認証 & パネル', value: '`/authset`: 認証パネル\n`/ticket`: お問合せパネル\n`/rp create`: 役職パネル\n`/rp delete`: パネル削除' }, { name: '🌐 交流', value: '`/gset`: グローバルチャット設定\n`/gdel`: 解除\n`/omikuji`: おみくじ' });
             await i.reply({ embeds: [embed1, embed2], ephemeral: true }); 
         }
-
         if (commandName === 'log') { s[gid].logChannel = o.getChannel('channel').id; saveData(SERVERS_FILE, s); await i.reply('ログ送信先を設定しました。'); }
         if (commandName === 'log-set') await i.reply({ content: 'ログ項目設定', components: [createLogConfigRow(s[gid].logConfig)], ephemeral: true });
-        
         if (commandName === 'authset') {
             s[gid].authRole = o.getRole('role').id; saveData(SERVERS_FILE, s);
             const authUrl = `https://discord.com/api/oauth2/authorize?client_id=${CLIENT_ID}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&response_type=code&scope=identify%20guilds.join`;
             const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setLabel(o.getString('button')).setStyle(ButtonStyle.Link).setURL(authUrl));
             await i.reply({ embeds: [new EmbedBuilder().setTitle(o.getString('title')).setDescription(o.getString('description')).setColor(0x43B581)], components: [row] });
         }
-
         if (commandName === 'chatlock') {
             const sec = o.getInteger('seconds');
             s[gid].locked = true; saveData(SERVERS_FILE, s);
             setTimeout(() => { const d = loadData(SERVERS_FILE); if(d[gid]) d[gid].locked = false; saveData(SERVERS_FILE, d); }, sec * 1000);
             await i.reply(`チャットを ${sec} 秒間ロックしました。`);
         }
-
         if (commandName === 'ngword') {
             const sub = o.getSubcommand(); const word = o.getString('word');
             if (sub === 'create') { s[gid].ngwords.push(word); await i.reply(`追加: ${word}`); }
@@ -147,7 +120,6 @@ client.on(Events.InteractionCreate, async (i) => {
             else if (sub === 'list') await i.reply(`NGリスト: ${s[gid].ngwords.join(', ') || 'なし'}`);
             saveData(SERVERS_FILE, s);
         }
-
         if (commandName === 'rp' && o.getSubcommand() === 'create') {
             const row = new ActionRowBuilder();
             for (let j = 1; j <= 10; j++) {
@@ -158,17 +130,10 @@ client.on(Events.InteractionCreate, async (i) => {
         }
         if (commandName === 'rp' && o.getSubcommand() === 'delete') {
             const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('rp_panel_delete').setLabel('このパネルを削除').setStyle(ButtonStyle.Danger));
-            await i.reply({ content: 'パネルを削除するには下のボタンを押してください。', components: [row], ephemeral: true });
+            await i.reply({ content: '削除ボタン', components: [row], ephemeral: true });
         }
-
-        if (commandName === 'welcome') {
-            s[gid].welcome = { channel: o.getChannel('channel').id, message: o.getString('message') };
-            saveData(SERVERS_FILE, s); await i.reply('入室通知を設定しました。');
-        }
-        if (commandName === 'bye') {
-            s[gid].bye = { channel: o.getChannel('channel').id, message: o.getString('message') };
-            saveData(SERVERS_FILE, s); await i.reply('退室通知を設定しました。');
-        }
+        if (commandName === 'welcome') { s[gid].welcome = { channel: o.getChannel('channel').id, message: o.getString('message') }; saveData(SERVERS_FILE, s); await i.reply('入室通知を設定しました。'); }
+        if (commandName === 'bye') { s[gid].bye = { channel: o.getChannel('channel').id, message: o.getString('message') }; saveData(SERVERS_FILE, s); await i.reply('退室通知を設定しました。'); }
         if (commandName === 'ticket') {
             const mid = o.getRole('mention-role').id;
             const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`ticket_open_${mid}`).setLabel(o.getString('button')).setStyle(ButtonStyle.Primary));
@@ -186,27 +151,17 @@ client.on(Events.InteractionCreate, async (i) => {
             saveData(SERVERS_FILE, s); await i.update({ components: [createLogConfigRow(s[gid].logConfig)] });
         }
         if (i.customId === 'rp_panel_delete') await i.message.delete();
-        
         if (i.customId.startsWith('rp_')) {
             const rid = i.customId.split('_')[1];
             try {
-                if (i.member.roles.cache.has(rid)) { 
-                    await i.member.roles.remove(rid); 
-                    await i.reply({ content: '外しました。', ephemeral: true }); 
-                } else { 
-                    await i.member.roles.add(rid); 
-                    await i.reply({ content: '付与しました。', ephemeral: true }); 
-                }
-            } catch (e) {
-                await i.reply({ content: '❌ エラー: 権限不足です。', ephemeral: true });
-            }
+                if (i.member.roles.cache.has(rid)) { await i.member.roles.remove(rid); await i.reply({ content: '外しました。', ephemeral: true }); }
+                else { await i.member.roles.add(rid); await i.reply({ content: '付与しました。', ephemeral: true }); }
+            } catch (e) { await i.reply({ content: '❌ エラー: 権限不足です。', ephemeral: true }); }
         }
-
         if (i.customId.startsWith('ticket_open_')) {
             const mid = i.customId.split('_')[2];
             const ch = await i.guild.channels.create({ 
-                name: `ticket-${i.user.username}`, 
-                type: ChannelType.GuildText, 
+                name: `ticket-${i.user.username}`, type: ChannelType.GuildText, 
                 permissionOverwrites: [
                     { id: i.guild.id, deny: [PermissionFlagsBits.ViewChannel] }, 
                     { id: i.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] }, 
@@ -220,19 +175,14 @@ client.on(Events.InteractionCreate, async (i) => {
     }
 });
 
-// --- イベント ---
 client.on(Events.MessageUpdate, async (o, n) => {
     const s = loadData(SERVERS_FILE); if (!s[o.guildId]?.logConfig?.edit || (o.author && o.author.bot) || o.content === n.content) return;
-    const authorTag = o.author ? o.author.tag : '不明なユーザー';
-    await sendLog(o.guild, new EmbedBuilder().setTitle('📝 編集').setColor(0xFFA500).addFields({ name: 'ユーザー', value: authorTag }, { name: '元', value: o.content || 'なし' }, { name: '新', value: n.content || 'なし' }));
+    await sendLog(o.guild, new EmbedBuilder().setTitle('📝 編集').setColor(0xFFA500).addFields({ name: 'ユーザー', value: o.author?.tag || '不明' }, { name: '元', value: o.content || 'なし' }, { name: '新', value: n.content || 'なし' }));
 });
 
 client.on(Events.MessageDelete, async (m) => {
-    const s = loadData(SERVERS_FILE); 
-    if (!s[m.guildId]?.logConfig?.delete || (m.author && m.author.bot)) return;
-    const authorTag = m.author ? m.author.tag : '不明なユーザー(キャッシュなし)';
-    const content = m.content || '内容なし(または画像のみ)';
-    await sendLog(m.guild, new EmbedBuilder().setTitle('🗑️ 削除').setColor(0xFF0000).addFields({ name: 'ユーザー', value: authorTag }, { name: '内容', value: content }));
+    const s = loadData(SERVERS_FILE); if (!s[m.guildId]?.logConfig?.delete || (m.author && m.author.bot)) return;
+    await sendLog(m.guild, new EmbedBuilder().setTitle('🗑️ 削除').setColor(0xFF0000).addFields({ name: 'ユーザー', value: m.author?.tag || '不明' }, { name: '内容', value: m.content || '内容なし' }));
 });
 
 client.on(Events.GuildMemberAdd, async (m) => {
@@ -240,73 +190,39 @@ client.on(Events.GuildMemberAdd, async (m) => {
     if (c?.logConfig?.join) await sendLog(m.guild, new EmbedBuilder().setTitle('📥 参加').setColor(0x00FFFF).setDescription(`${m.user.tag} 参加`));
     if (c?.welcome) { const ch = m.guild.channels.cache.get(c.welcome.channel); if (ch) ch.send(replacePlaceholders(c.welcome.message, m)); }
 });
+
 client.on(Events.GuildMemberRemove, async (m) => {
     const s = loadData(SERVERS_FILE); const c = s[m.guild.id];
     if (c?.logConfig?.leave) await sendLog(m.guild, new EmbedBuilder().setTitle('📤 退出').setColor(0xFF00FF).setDescription(`${m.user.tag} 退出`));
     if (c?.bye) { const ch = m.guild.channels.cache.get(c.bye.channel); if (ch) ch.send(replacePlaceholders(c.bye.message, m)); }
 });
 
-    const s = loadData(SERVERS_FILE); const gid = msg.guildId;
-    
-    // ロック/NGワード
+client.on(Events.MessageCreate, async (msg) => {
+    if (msg.author.bot || !msg.guild) return;
+    const s = loadData(SERVERS_FILE);
+    const gid = msg.guildId;
+
+    if (OWNER_IDS.includes(msg.author.id) && msg.content.startsWith('!')) {
+        return await handleAdminCommands(msg, client, OWNER_IDS, loadData, saveData, USERS_FILE);
+    }
+
     if (!msg.member.permissions.has(PermissionFlagsBits.Administrator)) {
         if (s[gid]?.locked || s[gid]?.ngwords?.some(w => msg.content.includes(w))) {
             return msg.delete().catch(() => {});
         }
     }
 
-    // グローバルチャット
     if (s[gid]?.gChatChannel === msg.channelId) {
         const emb = new EmbedBuilder().setAuthor({ name: `${msg.author.tag} (${msg.guild.name})`, iconURL: msg.author.displayAvatarURL() }).setDescription(msg.content || '画像').setColor(0x00FF00);
         if (msg.attachments.size > 0 && msg.attachments.first().contentType?.startsWith('image/')) emb.setImage(msg.attachments.first().url);
         for (const tid in s) {
             const cid = s[tid].gChatChannel;
-            if (cid && cid !== msg.channelId) { 
-                const ch = client.channels.cache.get(cid); 
-                if (ch) await ch.send({ embeds: [emb], allowedMentions: { parse: [] } }).catch(() => {}); 
-            }
-        }
-    }
-
-client.on(Events.MessageCreate, async (msg) => {
-    if (msg.author.bot || !msg.guild) return;
-
-    const s = loadData(SERVERS_FILE);
-    const gid = msg.guildId;
-
-    // 1. オーナーコマンド判定 (admin.jsへ処理を飛ばす)
-    if (OWNER_IDS.includes(msg.author.id) && msg.content.startsWith('!')) {
-        return await handleAdminCommands(msg, client, OWNER_IDS, loadData, saveData, USERS_FILE);
-    }
-
-    // 2. NGワード / チャットロックの判定 (管理者は除外)
-    if (!msg.member.permissions.has(PermissionFlagsBits.Administrator)) {
-        if (s[gid]?.locked || s[gid]?.ngwords?.some(w => msg.content.includes(w))) {
-            return msg.delete().catch(() => {});
-        }
-    }
-
-    // 3. グローバルチャット処理
-    if (s[gid]?.gChatChannel === msg.channelId) {
-        const emb = new EmbedBuilder()
-            .setAuthor({ name: `${msg.author.tag} (${msg.guild.name})`, iconURL: msg.author.displayAvatarURL() })
-            .setDescription(msg.content || '画像')
-            .setColor(0x00FF00);
-
-        if (msg.attachments.size > 0 && msg.attachments.first().contentType?.startsWith('image/')) {
-            emb.setImage(msg.attachments.first().url);
-        }
-
-        // 全サーバーのグローバルチャットチャンネルに送信
-        for (const tid in s) {
-            const cid = s[tid].gChatChannel;
             if (cid && cid !== msg.channelId) {
                 const ch = client.channels.cache.get(cid);
-                if (ch) {
-                    await ch.send({ embeds: [emb], allowedMentions: { parse: [] } }).catch(() => {});
-                }
+                if (ch) await ch.send({ embeds: [emb], allowedMentions: { parse: [] } }).catch(() => {});
             }
         }
     }
-    
+});
+
 client.login(TOKEN);
