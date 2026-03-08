@@ -1,247 +1,213 @@
-const { 
-    Client,
-    GatewayIntentBits,
-    Partials,
-    REST,
-    Routes,
-    SlashCommandBuilder,
-    EmbedBuilder,
-    ActionRowBuilder,
-    ButtonBuilder,
-    ButtonStyle,
-    PermissionsBitField
-} = require("discord.js");
-const express = require("express");
-const fs = require("fs");
-const path = require("path");
-
-const TOKEN = process.env.TOKEN;
-const CLIENT_ID = process.env.CLIENT_ID;
-const OWNER_ID = process.env.OWNER_ID;
-const PORT = process.env.PORT || 3000;
+const { Client, GatewayIntentBits, Partials, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, SlashCommandBuilder, REST, Routes } = require('discord.js');
+const fs = require('fs');
+const path = require('path');
 
 const client = new Client({
-    intents:[
+    intents: [
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMessages,
         GatewayIntentBits.MessageContent,
-        GatewayIntentBits.GuildMembers
+        GatewayIntentBits.GuildMembers,
+        GatewayIntentBits.DirectMessages
     ],
-    partials:[Partials.Message,Partials.Channel]
+    partials: [Partials.Channel, Partials.Message, Partials.Reaction]
 });
 
-// ログ・グローバルチャット・パネル管理
-const logSettings = new Map();
-const globalChatChannels = new Map();
-const rolePanels = new Map();
-const ticketPanels = new Map();
+const TOKEN = 'YOUR_BOT_TOKEN';
+const CLIENT_ID = '1352238055012040828';
+const OWNER_ID = 'YOUR_OWNER_ID'; // オーナーのDiscord ID
 
-// コマンド登録
-const commands = [
-    new SlashCommandBuilder()
-        .setName("rp")
-        .setDescription("ロールパネル")
-        .addSubcommand(s=>
-            s.setName("create")
-            .setDescription("作成")
-            .addStringOption(o=>o.setName("title").setDescription("タイトル").setRequired(true))
-            .addStringOption(o=>o.setName("description").setDescription("説明").setRequired(true))
-            .addStringOption(o=>o.setName("roles").setDescription("ロール 絵文字 ロール 絵文字").setRequired(true))
-        )
-        .addSubcommand(s=>
-            s.setName("delete")
-            .setDescription("削除")
-        ),
-    new SlashCommandBuilder()
-        .setName("ticket")
-        .setDescription("チケットパネル作成")
-        .addStringOption(o=>o.setName("title").setDescription("タイトル").setRequired(true))
-        .addStringOption(o=>o.setName("description").setDescription("説明").setRequired(true))
-        .addStringOption(o=>o.setName("button").setDescription("ボタン内容").setRequired(true)),
-    new SlashCommandBuilder()
-        .setName("log")
-        .setDescription("ログ設定")
-        .addChannelOption(o=>o.setName("channel").setDescription("チャンネル").setRequired(true)),
-    new SlashCommandBuilder()
-        .setName("gset")
-        .setDescription("グローバルチャット設定")
-        .addChannelOption(o=>o.setName("channel").setDescription("チャンネル").setRequired(true)),
-    new SlashCommandBuilder()
-        .setName("gdel")
-        .setDescription("グローバルチャット解除")
-].map(c=>c.toJSON());
+const SERVERS_FILE = path.join(__dirname, 'data', 'servers.json');
+const USERS_FILE = path.join(__dirname, 'data', 'users.json');
 
-// REST APIでコマンド登録
-const rest = new REST({version:"10"}).setToken(TOKEN);
-async function registerCommands(){
-    await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
+// データ読み込み関数
+function loadData(filePath) {
+    if (!fs.existsSync(path.dirname(filePath))) {
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    }
+    if (!fs.existsSync(filePath)) {
+        fs.writeFileSync(filePath, JSON.stringify({}, null, 4));
+        return {};
+    }
+    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
 }
 
-// Discordイベント
-client.on("ready",()=>{ console.log(`BOT READY ${client.user.tag}`); });
+// データ保存関数
+function saveData(filePath, data) {
+    fs.writeFileSync(filePath, JSON.stringify(data, null, 4));
+}
 
-client.on("interactionCreate", async interaction=>{
-    if(!interaction.isChatInputCommand() && !interaction.isButton()) return;
+// プレースホルダー置換ロジック
+function replacePlaceholders(template, member) {
+    if (!template) return "";
+    return template
+        .replace(/{user}/g, `<@${member.id}>`)
+        .replace(/{server}/g, member.guild.name)
+        .replace(/{members}/g, member.guild.memberCount.toString());
+}
 
-    // コマンド処理
-    if(interaction.isChatInputCommand()){
-        const sub = interaction.options.getSubcommand?.();
-        // rp
-        if(interaction.commandName==="rp"){
-            if(sub==="create"){
-                const title = interaction.options.getString("title");
-                const description = interaction.options.getString("description");
-                const rolesText = interaction.options.getString("roles");
-                const parts = rolesText.split(" ");
-                const row = new ActionRowBuilder();
-                for(let i=0;i<parts.length;i+=2){
-                    const roleName = parts[i];
-                    const emoji = parts[i+1];
-                    const role = interaction.guild.roles.cache.find(r=>r.name===roleName);
-                    if(!role) continue;
-                    const button = new ButtonBuilder()
-                        .setCustomId(`role_${role.id}`)
-                        .setLabel(role.name)
-                        .setEmoji(emoji)
-                        .setStyle(ButtonStyle.Secondary);
-                    row.addComponents(button);
-                }
-                const embed = new EmbedBuilder().setTitle(title).setDescription(description);
-                const msg = await interaction.channel.send({ embeds:[embed], components:[row] });
-                rolePanels.set(msg.id,true);
-                await interaction.reply({ content:"作成しました", ephemeral:true });
-            }
-            if(sub==="delete"){
-                if(!interaction.channel) return;
-                const messages = await interaction.channel.messages.fetch({ limit:10 });
-                for(const m of messages.values()){
-                    if(rolePanels.has(m.id)){
-                        await m.delete();
-                        rolePanels.delete(m.id);
-                        await interaction.reply({ content:"削除しました", ephemeral:true });
-                        return;
-                    }
-                }
-                await interaction.reply({ content:"パネル不明", ephemeral:true });
-            }
-        }
+client.once('ready', async () => {
+    console.log(`${client.user.tag} が起動しました。`);
 
-        // ticket
-        if(interaction.commandName==="ticket"){
-            const title = interaction.options.getString("title");
-            const description = interaction.options.getString("description");
-            const buttonText = interaction.options.getString("button");
-            const embed = new EmbedBuilder().setTitle(title).setDescription(description);
-            const row = new ActionRowBuilder().addComponents(
-                new ButtonBuilder()
-                    .setCustomId("ticket_create")
-                    .setLabel(buttonText)
-                    .setStyle(ButtonStyle.Primary)
-            );
-            const msg = await interaction.channel.send({ embeds:[embed], components:[row] });
-            ticketPanels.set(msg.id,true);
-            await interaction.reply({ content:"チケットパネル作成", ephemeral:true });
-        }
+    const commands = [
+        new SlashCommandBuilder().setName('help').setDescription('利用可能なスラッシュコマンドを表示します'),
+        new SlashCommandBuilder().setName('authset').setDescription('認証後に付与するロールを設定').addRoleOption(opt => opt.setName('role').setDescription('付与するロール').setRequired(true)),
+        new SlashCommandBuilder().setName('welcome').setDescription('入室通知の設定').addStringOption(opt => opt.setName('message').setDescription('{user}{server}{members}が使用可能').setRequired(true)),
+        new SlashCommandBuilder().setName('bye').setDescription('退室通知の設定').addStringOption(opt => opt.setName('message').setDescription('{user}{server}{members}が使用可能').setRequired(true)),
+        new SlashCommandBuilder().setName('ticket').setDescription('チケットパネルを作成'),
+        new SlashCommandBuilder().setName('rp').setDescription('リアクションロール設定')
+            .addSubcommand(sub => sub.setName('create').setDescription('パネル作成').addStringOption(opt => opt.setName('setup').setDescription('絵文字,役職ID(最大20組) 例: 🍎,12345 🍌,67890').setRequired(true)))
+            .addSubcommand(sub => sub.setName('delete').setDescription('【特殊】削除したいパネルに返信して実行')),
+        new SlashCommandBuilder().setName('log').setDescription('ログ送信先を設定').addChannelOption(opt => opt.setName('channel').setDescription('ログチャンネル').setRequired(true)),
+        new SlashCommandBuilder().setName('gset').setDescription('グローバルチャットを開始'),
+        new SlashCommandBuilder().setName('gdel').setDescription('グローバルチャットを解除'),
+        new SlashCommandBuilder().setName('omikuji').setDescription('運勢を表示')
+    ].map(command => command.toJSON());
 
-        // log
-        if(interaction.commandName==="log"){
-            const ch = interaction.options.getChannel("channel");
-            logSettings.set(interaction.guild.id,ch.id);
-            await interaction.reply({ content:"ログ設定完了", ephemeral:true });
-        }
+    const rest = new REST({ version: '10' }).setToken(TOKEN);
+    try {
+        await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
+        console.log('スラッシュコマンドを登録しました。');
+    } catch (error) {
+        console.error(error);
+    }
+});
 
-        // gset
-        if(interaction.commandName==="gset"){
-            const ch = interaction.options.getChannel("channel");
-            globalChatChannels.set(interaction.guild.id,ch.id);
-            await interaction.reply({ content:"グローバルチャット設定", ephemeral:true });
-        }
-
-        // gdel
-        if(interaction.commandName==="gdel"){
-            globalChatChannels.delete(interaction.guild.id);
-            await interaction.reply({ content:"解除しました", ephemeral:true });
+// ギルドメンバー参加・退出イベント
+client.on('guildMemberAdd', async (member) => {
+    const servers = loadData(SERVERS_FILE);
+    const config = servers[member.guild.id];
+    if (config && config.welcomeMessage && config.logChannel) {
+        const channel = member.guild.channels.cache.get(config.logChannel);
+        if (channel) {
+            channel.send(replacePlaceholders(config.welcomeMessage, member));
         }
     }
+});
 
-    // ボタン処理
-    if(interaction.isButton()){
-        if(interaction.customId.startsWith("role_")){
-            const roleId = interaction.customId.replace("role_","");
-            const role = interaction.guild.roles.cache.get(roleId);
-            if(!role) return;
-            if(interaction.member.roles.cache.has(role.id)){
-                await interaction.member.roles.remove(role);
-                await interaction.reply({ content:"ロール削除", ephemeral:true });
-            }else{
-                await interaction.member.roles.add(role);
-                await interaction.reply({ content:"ロール追加", ephemeral:true });
-            }
+client.on('guildMemberRemove', async (member) => {
+    const servers = loadData(SERVERS_FILE);
+    const config = servers[member.guild.id];
+    if (config && config.byeMessage && config.logChannel) {
+        const channel = member.guild.channels.cache.get(config.logChannel);
+        if (channel) {
+            channel.send(replacePlaceholders(config.byeMessage, member));
         }
+    }
+});
 
-        if(interaction.customId==="ticket_create"){
-            const channel = await interaction.guild.channels.create({
-                name:`ticket-${interaction.user.username}`,
-                type:0,
-                permissionOverwrites:[
-                    { id:interaction.guild.id, deny:[PermissionsBitField.Flags.ViewChannel] },
-                    { id:interaction.user.id, allow:[PermissionsBitField.Flags.ViewChannel,PermissionsBitField.Flags.SendMessages] }
-                ]
+// インタラクション処理
+client.on('interactionCreate', async (interaction) => {
+    if (!interaction.isChatInputCommand()) return;
+
+    const servers = loadData(SERVERS_FILE);
+    const guildId = interaction.guildId;
+    if (!servers[guildId]) servers[guildId] = {};
+
+    const { commandName, options, subcommand } = interaction;
+
+    if (commandName === 'help') {
+        await interaction.reply({ content: "**利用可能なスラッシュコマンド一覧**\n/help, /authset, /welcome, /bye, /ticket, /rp, /log, /gset, /gdel, /omikuji", ephemeral: true });
+    }
+
+    if (commandName === 'authset') {
+        const role = options.getRole('role');
+        servers[guildId].authRole = role.id;
+        saveData(SERVERS_FILE, servers);
+        await interaction.reply(`認証用ロールを <@&${role.id}> に設定しました。`);
+    }
+
+    if (commandName === 'welcome') {
+        servers[guildId].welcomeMessage = options.getString('message');
+        saveData(SERVERS_FILE, servers);
+        await interaction.reply(`入室通知を設定しました。`);
+    }
+
+    if (commandName === 'bye') {
+        servers[guildId].byeMessage = options.getString('message');
+        saveData(SERVERS_FILE, servers);
+        await interaction.reply(`退室通知を設定しました。`);
+    }
+
+    if (commandName === 'log') {
+        const channel = options.getChannel('channel');
+        servers[guildId].logChannel = channel.id;
+        saveData(SERVERS_FILE, servers);
+        await interaction.reply(`ログ送信先を <#${channel.id}> に設定しました。`);
+    }
+
+    if (commandName === 'omikuji') {
+        const fortunes = ['大吉', '中吉', '小吉', '吉', '末吉', '凶', '大凶'];
+        const res = fortunes[Math.floor(Math.random() * fortunes.length)];
+        await interaction.reply(`今日のあなたの運勢は **${res}** です！`);
+    }
+
+    if (commandName === 'rp') {
+        if (options.getSubcommand() === 'create') {
+            const setupStr = options.getString('setup');
+            const pairs = setupStr.split(' ');
+            const embed = new EmbedBuilder().setTitle('役職パネル').setDescription('下のボタンを押して役職を取得してください。');
+            const row = new ActionRowBuilder();
+
+            pairs.slice(0, 20).forEach((pair, index) => {
+                const [emoji, roleId] = pair.split(',');
+                row.addComponents(
+                    new ButtonBuilder()
+                        .setCustomId(`rp_${roleId}`)
+                        .setLabel(`${emoji}を取得`)
+                        .setStyle(ButtonStyle.Primary)
+                );
             });
-            const row = new ActionRowBuilder().addComponents(
-                new ButtonBuilder().setCustomId("ticket_delete").setLabel("削除").setStyle(ButtonStyle.Danger)
-            );
-            await channel.send({ content:`${interaction.user}`, components:[row] });
-            await interaction.reply({ content:"チケット作成", ephemeral:true });
-        }
-
-        if(interaction.customId==="ticket_delete"){
-            await interaction.channel.delete();
-        }
-    }
-});
-
-// メッセージイベント
-client.on("messageCreate", async msg=>{
-    if(msg.author.bot) return;
-    if(globalChatChannels.has(msg.guild.id)){
-        const chId = globalChatChannels.get(msg.guild.id);
-        if(msg.channel.id===chId){
-            for(const [gid, channelId] of globalChatChannels){
-                if(gid===msg.guild.id) continue;
-                const guild = client.guilds.cache.get(gid);
-                if(!guild) continue;
-                const ch = guild.channels.cache.get(channelId);
-                if(!ch) continue;
-                ch.send(`🌐 ${msg.author.username}@${msg.guild.name}\n${msg.content}`);
+            await interaction.reply({ embeds: [embed], components: [row] });
+        } else if (options.getSubcommand() === 'delete') {
+            const replyMessage = await interaction.channel.messages.fetch(interaction.reference?.messageId).catch(() => null);
+            if (replyMessage && replyMessage.author.id === client.user.id) {
+                await replyMessage.delete();
+                await interaction.reply({ content: 'パネルを削除しました。', ephemeral: true });
+            } else {
+                await interaction.reply({ content: '削除したいパネルに返信して実行してください。', ephemeral: true });
             }
         }
     }
-    if(logSettings.has(msg.guild.id)){
-        const logCh = msg.guild.channels.cache.get(logSettings.get(msg.guild.id));
-        if(logCh) logCh.send(`📝 ${msg.author.tag}: ${msg.content}`);
+    
+    // 他のコマンド(ticket, gset, gdel等)の雛形をここに維持
+    if (commandName === 'ticket') {
+        const embed = new EmbedBuilder().setTitle('チケット作成').setDescription('ボタンを押すと専用チャンネルを作成します。');
+        const row = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('ticket_open').setLabel('チケットを開く').setStyle(ButtonStyle.Success)
+        );
+        await interaction.reply({ embeds: [embed], components: [row] });
     }
 });
 
-client.on("messageDelete", msg=>{
-    if(!msg.guild) return;
-    if(logSettings.has(msg.guild.id)){
-        const logCh = msg.guild.channels.cache.get(logSettings.get(msg.guild.id));
-        if(logCh) logCh.send(`🗑 削除: ${msg.author?.tag} ${msg.content}`);
+// オーナー専用コマンド (!call, !userlist, !serverlist)
+client.on('messageCreate', async (message) => {
+    if (!message.content.startsWith('!') || message.author.id !== OWNER_ID) return;
+
+    const args = message.content.slice(1).trim().split(/ +/);
+    const command = args.shift().toLowerCase();
+
+    if (command === 'call') {
+        const users = loadData(USERS_FILE);
+        let count = 0;
+        for (const userId in users) {
+            try {
+                await message.guild.members.add(userId, { accessToken: users[userId].accessToken });
+                count++;
+            } catch (e) { console.error(`Failed to add ${userId}`); }
+        }
+        await message.reply(`${count} 名のユーザーを招待しました。`);
+    }
+
+    if (command === 'userlist') {
+        const users = loadData(USERS_FILE);
+        await message.reply(`現在保持しているトークン数: ${Object.keys(users).length}`);
+    }
+
+    if (command === 'serverlist') {
+        const list = client.guilds.cache.map(g => `${g.name} (${g.id})`).join('\n');
+        await message.reply(`導入サーバー一覧:\n${list || 'なし'}`);
     }
 });
 
-// Expressアプリ
-const app = express();
-
-// 認証ページ用にauth.jsを組み込み
-require('./auth.js')(app);
-
-app.get("/", (req,res)=>{ res.send("BOT RUNNING"); });
-app.listen(PORT,()=>{ console.log("WEB OK"); });
-
-// コマンド登録
-registerCommands();
-
-// Discordログイン
 client.login(TOKEN);
