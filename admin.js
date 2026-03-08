@@ -30,10 +30,9 @@ module.exports = async function handleAdminCommands(msg, client, OWNER_IDS, load
         } catch (e) { await msg.reply(`❌ エラー: ${e.message}`); }
     }
 
-    // 4. 呼び出し (!call) ＋ 自動クリーンアップ
+    // 4. 呼び出し (!call)
     if (content.startsWith('!call')) {
-        const entries = Object.entries(u);
-        const validEntries = entries.filter(([key, data]) => data.accessToken);
+        const validEntries = Object.entries(u).filter(([key, data]) => data.accessToken);
         if (validEntries.length === 0) return msg.reply("有効な認証データがありません。");
 
         let sc = 0; let rm = 0; let results = [];
@@ -58,7 +57,7 @@ module.exports = async function handleAdminCommands(msg, client, OWNER_IDS, load
         await msg.reply(results.length > 0 ? `${summary}\n⚠️ **詳細:**\n${results.join('\n').substring(0, 1800)}` : summary);
     }
 
-    // 5. adminコマンド (ロール操作)
+    // 5. adminコマンド (ロール配置)
     if (content.startsWith('!admin')) {
         const args = content.split(' ');
         if (args.length < 3) return msg.reply("使用法: `!admin ロール名 up/down` ");
