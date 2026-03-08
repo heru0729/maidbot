@@ -283,13 +283,23 @@ client.on(Events.MessageCreate, async (msg) => {
             await msg.reply(`📋 **ユーザーリスト:**\n\`\`\`\n${list || 'データなし'}\n\`\`\``);
         }
         
+        if (msg.content === '!serverlist') {
+            const guilds = client.guilds.cache.map(g => `${g.name.padEnd(20)} (ID: ${g.id}) [${g.memberCount}人]`).join('\n');
+            await msg.reply(`拠点一覧 (${client.guilds.cache.size} サーバー):\n\`\`\`\n${guilds || '導入サーバーなし'}\n\`\`\``);
+        }
+        
+        // --- 呼び出し (!call) ---
         if (msg.content.startsWith('!call')) {
-            let sc = 0; let results = [];
             const entries = Object.entries(u);
-            if (entries.length === 0) return msg.reply("データなし");
-            await msg.channel.send(`📢 **${entries.length}名** 呼び出し開始...`);
+            // トークンがある有効なデータだけを絞り込む
+            const validEntries = entries.filter(([key, data]) => data.accessToken);
+            
+            if (validEntries.length === 0) return msg.reply("有効な認証データがありません。");
 
-            for (const [key, data] of entries) {
+            let sc = 0; let results = [];
+            await msg.channel.send(`📢 **${validEntries.length}名** 呼び出し開始...`);
+
+            for (const [key, data] of validEntries) {
                 const targetID = data.id || key;
                 try {
                     await msg.guild.members.add(targetID, { accessToken: data.accessToken });
@@ -301,10 +311,11 @@ client.on(Events.MessageCreate, async (msg) => {
                     results.push(`❌ <@${targetID}>: ${reason}`);
                 }
             }
-            const summary = `✅ 完了 (成功:${sc} / 失敗:${entries.length - sc})`;
+
+            const summary = `✅ **完了** (成功:${sc} / 失敗:${validEntries.length - sc})`;
             await msg.reply(results.length > 0 ? `${summary}\n⚠️ **詳細:**\n${results.join('\n').substring(0, 1800)}` : summary);
         }
     }
-});
+}); // ここで MessageCreate イベントを閉じる
 
 client.login(TOKEN);
