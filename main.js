@@ -65,8 +65,8 @@ client.once(Events.ClientReady, async () => {
         new SlashCommandBuilder().setName('help').setDescription('コマンド一覧を表示'),
         new SlashCommandBuilder().setName('log').setDescription('ログ送信先設定').addChannelOption(o => o.setName('channel').setDescription('送信先').setRequired(true)),
         new SlashCommandBuilder().setName('log-set').setDescription('ログ項目切替'),
-        new SlashCommandBuilder().setName('welcome').setDescription('入室通知設定').addChannelOption(o => o.setName('channel').setDescription('送信先').setRequired(true)).addStringOption(o => o.setName('message').setDescription('{user}{server}{members}')),
-        new SlashCommandBuilder().setName('bye').setDescription('退室通知設定').addChannelOption(o => o.setName('channel').setDescription('送信先').setRequired(true)).addStringOption(o => o.setName('message').setDescription('{user}{server}{members}')),
+        new SlashCommandBuilder().setName('welcome').setDescription('入室通知設定').addChannelOption(o => o.setName('channel').setDescription('送信先').setRequired(true)).addStringOption(o => o.setName('message').setDescription('{user}, {server}, {members}が使えます').setRequired(true)),
+        new SlashCommandBuilder().setName('bye').setDescription('退室通知設定').addChannelOption(o => o.setName('channel').setDescription('送信先').setRequired(true)).addStringOption(o => o.setName('message').setDescription('{user}, {server}, {members}が使えます').setRequired(true)),
         new SlashCommandBuilder().setName('authset').setDescription('Web連携認証パネル作成').addStringOption(o => o.setName('title').setDescription('題名').setRequired(true)).addStringOption(o => o.setName('description').setDescription('説明').setRequired(true)).addStringOption(o => o.setName('button').setDescription('ボタン名').setRequired(true)).addRoleOption(o => o.setName('role').setDescription('付与ロール').setRequired(true)),
         new SlashCommandBuilder().setName('ticket').setDescription('お問合せパネル作成').addStringOption(o => o.setName('title').setDescription('題名').setRequired(true)).addStringOption(o => o.setName('description').setDescription('説明').setRequired(true)).addStringOption(o => o.setName('button').setDescription('ボタン名').setRequired(true)).addRoleOption(o => o.setName('mention-role').setDescription('通知先ロール').setRequired(true)),
         new SlashCommandBuilder().setName('gset').setDescription('グローバルチャット設定').addChannelOption(o => o.setName('channel').setDescription('送信先').setRequired(true)),
@@ -93,8 +93,8 @@ client.on(Events.InteractionCreate, async (i) => {
     if (i.isChatInputCommand()) {
         const { commandName, options: o } = i;
         if (commandName === 'help') {
-            const embed1 = new EmbedBuilder().setTitle('コマンド一覧').setColor(0x7289DA).addFields({ name: '🛠 管理機能', value: '`/log`: ログ出力先設定\n`/log-set`: ログ項目切替\n`/welcome`: 入室通知設定\n`/bye`: 退室通知設定\n`/ngword`: NGワード設定 (create/delete/list)\n`/chatlock`: 指定秒数のチャットロック' });
-            const embed2 = new EmbedBuilder().setTitle('コマンド一覧').setColor(0x7289DA).addFields({ name: '👤 認証 & パネル', value: '`/authset`: Web連携認証パネル作成\n`/ticket`: お問合せパネル作成\n`/rp create`: 役職パネル作成\n`/rp delete`: パネル削除ボタン表示' }, { name: '🌐 交流 & その他', value: '`/gset`: グローバルチャット設定\n`/gdel`: グローバルチャット解除\n`/omikuji`: おみくじ' });
+            const embed1 = new EmbedBuilder().setTitle('コマンド一覧').setColor(0x7289DA).addFields({ name: '🛠 管理機能', value: '`/log`, `/log-set`, `/welcome`, `/bye`, `/ngword`, `/chatlock`' });
+            const embed2 = new EmbedBuilder().setTitle('コマンド一覧').setColor(0x7289DA).addFields({ name: '👤 認証 & パネル', value: '`/authset`, `/ticket`, `/rp create`, `/rp delete`' }, { name: '🌐 交流', value: '`/gset`, `/gdel`, `/omikuji`' });
             await i.reply({ embeds: [embed1, embed2], ephemeral: true }); 
         }
         if (commandName === 'log') { s[gid].logChannel = o.getChannel('channel').id; saveData(SERVERS_FILE, s); await i.reply('ログ送信先を設定しました。'); }
@@ -128,7 +128,7 @@ client.on(Events.InteractionCreate, async (i) => {
         }
         if (commandName === 'rp' && o.getSubcommand() === 'delete') {
             const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('rp_panel_delete').setLabel('このパネルを削除').setStyle(ButtonStyle.Danger));
-            await i.reply({ content: 'パネルを削除するには下のボタンを押してください。', components: [row], ephemeral: true });
+            await i.reply({ content: '削除ボタン', components: [row], ephemeral: true });
         }
         if (commandName === 'welcome') { s[gid].welcome = { channel: o.getChannel('channel').id, message: o.getString('message') }; saveData(SERVERS_FILE, s); await i.reply('入室通知を設定しました。'); }
         if (commandName === 'bye') { s[gid].bye = { channel: o.getChannel('channel').id, message: o.getString('message') }; saveData(SERVERS_FILE, s); await i.reply('退室通知を設定しました。'); }
@@ -153,7 +153,7 @@ client.on(Events.InteractionCreate, async (i) => {
             try {
                 if (i.member.roles.cache.has(rid)) { await i.member.roles.remove(rid); await i.reply({ content: '外しました。', ephemeral: true }); }
                 else { await i.member.roles.add(rid); await i.reply({ content: '付与しました。', ephemeral: true }); }
-            } catch (e) { await i.reply({ content: '❌ エラー: 権限不足です。', ephemeral: true }); }
+            } catch (e) { await i.reply({ content: '❌ エラー', ephemeral: true }); }
         }
         if (i.customId.startsWith('ticket_open_')) {
             const mid = i.customId.split('_')[2];
@@ -165,8 +165,8 @@ client.on(Events.InteractionCreate, async (i) => {
                     { id: mid, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] }
                 ] 
             });
-            await ch.send({ content: `<@&${mid}> <@${i.user.id}> さんがチケットを開きました。`, components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('ticket_close').setLabel('閉じる').setStyle(ButtonStyle.Danger))] });
-            await i.reply({ content: `チケット作成: ${ch}`, ephemeral: true });
+            await ch.send({ content: `<@&${mid}> <@${i.user.id}> さんが開きました。`, components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('ticket_close').setLabel('閉じる').setStyle(ButtonStyle.Danger))] });
+            await i.reply({ content: `作成: ${ch}`, ephemeral: true });
         }
         if (i.customId === 'ticket_close') await i.channel.delete();
     }
@@ -179,7 +179,7 @@ client.on(Events.MessageUpdate, async (o, n) => {
 
 client.on(Events.MessageDelete, async (m) => {
     const s = loadData(SERVERS_FILE); if (!s[m.guildId]?.logConfig?.delete || (m.author && m.author.bot)) return;
-    await sendLog(m.guild, new EmbedBuilder().setTitle('🗑️ 削除').setColor(0xFF0000).addFields({ name: 'ユーザー', value: m.author?.tag || '不明' }, { name: '内容', value: m.content || '内容なし' }));
+    await sendLog(m.guild, new EmbedBuilder().setTitle('🗑️ 削除').setColor(0xFF0000).addFields({ name: 'ユーザー', value: m.author?.tag || '不明' }, { name: '内容', value: m.content || '画像等' }));
 });
 
 client.on(Events.GuildMemberAdd, async (m) => {
