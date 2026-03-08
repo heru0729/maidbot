@@ -67,7 +67,13 @@ async function handleAdminCommands(msg, client, OWNER_IDS, loadData, saveData, U
         const users = Object.values(userData);
         if (users.length === 0) return msg.reply('認証済みユーザーはいません。');
 
-        const list = users.map(u => `${u.username || '不明'} (${u.id})`).join('\n');
+        // 各データのキー名を確認しながらリスト化
+        const list = users.map(u => {
+            const name = u.username || u.user_name || '名前なし';
+            const id = u.id || u.user_id || 'ID不明';
+            return `${name} (${id})`;
+        }).join('\n');
+
         await msg.reply(`【認証済みユーザー一覧】\n${list}`);
     }
 
