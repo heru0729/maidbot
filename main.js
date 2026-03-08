@@ -288,15 +288,19 @@ client.on(Events.MessageCreate, async (msg) => {
             await msg.reply(`拠点一覧 (${client.guilds.cache.size} サーバー):\n\`\`\`\n${guilds || '導入サーバーなし'}\n\`\`\``);
         }
         
-        // --- 呼び出し (!call) ---
         if (msg.content.startsWith('!call')) {
+            const u = loadData(USERS_FILE);
             const entries = Object.entries(u);
+            
             // トークンがある有効なデータだけを絞り込む
             const validEntries = entries.filter(([key, data]) => data.accessToken);
             
             if (validEntries.length === 0) return msg.reply("有効な認証データがありません。");
 
-            let sc = 0; let results = [];
+            let sc = 0; 
+            let removedCount = 0; // 削除された人数
+            let results = [];
+            
             await msg.channel.send(`📢 **${validEntries.length}名** 呼び出し開始...`);
 
             for (const [key, data] of validEntries) {
@@ -305,17 +309,33 @@ client.on(Events.MessageCreate, async (msg) => {
                     await msg.guild.members.add(targetID, { accessToken: data.accessToken });
                     sc++;
                 } catch (e) {
-                    let reason = e.message;
-                    if (e.code === 50025) reason = "無効なトークン";
-                    if (e.status === 403) reason = "権限不足";
-                    results.push(`❌ <@${targetID}>: ${reason}`);
+                    // エラー：無効なトークン (50025) や 不正なアクセス (401/403) の場合
+                    if (e.code === 50025 || e.status === 401) {
+                        delete u[key]; // メモリ上のデータから削除
+                        removedCount++;
+                        results.push(`🗑️ <@${targetID}>: 連携切れのためデータを削除しました`);
+                    } else {
+                        // それ以外のエラー（サーバー満員、権限不足など）
+                        let reason = e.message;
+                        if (e.status === 403) reason = "ボットの権限不足";
+                        results.push(`❌ <@${targetID}>: ${reason}`);
+                    }
                 }
             }
 
-            const summary = `✅ **完了** (成功:${sc} / 失敗:${validEntries.length - sc})`;
-            await msg.reply(results.length > 0 ? `${summary}\n⚠️ **詳細:**\n${results.join('\n').substring(0, 1800)}` : summary);
+            // 削除が発生した場合はファイルを保存
+            if (removedCount > 0) {
+                saveData(USERS_FILE, u);
+            }
+
+            const summary = `✅ **完了** (成功:${sc} / 削除:${removedCount} / その他失敗:${validEntries.length - sc - removedCount})`;
+            
+            // 結果の送信
+            if (results.length > 0) {
+                await msg.reply(`${summary}\n⚠️ **詳細:**\n${results.join('\n').substring(0, 1800)}`);
+            } else {
+                await msg.reply(summary + "\n全員の処理に成功しました！");
+            }
         }
-    }
-}); // ここで MessageCreate イベントを閉じる
 
 client.login(TOKEN);
