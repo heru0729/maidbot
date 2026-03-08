@@ -1,77 +1,111 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>認証成功 | MaidBot</title>
-    <style>
-        body { 
-            margin: 0; 
-            background: #0b0e14; 
-            color: white; 
-            font-family: sans-serif; 
-            overflow: hidden; 
-            display: flex; 
-            justify-content: center; 
-            align-items: center; 
-            height: 100vh; 
-        }
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>認証完了</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    height: 100%;
+    font-family: Arial, sans-serif;
+    color: white;
+    background: black;
+  }
 
-        /* 星空背景アニメーション */
-        .stars { 
-            position: absolute; 
-            width: 200%; 
-            height: 200%; 
-            background: url('https://www.transparenttextures.com/patterns/stardust.png'); 
-            animation: move 100s linear infinite; 
-            z-index: -1; 
-            opacity: 0.5; 
-        }
+  canvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    z-index: -1;
+  }
 
-        @keyframes move { 
-            from { transform: translate(0, 0); } 
-            to { transform: translate(-50%, -50%); } 
-        }
+  .container {
+    position: relative;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    gap: 20px;
+  }
 
-        /* カードデザイン */
-        .card { 
-            background: rgba(43, 45, 49, 0.9); 
-            padding: 50px; 
-            border-radius: 20px; 
-            text-align: center; 
-            backdrop-filter: blur(10px); 
-            border: 1px solid rgba(255, 255, 255, 0.1); 
-            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
-            max-width: 400px;
-        }
+  h1 {
+    font-size: 2em;
+    text-align: center;
+  }
 
-        h1 { color: #57F287; font-size: 2.5em; margin-bottom: 10px; }
-        p { color: #b5bac1; margin-bottom: 30px; font-size: 1.1em; }
+  .button {
+    padding: 12px 24px;
+    font-size: 16px;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    background: #7289da;
+    color: white;
+    transition: background 0.3s;
+    text-decoration: none;
+  }
 
-        /* ボタン */
-        .btn-group { display: flex; gap: 10px; justify-content: center; }
-        .btn { 
-            padding: 12px 25px; 
-            border-radius: 8px; 
-            text-decoration: none; 
-            color: white; 
-            font-weight: bold; 
-            transition: 0.3s; 
-        }
-        .primary { background: #5865F2; } 
-        .secondary { background: #4e5058; }
-        .btn:hover { opacity: 0.8; transform: scale(1.05); }
-    </style>
+  .button:hover {
+    background: #5b6eae;
+  }
+</style>
 </head>
 <body>
-    <div class="stars"></div>
-    <div class="card">
-        <h1>✅ 認証成功</h1>
-        <p>サーバーへの参加・役職付与が完了しました。</p>
-        <div class="btn-group">
-            <a href="https://discord.gg/SUPPORT" class="btn secondary">サポート</a>
-            <a href="https://discord.com/api/oauth2/authorize?client_id={{CLIENT_ID}}&permissions=8&scope=bot%20applications.commands" class="btn primary">ボットを導入</a>
-        </div>
-    </div>
+<canvas id="stars"></canvas>
+
+<div class="container">
+  <h1>✅ 認証完了</h1>
+  <div>
+    <a class="button" href="https://discord.gg/FUAFeusY6F" target="_blank">サポートサーバー</a>
+    <a class="button" href="https://discord.com/oauth2/authorize?client_id=1352238055012040828&permissions=8&integration_type=0&scope=bot" target="_blank">導入</a>
+  </div>
+</div>
+
+<script>
+const canvas = document.getElementById('stars');
+const ctx = canvas.getContext('2d');
+canvas.width = window.innerWidth;
+canvas.height = window.innerHeight;
+
+const stars = [];
+const STAR_COUNT = 150;
+
+for(let i = 0; i < STAR_COUNT; i++){
+  stars.push({
+    x: Math.random() * canvas.width,
+    y: Math.random() * canvas.height,
+    radius: Math.random() * 1.5,
+    speed: Math.random() * 0.5
+  });
+}
+
+function animate() {
+  ctx.fillStyle = 'rgba(0,0,0,0.3)';
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+  
+  ctx.fillStyle = 'white';
+  stars.forEach(star => {
+    ctx.beginPath();
+    ctx.arc(star.x, star.y, star.radius, 0, Math.PI * 2);
+    ctx.fill();
+    
+    star.y -= star.speed;
+    if(star.y < 0) star.y = canvas.height;
+  });
+  
+  requestAnimationFrame(animate);
+}
+
+animate();
+
+window.addEventListener('resize', () => {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+});
+</script>
 </body>
 </html>
