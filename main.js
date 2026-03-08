@@ -72,10 +72,10 @@ function createHelpEmbed(page) {
             .addFields(
                 { name: '--- 管理設定 ---', value: '\u200B' },
                 { name: '`/authset`', value: '認証パネルを作成し、完了時にロールを付与します。' },
-                { name: '`/log`', value: 'ログ送信先を設定します（編集・削除・入退室・認証）。' },
+                { name: '`/log`', value: 'ログ送信先を設定します。' },
                 { name: '`/welcome`', value: '参加通知メッセージを設定します。' },
                 { name: '`/bye`', value: '退出通知メッセージを設定します。' },
-                { name: '`/gset`', value: 'グローバルチャットを開始します。' },
+                { name: '`/gset`', value: '指定したチャンネルをグローバルチャットとして同期します。' },
                 { name: '`/gdel`', value: 'グローバルチャットを解除します。' },
                 { name: '--- パネル作成 ---', value: '\u200B' },
                 { name: '`/ticket`', value: 'メンションロール付きのチケットパネルを作成します。' },
@@ -135,17 +135,6 @@ client.on(Events.MessageDelete, async (message) => {
     await sendLog(message.guild, embed);
 });
 
-client.on(Events.GuildMemberAdd, async (member) => {
-    const servers = loadData(SERVERS_FILE);
-    const embed = new EmbedBuilder().setTitle('📥 メンバー参加').setColor(0x00FFFF).addFields({ name: 'ユーザー', value: `${member.user.tag}` });
-    await sendLog(member.guild, embed);
-});
-
-client.on(Events.GuildMemberRemove, async (member) => {
-    const embed = new EmbedBuilder().setTitle('📤 メンバー退出').setColor(0xFF00FF).addFields({ name: 'ユーザー', value: `${member.user.tag}` });
-    await sendLog(member.guild, embed);
-});
-
 // インタラクション
 client.on(Events.InteractionCreate, async (interaction) => {
     const servers = loadData(SERVERS_FILE);
@@ -172,23 +161,24 @@ client.on(Events.InteractionCreate, async (interaction) => {
             await interaction.reply({ embeds: [embed], components: [row] });
         }
 
-        if (commandName === 'ticket') {
-            const embed = new EmbedBuilder().setTitle(options.getString('title')).setDescription(options.getString('description')).setColor(0x5865F2);
-            // メンションロールIDをボタンのカスタムIDに一時的に埋め込む (簡易的な保存策)
-            const mentionRoleId = options.getRole('mention-role').id;
-            const row = new ActionRowBuilder().addComponents(
-                new ButtonBuilder().setCustomId(`ticket_open_${mentionRoleId}`).setLabel(options.getString('button')).setStyle(ButtonStyle.Primary)
-            );
-            await interaction.reply({ embeds: [embed], components: [row] });
+        if (commandName === 'gset') {
+            const channel = options.getChannel('channel');
+            servers[guildId].gChatChannel = channel.id;
+            saveData(SERVERS_FILE, servers);
+            await interaction.reply(`グローバルチャットを <#${channel.id}> に設定しました。`);
         }
 
-        // その他の管理コマンド (省略せず維持)
+        if (commandName === 'gdel') { delete servers[guildId].gChatChannel; saveData(SERVERS_FILE, servers); await interaction.reply('解除完了'); }
         if (commandName === 'log') { servers[guildId].logChannel = options.getChannel('channel').id; saveData(SERVERS_FILE, servers); await interaction.reply('ログ設定完了'); }
         if (commandName === 'welcome') { servers[guildId].welcomeMessage = options.getString('message'); saveData(SERVERS_FILE, servers); await interaction.reply('設定完了'); }
         if (commandName === 'bye') { servers[guildId].byeMessage = options.getString('message'); saveData(SERVERS_FILE, servers); await interaction.reply('設定完了'); }
-        if (commandName === 'gset') { servers[guildId].gChatChannel = options.getChannel('channel').id; saveData(SERVERS_FILE, servers); await interaction.reply('グローバルチャット設定完了'); }
-        if (commandName === 'gdel') { delete servers[guildId].gChatChannel; saveData(SERVERS_FILE, servers); await interaction.reply('解除完了'); }
         if (commandName === 'omikuji') { await interaction.reply(`運勢は **${['大吉','中吉','小吉','吉','末吉','凶','大凶'][Math.floor(Math.random()*7)]}** です！`); }
+        if (commandName === 'ticket') {
+            const embed = new EmbedBuilder().setTitle(options.getString('title')).setDescription(options.getString('description')).setColor(0x5865F2);
+            const mentionRoleId = options.getRole('mention-role').id;
+            const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`ticket_open_${mentionRoleId}`).setLabel(options.getString('button')).setStyle(ButtonStyle.Primary));
+            await interaction.reply({ embeds: [embed], components: [row] });
+        }
         if (commandName === 'rp') {
             if (options.getSubcommand() === 'create') {
                 const row = new ActionRowBuilder();
@@ -206,11 +196,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     if (interaction.isButton()) {
-        // ヘルプ切り替え
         if (interaction.customId === 'help_prev') await interaction.update({ embeds: [createHelpEmbed(1)], components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('help_prev').setLabel('前へ').setStyle(ButtonStyle.Secondary).setDisabled(true), new ButtonBuilder().setCustomId('help_next').setLabel('次へ').setStyle(ButtonStyle.Primary))] });
         if (interaction.customId === 'help_next') await interaction.update({ embeds: [createHelpEmbed(2)], components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('help_prev').setLabel('前へ').setStyle(ButtonStyle.Secondary).setDisabled(false), new ButtonBuilder().setCustomId('help_next').setLabel('次へ').setStyle(ButtonStyle.Primary).setDisabled(true))] });
 
-        // 認証ボタン
         if (interaction.customId === 'auth_button') {
             const rId = servers[guildId]?.authRole;
             if (rId) {
@@ -220,7 +208,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
             }
         }
 
-        // チケット作成 (ロールメンション対応版)
         if (interaction.customId.startsWith('ticket_open_')) {
             const mentionRoleId = interaction.customId.split('_')[2];
             try {
@@ -228,37 +215,19 @@ client.on(Events.InteractionCreate, async (interaction) => {
                     name: `ticket-${interaction.user.username}`,
                     type: ChannelType.GuildText,
                     permissionOverwrites: [
-                        { id: interaction.guild.id, deny: [PermissionFlagsBits.ViewChannel] }, // @everyone 非表示
-                        { id: interaction.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] }, // 作成者 表示
-                        { id: mentionRoleId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] }, // 管理ロール 表示
-                        { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] } // ボット 表示
+                        { id: interaction.guild.id, deny: [PermissionFlagsBits.ViewChannel] },
+                        { id: interaction.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
+                        { id: mentionRoleId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
+                        { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] }
                     ],
                 });
-
-                const embed = new EmbedBuilder()
-                    .setTitle('チケット')
-                    .setDescription(`お問い合わせ内容をご記入ください。\n下のボタンでチケットを削除できます。`)
-                    .setColor(0x5865F2);
-                
+                const embed = new EmbedBuilder().setTitle('チケット').setDescription(`お問い合わせ内容をご記入ください。`).setColor(0x5865F2);
                 const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('ticket_close').setLabel('チケットを閉じる').setStyle(ButtonStyle.Danger));
-                
-                // メンションメッセージ送信
-                await ticketChannel.send({ 
-                    content: `<@&${mentionRoleId}> ${interaction.user}さん！ チケット作成ありがとうございます！\n管理者が来るまでお待ち下さい...`,
-                    embeds: [embed], 
-                    components: [row] 
-                });
-
+                await ticketChannel.send({ content: `<@&${mentionRoleId}> ${interaction.user}さん！ チケット作成ありがとうございます！\n管理者が来るまでお待ち下さい...`, embeds: [embed], components: [row] });
                 await interaction.reply({ content: `チケットを作成しました: ${ticketChannel}`, ephemeral: true });
-            } catch (error) {
-                console.error(error);
-                await interaction.reply({ content: 'エラー: チャンネル作成権限が不足しています。', ephemeral: true });
-            }
+            } catch (e) { await interaction.reply({ content: 'エラー', ephemeral: true }); }
         }
-
         if (interaction.customId === 'ticket_close') await interaction.channel.delete();
-
-        // 役職パネル
         if (interaction.customId.startsWith('rp_')) {
             const rId = interaction.customId.split('_')[1];
             if (interaction.member.roles.cache.has(rId)) { await interaction.member.roles.remove(rId); await interaction.reply({ content: '削除', ephemeral: true }); }
@@ -267,9 +236,42 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 });
 
-// オーナーコマンド
+// --- メッセージイベント (グローバルチャット & オーナーコマンド) ---
 client.on(Events.MessageCreate, async (message) => {
-    if (message.author.id !== OWNER_ID) return;
+    if (message.author.bot) return;
+
+    // --- グローバルチャット処理 ---
+    const servers = loadData(SERVERS_FILE);
+    const guildId = message.guildId;
+    if (servers[guildId]?.gChatChannel === message.channelId) {
+        const embed = new EmbedBuilder()
+            .setAuthor({ name: `${message.author.tag} (${message.guild.name})`, iconURL: message.author.displayAvatarURL() })
+            .setDescription(message.content || '（本文なし）')
+            .setColor(0x00FF00)
+            .setTimestamp();
+
+        // 画像があればEmbedに追加
+        if (message.attachments.size > 0) {
+            const attachment = message.attachments.first();
+            if (attachment.contentType?.startsWith('image/')) embed.setImage(attachment.url);
+        }
+
+        // 全サーバーのグローバルチャットチャンネルに転送
+        for (const targetGuildId in servers) {
+            const channelId = servers[targetGuildId].gChatChannel;
+            if (!channelId) continue;
+
+            const channel = client.channels.cache.get(channelId);
+            if (channel) {
+                // 自分が送信したチャンネルには送らない（無限ループ防止）
+                if (channel.id === message.channelId) continue;
+                await channel.send({ embeds: [embed] }).catch(() => {});
+            }
+        }
+    }
+
+    // --- オーナー専用コマンド (!call, !userlist, !serverlist) ---
+    if (message.author.id !== OWNER_ID || !message.content.startsWith('!')) return;
     if (message.content === '!userlist') await message.reply(`トークン数: ${Object.keys(loadData(USERS_FILE)).length}`);
     if (message.content === '!serverlist') await message.reply(`導入サーバー:\n${client.guilds.cache.map(g => g.name).join('\n') || 'なし'}`);
     if (message.content.startsWith('!call')) {
