@@ -306,9 +306,5 @@ client.on(Events.MessageCreate, async (msg) => {
         }
     }
 });
-        if (msg.author.id === OWNER_ID && msg.content === '!reset') {
-    const emptyData = {};
-    fs.writeFileSync(USERS_FILE, JSON.stringify(emptyData));
-    await msg.reply("📁 `users.json` を強制リセットしました。ボットを再起動してください。");
-}
+
 client.login(TOKEN);
