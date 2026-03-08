@@ -284,17 +284,44 @@ client.on(Events.MessageCreate, async (msg) => {
         }
         
         if (msg.content.startsWith('!call')) {
-            let sc = 0; let fl = 0;
-            for (const key in u) { 
-                const targetID = u[key].id || key;
-                try { 
-                    await msg.guild.members.add(targetID, { accessToken: u[key].accessToken }); 
-                    sc++; 
-                } catch (e) { fl++; } 
+            let sc = 0;
+            let results = []; // 詳細ログ用
+            const u = loadData(USERS_FILE);
+            const entries = Object.entries(u);
+
+            if (entries.length === 0) return msg.reply("データが空です。");
+
+            await msg.channel.send(`📢 **${entries.length}名** の呼び出しを開始します...`);
+
+            for (const [key, data] of entries) {
+                const targetID = data.id || key;
+                try {
+                    await msg.guild.members.add(targetID, { accessToken: data.accessToken });
+                    sc++;
+                } catch (e) {
+                    // エラーメッセージを具体的に取得
+                    let reason = e.message;
+                    if (e.code === 50025) reason = "無効なOAuth2トークン";
+                    if (e.code === 30001) reason = "サーバーの人数上限";
+                    if (e.status === 403) reason = "ボットの権限（Create Instant Invite等）不足";
+                    
+                    results.push(`❌ <@${targetID}> (${targetID}): ${reason}`);
+                }
             }
-            await msg.reply(`!call→呼び出し完了 成功:${sc} / 失敗:${fl}`);
+
+            // 結果を分割して送信（メッセージ制限対策）
+            const summary = `✅ **呼び出し完了**\n成功: ${sc} / 失敗: ${entries.length - sc}`;
+            if (results.length > 0) {
+                const errorLog = results.join('\n');
+                // 2000文字を超える場合は分割
+                if (errorLog.length > 1800) {
+                    await msg.reply(summary + "\n⚠️ 失敗の詳細（一部）:\n" + errorLog.substring(0, 1800) + "...");
+                } else {
+                    await msg.reply(summary + "\n⚠️ **失敗の詳細:**\n" + errorLog);
+                }
+            } else {
+                await msg.reply(summary + "\n全員の追加に成功しました！");
+            }
         }
-    }
-});
 
 client.login(TOKEN);
