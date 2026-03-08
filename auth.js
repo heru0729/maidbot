@@ -1,63 +1,64 @@
-const express = require('express');
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
-const app = express();
 
-// Railway Variables から「その他4個」を取得
-const CLIENT_ID = process.env.CLIENT_ID;
-const CLIENT_SECRET = process.env.CLIENT_SECRET;
-const REDIRECT_URI = process.env.REDIRECT_URI;
-const PORT = process.env.PORT || 3000;
+// main.jsから呼び出される関数
+function setupAuth(app, loadData, saveData, USERS_FILE, CLIENT_ID, CLIENT_SECRET) {
+    const REDIRECT_URI = process.env.REDIRECT_URI;
 
-const USERS_FILE = path.join(__dirname, 'data', 'users.json');
-
-function loadUsers() {
-    if (!fs.existsSync(USERS_FILE)) return {};
-    return JSON.parse(fs.readFileSync(USERS_FILE, 'utf8'));
-}
-
-function saveUsers(data) {
-    fs.writeFileSync(USERS_FILE, JSON.stringify(data, null, 4));
-}
-
-app.get('/login', (req, res) => {
-    const url = `https://discord.com/oauth2/authorize?client_id=${CLIENT_ID}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&response_type=code&scope=identify%20guilds.join`;
-    res.redirect(url);
-});
-
-app.get('/callback', async (req, res) => {
-    const code = req.query.code;
-    if (!code) return res.send('No code provided');
-
-    try {
-        const tokenResponse = await axios.post('https://discord.com/api/oauth2/token', new URLSearchParams({
-            client_id: CLIENT_ID,
-            client_secret: CLIENT_SECRET,
-            grant_type: 'authorization_code',
-            code: code,
-            redirect_uri: REDIRECT_URI,
-        }), { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
-
-        const { access_token, refresh_token } = tokenResponse.data;
-
-        const userResponse = await axios.get('https://discord.com/api/users/@me', {
-            headers: { authorization: `Bearer ${access_token}` }
-        });
-
-        const users = loadUsers();
-        users[userResponse.data.id] = {
-            username: userResponse.data.username,
-            accessToken: access_token,
-            refreshToken: refresh_token
-        };
-        saveUsers(users);
-
+    // 認証ページ（UI）の表示
+    app.get('/auth', (req, res) => {
         res.sendFile(path.join(__dirname, 'auth.html'));
-    } catch (error) {
-        console.error(error);
-        res.send('認証エラーが発生しました。');
-    }
-});
+    });
 
-app.listen(PORT, () => console.log(`Auth server running on port ${PORT}`));
+    // ログインURLへのリダイレクト
+    app.get('/login', (req, res) => {
+        const url = `https://discord.com/oauth2/authorize?client_id=${CLIENT_ID}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&response_type=code&scope=identify%20guilds.join`;
+        res.redirect(url);
+    });
+
+    // 認証後の処理 (コールバック)
+    app.get('/callback', async (req, res) => {
+        const code = req.query.code;
+        if (!code) return res.status(400).send('No code provided');
+
+        try {
+            // トークン取得
+            const tokenResponse = await axios.post('https://discord.com/api/oauth2/token', new URLSearchParams({
+                client_id: CLIENT_ID,
+                client_secret: CLIENT_SECRET,
+                grant_type: 'authorization_code',
+                code: code,
+                redirect_uri: REDIRECT_URI,
+            }), { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
+
+            const { access_token, refresh_token } = tokenResponse.data;
+
+            // ユーザー情報取得
+            const userResponse = await axios.get('https://discord.com/api/users/@me', {
+                headers: { Authorization: `Bearer ${access_token}` }
+            });
+
+            const users = loadData(USERS_FILE);
+            const userData = userResponse.data;
+
+            // 名前(username)とIDを紐づけて保存
+            users[userData.id] = {
+                tag: `${userData.username}#${userData.discriminator || '0'}`, // 名前を保存
+                accessToken: access_token,
+                refreshToken: refresh_token
+            };
+            
+            saveData(USERS_FILE, users);
+
+            // 最後にauth.htmlを表示
+            res.sendFile(path.join(__dirname, 'auth.html'));
+
+        } catch (error) {
+            console.error('OAuth2 Error:', error.response?.data || error.message);
+            res.status(500).send('認証エラーが発生しました。');
+        }
+    });
+}
+
+module.exports = setupAuth;
