@@ -4,9 +4,12 @@ const fs = require('fs');
 const path = require('path');
 const app = express();
 
-const CLIENT_ID = '1352238055012040828';
-const CLIENT_SECRET = 'YOUR_CLIENT_SECRET';
-const REDIRECT_URI = 'http://localhost:3000/callback';
+// Railway Variables から「その他4個」を取得
+const CLIENT_ID = process.env.CLIENT_ID;
+const CLIENT_SECRET = process.env.CLIENT_SECRET;
+const REDIRECT_URI = process.env.REDIRECT_URI;
+const PORT = process.env.PORT || 3000;
+
 const USERS_FILE = path.join(__dirname, 'data', 'users.json');
 
 function loadUsers() {
@@ -57,4 +60,4 @@ app.get('/callback', async (req, res) => {
     }
 });
 
-app.listen(3000, () => console.log('Auth server running on port 3000'));
+app.listen(PORT, () => console.log(`Auth server running on port ${PORT}`));
