@@ -13,9 +13,10 @@ const client = new Client({
     partials: [Partials.Channel, Partials.Message, Partials.Reaction]
 });
 
-const TOKEN = 'YOUR_BOT_TOKEN';
-const CLIENT_ID = '1352238055012040828';
-const OWNER_ID = 'YOUR_OWNER_ID'; // オーナーのDiscord ID
+// Railway Variables から取得
+const TOKEN = process.env.TOKEN; 
+const OWNER_ID = process.env.OWNER_ID;
+const CLIENT_ID = process.env.CLIENT_ID;
 
 const SERVERS_FILE = path.join(__dirname, 'data', 'servers.json');
 const USERS_FILE = path.join(__dirname, 'data', 'users.json');
@@ -104,7 +105,7 @@ client.on('interactionCreate', async (interaction) => {
     const guildId = interaction.guildId;
     if (!servers[guildId]) servers[guildId] = {};
 
-    const { commandName, options, subcommand } = interaction;
+    const { commandName, options } = interaction;
 
     if (commandName === 'help') {
         await interaction.reply({ content: "**利用可能なスラッシュコマンド一覧**\n/help, /authset, /welcome, /bye, /ticket, /rp, /log, /gset, /gdel, /omikuji", ephemeral: true });
@@ -149,14 +150,16 @@ client.on('interactionCreate', async (interaction) => {
             const embed = new EmbedBuilder().setTitle('役職パネル').setDescription('下のボタンを押して役職を取得してください。');
             const row = new ActionRowBuilder();
 
-            pairs.slice(0, 20).forEach((pair, index) => {
+            pairs.slice(0, 20).forEach((pair) => {
                 const [emoji, roleId] = pair.split(',');
-                row.addComponents(
-                    new ButtonBuilder()
-                        .setCustomId(`rp_${roleId}`)
-                        .setLabel(`${emoji}を取得`)
-                        .setStyle(ButtonStyle.Primary)
-                );
+                if(emoji && roleId) {
+                    row.addComponents(
+                        new ButtonBuilder()
+                            .setCustomId(`rp_${roleId}`)
+                            .setLabel(`${emoji}を取得`)
+                            .setStyle(ButtonStyle.Primary)
+                    );
+                }
             });
             await interaction.reply({ embeds: [embed], components: [row] });
         } else if (options.getSubcommand() === 'delete') {
@@ -170,7 +173,6 @@ client.on('interactionCreate', async (interaction) => {
         }
     }
     
-    // 他のコマンド(ticket, gset, gdel等)の雛形をここに維持
     if (commandName === 'ticket') {
         const embed = new EmbedBuilder().setTitle('チケット作成').setDescription('ボタンを押すと専用チャンネルを作成します。');
         const row = new ActionRowBuilder().addComponents(
