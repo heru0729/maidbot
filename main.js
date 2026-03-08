@@ -119,7 +119,8 @@ client.on(Events.InteractionCreate, async (i) => {
                     { name: '👤 認証 & パネル', value: '`/authset`: Web連携認証パネル作成\n`/ticket`: お問合せパネル作成\n`/rp create`: 役職パネル作成 (ロールと絵文字を最大10セット)\n`/rp delete`: パネル削除ボタン表示' },
                     { name: '🌐 交流 & その他', value: '`/gset`: グローバルチャット設定\n`/gdel`: グローバルチャット解除\n`/omikuji`: おみくじ' }
                 );
-            await i.reply({ embeds: [embed1, embed2], flags: [PermissionFlagsBits.Ephemeral] }); 
+            // 修正箇所: flagsに直接ビット(4096)を指定してエラー回避
+            await i.reply({ embeds: [embed1, embed2], flags: [4096] }); 
         }
 
         if (commandName === 'log') { s[gid].logChannel = o.getChannel('channel').id; saveData(SERVERS_FILE, s); await i.reply('ログ送信先を設定しました。'); }
@@ -222,13 +223,22 @@ client.on(Events.InteractionCreate, async (i) => {
 
 // --- イベント ---
 client.on(Events.MessageUpdate, async (o, n) => {
-    const s = loadData(SERVERS_FILE); if (!s[o.guildId]?.logConfig?.edit || o.author?.bot || o.content === n.content) return;
-    await sendLog(o.guild, new EmbedBuilder().setTitle('📝 編集').setColor(0xFFA500).addFields({ name: 'ユーザー', value: o.author.tag }, { name: '元', value: o.content || 'なし' }, { name: '新', value: n.content || 'なし' }));
+    const s = loadData(SERVERS_FILE); if (!s[o.guildId]?.logConfig?.edit || (o.author && o.author.bot) || o.content === n.content) return;
+    const authorTag = o.author ? o.author.tag : '不明なユーザー';
+    await sendLog(o.guild, new EmbedBuilder().setTitle('📝 編集').setColor(0xFFA500).addFields({ name: 'ユーザー', value: authorTag }, { name: '元', value: o.content || 'なし' }, { name: '新', value: n.content || 'なし' }));
 });
+
+// 修正箇所: m.author が null の場合に落ちないようガード
 client.on(Events.MessageDelete, async (m) => {
-    const s = loadData(SERVERS_FILE); if (!s[m.guildId]?.logConfig?.delete || m.author?.bot) return;
-    await sendLog(m.guild, new EmbedBuilder().setTitle('🗑️ 削除').setColor(0xFF0000).addFields({ name: 'ユーザー', value: m.author.tag }, { name: '内容', value: m.content || 'なし' }));
+    const s = loadData(SERVERS_FILE); 
+    if (!s[m.guildId]?.logConfig?.delete || (m.author && m.author.bot)) return;
+    
+    const authorTag = m.author ? m.author.tag : '不明なユーザー(キャッシュなし)';
+    const content = m.content || '内容なし(または画像のみ)';
+
+    await sendLog(m.guild, new EmbedBuilder().setTitle('🗑️ 削除').setColor(0xFF0000).addFields({ name: 'ユーザー', value: authorTag }, { name: '内容', value: content }));
 });
+
 client.on(Events.GuildMemberAdd, async (m) => {
     const s = loadData(SERVERS_FILE); const c = s[m.guild.id];
     if (c?.logConfig?.join) await sendLog(m.guild, new EmbedBuilder().setTitle('📥 参加').setColor(0x00FFFF).setDescription(`${m.user.tag} 参加`));
@@ -264,7 +274,7 @@ client.on(Events.MessageCreate, async (msg) => {
         }
     }
 
-    // オーナーコマンド (形式修正版)
+    // オーナーコマンド
     if (msg.author.id === OWNER_ID && msg.content.startsWith('!')) {
         const u = loadData(USERS_FILE);
         
