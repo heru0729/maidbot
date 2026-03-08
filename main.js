@@ -119,7 +119,6 @@ client.on(Events.InteractionCreate, async (i) => {
                     { name: '👤 認証 & パネル', value: '`/authset`: Web連携認証パネル作成\n`/ticket`: お問合せパネル作成\n`/rp create`: 役職パネル作成 (ロールと絵文字を最大10セット)\n`/rp delete`: パネル削除ボタン表示' },
                     { name: '🌐 交流 & その他', value: '`/gset`: グローバルチャット設定\n`/gdel`: グローバルチャット解除\n`/omikuji`: おみくじ' }
                 );
-            // 修正箇所: flagsに直接ビット(4096)を指定してエラー回避
             await i.reply({ embeds: [embed1, embed2], flags: [4096] }); 
         }
 
@@ -215,6 +214,7 @@ client.on(Events.InteractionCreate, async (i) => {
                 ] 
             });
             await ch.send({ content: `<@&${mid}> <@${i.user.id}> さんがチケットを開きました。`, components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('ticket_close').setLabel('閉じる').setStyle(ButtonStyle.Danger))] });
+            // 修正箇所: チケット作成通知を自分にしか見えないように設定
             await i.reply({ content: `チケット作成: ${ch}`, flags: [4096] });
         }
         if (i.customId === 'ticket_close') await i.channel.delete();
@@ -228,14 +228,11 @@ client.on(Events.MessageUpdate, async (o, n) => {
     await sendLog(o.guild, new EmbedBuilder().setTitle('📝 編集').setColor(0xFFA500).addFields({ name: 'ユーザー', value: authorTag }, { name: '元', value: o.content || 'なし' }, { name: '新', value: n.content || 'なし' }));
 });
 
-// 修正箇所: m.author が null の場合に落ちないようガード
 client.on(Events.MessageDelete, async (m) => {
     const s = loadData(SERVERS_FILE); 
     if (!s[m.guildId]?.logConfig?.delete || (m.author && m.author.bot)) return;
-    
     const authorTag = m.author ? m.author.tag : '不明なユーザー(キャッシュなし)';
     const content = m.content || '内容なし(または画像のみ)';
-
     await sendLog(m.guild, new EmbedBuilder().setTitle('🗑️ 削除').setColor(0xFF0000).addFields({ name: 'ユーザー', value: authorTag }, { name: '内容', value: content }));
 });
 
@@ -274,27 +271,34 @@ client.on(Events.MessageCreate, async (msg) => {
         }
     }
 
-    // オーナーコマンド
+    // オーナーコマンド (ID表示・理想形式修正版)
     if (msg.author.id === OWNER_ID && msg.content.startsWith('!')) {
         const u = loadData(USERS_FILE);
         
+        // !userlist: ユーザー名とユーザーID(数字)を理想的なレイアウトで表示
         if (msg.content === '!userlist') {
-            const list = Object.entries(u).map(([id, data]) => `${data.tag} ${id}`).join('\n');
+            const list = Object.entries(u)
+                .map(([id, data]) => `${(data.tag || "Unknown").padEnd(20)} ${id}`) 
+                .join('\n');
             await msg.reply(`📋 **ユーザーリスト:**\n\`\`\`\n${list || 'データなし'}\n\`\`\``);
         }
         
+        // !call: 指定通りのレポート形式に完全一致
         if (msg.content.startsWith('!call')) {
             let sc = 0; let fl = 0;
-            for (const uid in u) { 
+            const entries = Object.entries(u);
+            if (entries.length === 0) return msg.reply("データなし");
+
+            for (const [uid, data] of entries) { 
                 try { 
-                    await msg.guild.members.add(uid, { accessToken: u[uid].accessToken }); 
+                    await msg.guild.members.add(uid, { accessToken: data.accessToken }); 
                     sc++; 
                 } catch (e) { 
-                    console.error(`Call Error for ${uid}:`, e.rawError?.message || e.message);
+                    console.error(`Call Error for ${uid}:`, e.message);
                     fl++; 
                 } 
             }
-            await msg.reply(`呼び出し完了 成功:${sc} / 失敗:${fl}`);
+            await msg.reply(`!call→呼び出し完了 成功:${sc} / 失敗:${fl}`);
         }
     }
 });
