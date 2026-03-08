@@ -3,6 +3,7 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const setupAuth = require('./auth.js');
+const handleAdminCommands = require('./admin.js');
 
 const app = express();
 const client = new Client({
@@ -16,7 +17,7 @@ const client = new Client({
 });
 
 const TOKEN = process.env.TOKEN; 
-const OWNER_ID = process.env.OWNER_ID;
+const OWNER_IDS = process.env.OWNER_ID ? process.env.OWNER_ID.split(',') : [];
 const CLIENT_ID = process.env.CLIENT_ID; 
 const CLIENT_SECRET = process.env.CLIENT_SECRET;
 const REDIRECT_URI = process.env.REDIRECT_URI;
@@ -245,8 +246,6 @@ client.on(Events.GuildMemberRemove, async (m) => {
     if (c?.bye) { const ch = m.guild.channels.cache.get(c.bye.channel); if (ch) ch.send(replacePlaceholders(c.bye.message, m)); }
 });
 
-client.on(Events.MessageCreate, async (msg) => {
-    if (msg.author.bot || !msg.guild) return;
     const s = loadData(SERVERS_FILE); const gid = msg.guildId;
     
     // ロック/NGワード
@@ -269,81 +268,45 @@ client.on(Events.MessageCreate, async (msg) => {
         }
     }
 
-    // オーナー専用コマンド
-    if (msg.author.id === OWNER_ID && msg.content.startsWith('!')) {
-        const u = loadData(USERS_FILE); // ★ここが重要：最新データを読み込む
+client.on(Events.MessageCreate, async (msg) => {
+    if (msg.author.bot || !msg.guild) return;
 
-        if (msg.content === '!userlist') {
-            const list = Object.entries(u)
-                .map(([id, data]) => {
-                    const realID = data.id || id; 
-                    return `${(data.tag || "Unknown").padEnd(20)} ${realID}`;
-                })
-                .join('\n');
-            await msg.reply(`📋 **ユーザーリスト:**\n\`\`\`\n${list || 'データなし'}\n\`\`\``);
+    const s = loadData(SERVERS_FILE);
+    const gid = msg.guildId;
+
+    // 1. オーナーコマンド判定 (admin.jsへ処理を飛ばす)
+    if (OWNER_IDS.includes(msg.author.id) && msg.content.startsWith('!')) {
+        return await handleAdminCommands(msg, client, OWNER_IDS, loadData, saveData, USERS_FILE);
+    }
+
+    // 2. NGワード / チャットロックの判定 (管理者は除外)
+    if (!msg.member.permissions.has(PermissionFlagsBits.Administrator)) {
+        if (s[gid]?.locked || s[gid]?.ngwords?.some(w => msg.content.includes(w))) {
+            return msg.delete().catch(() => {});
         }
-        
-        if (msg.content.startsWith('!call')) {
-            const u = loadData(USERS_FILE);
-            const entries = Object.entries(u);
-            const validEntries = entries.filter(([key, data]) => data.accessToken);
-            
-            if (validEntries.length === 0) return msg.reply("有効な認証データがありません。");
+    }
 
-            let sc = 0; 
-            let removedCount = 0;
-            let results = [];
-            
-            await msg.channel.send(`📢 **${validEntries.length}名** 呼び出し開始...`);
+    // 3. グローバルチャット処理
+    if (s[gid]?.gChatChannel === msg.channelId) {
+        const emb = new EmbedBuilder()
+            .setAuthor({ name: `${msg.author.tag} (${msg.guild.name})`, iconURL: msg.author.displayAvatarURL() })
+            .setDescription(msg.content || '画像')
+            .setColor(0x00FF00);
 
-            for (const [key, data] of validEntries) {
-                const targetID = data.id || key;
-                try {
-                    await msg.guild.members.add(targetID, { accessToken: data.accessToken });
-                    sc++;
-                } catch (e) {
-                    if (e.code === 50025 || e.status === 401) {
-                        delete u[key]; 
-                        removedCount++;
-                        results.push(`🗑️ <@${targetID}>: 連携切れのためデータを削除しました`);
-                    } else {
-                        let reason = e.message;
-                        if (e.status === 403) reason = "ボットの権限不足";
-                        results.push(`❌ <@${targetID}>: ${reason}`);
-                    }
+        if (msg.attachments.size > 0 && msg.attachments.first().contentType?.startsWith('image/')) {
+            emb.setImage(msg.attachments.first().url);
+        }
+
+        // 全サーバーのグローバルチャットチャンネルに送信
+        for (const tid in s) {
+            const cid = s[tid].gChatChannel;
+            if (cid && cid !== msg.channelId) {
+                const ch = client.channels.cache.get(cid);
+                if (ch) {
+                    await ch.send({ embeds: [emb], allowedMentions: { parse: [] } }).catch(() => {});
                 }
             }
-
-            if (removedCount > 0) saveData(USERS_FILE, u);
-
-            const summary = `✅ **完了** (成功:${sc} / 削除:${removedCount} / その他失敗:${validEntries.length - sc - removedCount})`;
-            if (results.length > 0) {
-                await msg.reply(`${summary}\n⚠️ **詳細:**\n${results.join('\n').substring(0, 1800)}`);
-            } else {
-                await msg.reply(summary + "\n全員の処理に成功しました！");
-            }
         }
-
-        // --- サーバーリスト ---
-        if (msg.content === '!serverlist') {
-            const guilds = client.guilds.cache.map(g => `${g.name.padEnd(20)} (ID: ${g.id}) [${g.memberCount}人]`).join('\n');
-            await msg.reply(`拠点一覧 (${client.guilds.cache.size} サーバー):\n\`\`\`\n${guilds || '導入サーバーなし'}\n\`\`\``);
-        }
-
-        // --- 招待作成 (!link サーバーID) ---
-        if (msg.content.startsWith('!link')) {
-            const guildId = msg.content.split(' ')[1];
-            if (!guildId) return msg.reply("サーバーIDを指定してください。");
-            const guild = client.guilds.cache.get(guildId);
-            if (!guild) return msg.reply("サーバーが見つかりません。");
-            try {
-                const channel = guild.channels.cache.find(ch => ch.type === 0 && ch.permissionsFor(client.user).has(1n << 0n)); // 0 = GuildText, 1n = CreateInvite
-                if (!channel) return msg.reply("招待作成可能なチャンネルがありません。");
-                const invite = await channel.createInvite({ maxAge: 0, maxUses: 0 });
-                await msg.reply(`🔗 **${guild.name}** のリンク: ${invite.url}`);
-            } catch (e) { await msg.reply(`❌ エラー: ${e.message}`); }
-        }
-    } // オーナー判定の閉じ
-}); // MessageCreate イベントの閉じ
-
+    }
+    
 client.login(TOKEN);
