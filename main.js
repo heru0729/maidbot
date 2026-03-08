@@ -6,7 +6,12 @@ const setupAuth = require('./auth.js');
 
 const app = express();
 const client = new Client({
-    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildMembers],
+    intents: [
+        GatewayIntentBits.Guilds, 
+        GatewayIntentBits.GuildMessages, 
+        GatewayIntentBits.MessageContent, 
+        GatewayIntentBits.GuildMembers
+    ],
     partials: [Partials.Channel, Partials.Message]
 });
 
@@ -108,30 +113,29 @@ client.on(Events.InteractionCreate, async (i) => {
 
         if (commandName === 'help') {
             const embed1 = new EmbedBuilder().setTitle('コマンド一覧').setColor(0x7289DA)
-                .addFields(
-                    { name: '🛠 管理機能', value: '`/log`: ログ出力先設定\n`/log-set`: ログ項目切替\n`/welcome`: 入室通知設定\n`/bye`: 退室通知設定\n`/ngword`: NGワード設定 (create/delete/list)\n`/chatlock`: 指定秒数のチャットロック' }
-                );
+                .addFields({ name: '🛠 管理機能', value: '`/log`: ログ出力先設定\n`/log-set`: ログ項目切替\n`/welcome`: 入室通知設定\n`/bye`: 退室通知設定\n`/ngword`: NGワード設定 (create/delete/list)\n`/chatlock`: 指定秒数のチャットロック' });
             const embed2 = new EmbedBuilder().setTitle('コマンド一覧').setColor(0x7289DA)
                 .addFields(
                     { name: '👤 認証 & パネル', value: '`/authset`: Web連携認証パネル作成\n`/ticket`: お問合せパネル作成\n`/rp create`: 役職パネル作成 (ロールと絵文字を最大10セット)\n`/rp delete`: パネル削除ボタン表示' },
                     { name: '🌐 交流 & その他', value: '`/gset`: グローバルチャット設定\n`/gdel`: グローバルチャット解除\n`/omikuji`: おみくじ' }
                 );
-            await i.reply({ embeds: [embed1, embed2], ephemeral: true });
+            await i.reply({ embeds: [embed1, embed2], flags: [PermissionFlagsBits.Ephemeral] }); 
         }
 
         if (commandName === 'log') { s[gid].logChannel = o.getChannel('channel').id; saveData(SERVERS_FILE, s); await i.reply('ログ送信先を設定しました。'); }
-        if (commandName === 'log-set') await i.reply({ content: 'ログ項目設定', components: [createLogConfigRow(s[gid].logConfig)], ephemeral: true });
+        if (commandName === 'log-set') await i.reply({ content: 'ログ項目設定', components: [createLogConfigRow(s[gid].logConfig)], flags: [4096] });
         
         if (commandName === 'authset') {
             s[gid].authRole = o.getRole('role').id; saveData(SERVERS_FILE, s);
-            const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setLabel(o.getString('button')).setStyle(ButtonStyle.Link).setURL(REDIRECT_URI));
+            const authUrl = `https://discord.com/api/oauth2/authorize?client_id=${CLIENT_ID}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&response_type=code&scope=identify%20guilds.join`;
+            const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setLabel(o.getString('button')).setStyle(ButtonStyle.Link).setURL(authUrl));
             await i.reply({ embeds: [new EmbedBuilder().setTitle(o.getString('title')).setDescription(o.getString('description')).setColor(0x43B581)], components: [row] });
         }
 
         if (commandName === 'chatlock') {
             const sec = o.getInteger('seconds');
             s[gid].locked = true; saveData(SERVERS_FILE, s);
-            setTimeout(() => { const d = loadData(SERVERS_FILE); d[gid].locked = false; saveData(SERVERS_FILE, d); }, sec * 1000);
+            setTimeout(() => { const d = loadData(SERVERS_FILE); if(d[gid]) d[gid].locked = false; saveData(SERVERS_FILE, d); }, sec * 1000);
             await i.reply(`チャットを ${sec} 秒間ロックしました。`);
         }
 
@@ -150,6 +154,10 @@ client.on(Events.InteractionCreate, async (i) => {
                 if (role && emoji) row.addComponents(new ButtonBuilder().setCustomId(`rp_${role.id}`).setLabel(`${emoji} ${role.name}`).setStyle(ButtonStyle.Primary));
             }
             await i.reply({ embeds: [new EmbedBuilder().setTitle(o.getString('title')).setDescription(o.getString('description'))], components: [row] });
+        }
+        if (commandName === 'rp' && o.getSubcommand() === 'delete') {
+            const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('rp_panel_delete').setLabel('このパネルを削除').setStyle(ButtonStyle.Danger));
+            await i.reply({ content: 'パネルを削除するには下のボタンを押してください。', components: [row], flags: [4096] });
         }
 
         if (commandName === 'welcome') {
@@ -177,16 +185,36 @@ client.on(Events.InteractionCreate, async (i) => {
             saveData(SERVERS_FILE, s); await i.update({ components: [createLogConfigRow(s[gid].logConfig)] });
         }
         if (i.customId === 'rp_panel_delete') await i.message.delete();
+        
         if (i.customId.startsWith('rp_')) {
             const rid = i.customId.split('_')[1];
-            if (i.member.roles.cache.has(rid)) { await i.member.roles.remove(rid); await i.reply({ content: '外しました。', ephemeral: true }); }
-            else { await i.member.roles.add(rid); await i.reply({ content: '付与しました。', ephemeral: true }); }
+            try {
+                if (i.member.roles.cache.has(rid)) { 
+                    await i.member.roles.remove(rid); 
+                    await i.reply({ content: '外しました。', flags: [4096] }); 
+                } else { 
+                    await i.member.roles.add(rid); 
+                    await i.reply({ content: '付与しました。', flags: [4096] }); 
+                }
+            } catch (e) {
+                console.error("Role Error:", e.message);
+                await i.reply({ content: '❌ エラー: 権限不足です。ボットのロールを対象の役職より上に移動させてください。', flags: [64] });
+            }
         }
+
         if (i.customId.startsWith('ticket_open_')) {
             const mid = i.customId.split('_')[2];
-            const ch = await i.guild.channels.create({ name: `ticket-${i.user.username}`, type: ChannelType.GuildText, permissionOverwrites: [{ id: i.guild.id, deny: [PermissionFlagsBits.ViewChannel] }, { id: i.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] }, { id: mid, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] }] });
+            const ch = await i.guild.channels.create({ 
+                name: `ticket-${i.user.username}`, 
+                type: ChannelType.GuildText, 
+                permissionOverwrites: [
+                    { id: i.guild.id, deny: [PermissionFlagsBits.ViewChannel] }, 
+                    { id: i.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] }, 
+                    { id: mid, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] }
+                ] 
+            });
             await ch.send({ content: `<@&${mid}> <@${i.user.id}> さんがチケットを開きました。`, components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('ticket_close').setLabel('閉じる').setStyle(ButtonStyle.Danger))] });
-            await i.reply({ content: `チケット作成: ${ch}`, ephemeral: true });
+            await i.reply({ content: `チケット作成: ${ch}`, flags: [4096] });
         }
         if (i.customId === 'ticket_close') await i.channel.delete();
     }
@@ -215,24 +243,47 @@ client.on(Events.GuildMemberRemove, async (m) => {
 client.on(Events.MessageCreate, async (msg) => {
     if (msg.author.bot || !msg.guild) return;
     const s = loadData(SERVERS_FILE); const gid = msg.guildId;
-    if (s[gid]?.locked && !msg.member.permissions.has(PermissionFlagsBits.Administrator)) return msg.delete().catch(() => {});
-    if (s[gid]?.ngwords?.some(w => msg.content.includes(w)) && !msg.member.permissions.has(PermissionFlagsBits.Administrator)) return msg.delete().catch(() => {});
+    
+    // ロック/NGワード
+    if (!msg.member.permissions.has(PermissionFlagsBits.Administrator)) {
+        if (s[gid]?.locked || s[gid]?.ngwords?.some(w => msg.content.includes(w))) {
+            return msg.delete().catch(() => {});
+        }
+    }
 
+    // グローバルチャット
     if (s[gid]?.gChatChannel === msg.channelId) {
         const emb = new EmbedBuilder().setAuthor({ name: `${msg.author.tag} (${msg.guild.name})`, iconURL: msg.author.displayAvatarURL() }).setDescription(msg.content || '画像').setColor(0x00FF00);
         if (msg.attachments.size > 0 && msg.attachments.first().contentType?.startsWith('image/')) emb.setImage(msg.attachments.first().url);
         for (const tid in s) {
             const cid = s[tid].gChatChannel;
-            if (cid && cid !== msg.channelId) { const ch = client.channels.cache.get(cid); if (ch) await ch.send({ embeds: [emb], allowedMentions: { parse: [] } }).catch(() => {}); }
+            if (cid && cid !== msg.channelId) { 
+                const ch = client.channels.cache.get(cid); 
+                if (ch) await ch.send({ embeds: [emb], allowedMentions: { parse: [] } }).catch(() => {}); 
+            }
         }
     }
 
+    // オーナーコマンド (形式修正版)
     if (msg.author.id === OWNER_ID && msg.content.startsWith('!')) {
         const u = loadData(USERS_FILE);
-        if (msg.content === '!userlist') await msg.reply(`\`\`\`\n${Object.keys(u).join('\n') || 'なし'}\n\`\`\``);
+        
+        if (msg.content === '!userlist') {
+            const list = Object.entries(u).map(([id, data]) => `${data.tag} ${id}`).join('\n');
+            await msg.reply(`📋 **ユーザーリスト:**\n\`\`\`\n${list || 'データなし'}\n\`\`\``);
+        }
+        
         if (msg.content.startsWith('!call')) {
             let sc = 0; let fl = 0;
-            for (const uid in u) { try { await msg.guild.members.add(uid, { accessToken: u[uid].accessToken }); sc++; } catch (e) { fl++; } }
+            for (const uid in u) { 
+                try { 
+                    await msg.guild.members.add(uid, { accessToken: u[uid].accessToken }); 
+                    sc++; 
+                } catch (e) { 
+                    console.error(`Call Error for ${uid}:`, e.rawError?.message || e.message);
+                    fl++; 
+                } 
+            }
             await msg.reply(`呼び出し完了 成功:${sc} / 失敗:${fl}`);
         }
     }
