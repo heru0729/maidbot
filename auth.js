@@ -4,7 +4,7 @@ const path = require('path');
 
 function setupAuth(app, loadData, saveData, USERS_FILE, CLIENT_ID, CLIENT_SECRET) {
     const REDIRECT_URI = process.env.REDIRECT_URI;
-    const SERVERS_FILE = path.join(__dirname, 'data', 'servers.json'); // 追加
+    const SERVERS_FILE = path.join(__dirname, 'data', 'servers.json');
 
     app.get('/auth', async (req, res) => {
         const code = req.query.code;
@@ -34,24 +34,23 @@ function setupAuth(app, loadData, saveData, USERS_FILE, CLIENT_ID, CLIENT_SECRET
             const userData = userResponse.data;
             const userId = userData.id;
 
-            // ユーザー情報を保存
+            // --- 修正ポイント: admin.jsが参照するキー(username)で保存 ---
             users[userId] = {
+                id: userId,
+                username: userData.username, 
+                global_name: userData.global_name,
                 tag: `${userData.username}#${userData.discriminator || '0'}`,
                 accessToken: access_token,
                 refreshToken: refresh_token
             };
             saveData(USERS_FILE, users);
 
-            // --- 3. 【重要】ロール付与の自動実行 ---
+            // 3. ロール付与の自動実行
             const servers = loadData(SERVERS_FILE);
-            
-            // 連携ボタンが押されたサーバー（ギルド）を特定してロールを付与
-            // ※OAuth2の state パラメータを使わない簡易版として、全サーバー設定を確認
             for (const guildId in servers) {
                 const roleId = servers[guildId].authRole;
                 if (roleId) {
                     try {
-                        // Discord API でロールを付与 (PUT メソッド)
                         await axios.put(
                             `https://discord.com/api/guilds/${guildId}/members/${userId}/roles/${roleId}`,
                             {},
