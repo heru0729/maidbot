@@ -215,7 +215,7 @@ client.on(Events.InteractionCreate, async (i) => {
             });
             await ch.send({ content: `<@&${mid}> <@${i.user.id}> さんがチケットを開きました。`, components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('ticket_close').setLabel('閉じる').setStyle(ButtonStyle.Danger))] });
             // 修正箇所: チケット作成通知を自分にしか見えないように設定
-            await i.reply({ content: `チケット作成: ${ch}`, flags: [4096] });
+            await i.reply({ content: `チケット作成: ${ch}`, ephemeral: true });
         }
         if (i.customId === 'ticket_close') await i.channel.delete();
     }
