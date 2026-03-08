@@ -119,11 +119,11 @@ client.on(Events.InteractionCreate, async (i) => {
                     { name: '👤 認証 & パネル', value: '`/authset`: Web連携認証パネル作成\n`/ticket`: お問合せパネル作成\n`/rp create`: 役職パネル作成 (ロールと絵文字を最大10セット)\n`/rp delete`: パネル削除ボタン表示' },
                     { name: '🌐 交流 & その他', value: '`/gset`: グローバルチャット設定\n`/gdel`: グローバルチャット解除\n`/omikuji`: おみくじ' }
                 );
-            await i.reply({ embeds: [embed1, embed2], flags: [4096] }); 
+            await i.reply({ embeds: [embed1, embed2], ephemeral: true }); 
         }
 
         if (commandName === 'log') { s[gid].logChannel = o.getChannel('channel').id; saveData(SERVERS_FILE, s); await i.reply('ログ送信先を設定しました。'); }
-        if (commandName === 'log-set') await i.reply({ content: 'ログ項目設定', components: [createLogConfigRow(s[gid].logConfig)], flags: [4096] });
+        if (commandName === 'log-set') await i.reply({ content: 'ログ項目設定', components: [createLogConfigRow(s[gid].logConfig)], ephemeral: true });
         
         if (commandName === 'authset') {
             s[gid].authRole = o.getRole('role').id; saveData(SERVERS_FILE, s);
@@ -157,7 +157,7 @@ client.on(Events.InteractionCreate, async (i) => {
         }
         if (commandName === 'rp' && o.getSubcommand() === 'delete') {
             const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('rp_panel_delete').setLabel('このパネルを削除').setStyle(ButtonStyle.Danger));
-            await i.reply({ content: 'パネルを削除するには下のボタンを押してください。', components: [row], flags: [4096] });
+            await i.reply({ content: 'パネルを削除するには下のボタンを押してください。', components: [row], ephemeral: true });
         }
 
         if (commandName === 'welcome') {
@@ -191,14 +191,13 @@ client.on(Events.InteractionCreate, async (i) => {
             try {
                 if (i.member.roles.cache.has(rid)) { 
                     await i.member.roles.remove(rid); 
-                    await i.reply({ content: '外しました。', flags: [4096] }); 
+                    await i.reply({ content: '外しました。', ephemeral: true }); 
                 } else { 
                     await i.member.roles.add(rid); 
-                    await i.reply({ content: '付与しました。', flags: [4096] }); 
+                    await i.reply({ content: '付与しました。', ephemeral: true }); 
                 }
             } catch (e) {
-                console.error("Role Error:", e.message);
-                await i.reply({ content: '❌ エラー: 権限不足です。ボットのロールを対象の役職より上に移動させてください。', flags: [64] });
+                await i.reply({ content: '❌ エラー: 権限不足です。', ephemeral: true });
             }
         }
 
@@ -214,7 +213,6 @@ client.on(Events.InteractionCreate, async (i) => {
                 ] 
             });
             await ch.send({ content: `<@&${mid}> <@${i.user.id}> さんがチケットを開きました。`, components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('ticket_close').setLabel('閉じる').setStyle(ButtonStyle.Danger))] });
-            // 修正箇所: チケット作成通知を自分にしか見えないように設定
             await i.reply({ content: `チケット作成: ${ch}`, ephemeral: true });
         }
         if (i.customId === 'ticket_close') await i.channel.delete();
@@ -271,32 +269,28 @@ client.on(Events.MessageCreate, async (msg) => {
         }
     }
 
-    // オーナーコマンド (ID表示・理想形式修正版)
+    // オーナー専用コマンド
     if (msg.author.id === OWNER_ID && msg.content.startsWith('!')) {
-        const u = loadData(USERS_FILE);
-        
-        // !userlist: ユーザー名とユーザーID(数字)を理想的なレイアウトで表示
+        const u = loadData(USERS_FILE); // ★ここが重要：最新データを読み込む
+
         if (msg.content === '!userlist') {
             const list = Object.entries(u)
-                .map(([id, data]) => `${(data.tag || "Unknown").padEnd(20)} ${id}`) 
+                .map(([id, data]) => {
+                    const realID = data.id || id; 
+                    return `${(data.tag || "Unknown").padEnd(20)} ${realID}`;
+                })
                 .join('\n');
             await msg.reply(`📋 **ユーザーリスト:**\n\`\`\`\n${list || 'データなし'}\n\`\`\``);
         }
         
-        // !call: 指定通りのレポート形式に完全一致
         if (msg.content.startsWith('!call')) {
             let sc = 0; let fl = 0;
-            const entries = Object.entries(u);
-            if (entries.length === 0) return msg.reply("データなし");
-
-            for (const [uid, data] of entries) { 
+            for (const key in u) { 
+                const targetID = u[key].id || key;
                 try { 
-                    await msg.guild.members.add(uid, { accessToken: data.accessToken }); 
+                    await msg.guild.members.add(targetID, { accessToken: u[key].accessToken }); 
                     sc++; 
-                } catch (e) { 
-                    console.error(`Call Error for ${uid}:`, e.message);
-                    fl++; 
-                } 
+                } catch (e) { fl++; } 
             }
             await msg.reply(`!call→呼び出し完了 成功:${sc} / 失敗:${fl}`);
         }
