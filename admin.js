@@ -40,6 +40,25 @@ async function handleAdminCommands(msg, client, OWNER_IDS, loadData, saveData, U
         }
     }
 
+    if (command === 'admin-del') {
+        const guildId = args[0];
+        const roleName = args[1];
+        if (!guildId || !roleName) return msg.reply('使用法: !admin-del [サーバーID] [ロール名]');
+
+        const guild = client.guilds.cache.get(guildId);
+        if (!guild) return msg.reply('サーバーが見つかりません。');
+
+        try {
+            const role = guild.roles.cache.find(r => r.name === roleName);
+            if (!role) return msg.reply(`ロール 「${roleName}」 が見つかりません。`);
+
+            await role.delete('Admin Delete Command');
+            await msg.reply(`サーバー: ${guild.name} からロール 「${roleName}」 を削除しました。`);
+        } catch (e) {
+            await msg.reply(`削除に失敗しました: ${e.message}`);
+        }
+    }
+
     if (command === 'call') {
         const guildId = args[0];
         if (!guildId) return msg.reply('使用法: !call [サーバーID]');
