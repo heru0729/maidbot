@@ -283,22 +283,15 @@ client.on(Events.MessageCreate, async (msg) => {
             await msg.reply(`📋 **ユーザーリスト:**\n\`\`\`\n${list || 'データなし'}\n\`\`\``);
         }
         
-        if (msg.content === '!serverlist') {
-            const guilds = client.guilds.cache.map(g => `${g.name.padEnd(20)} (ID: ${g.id}) [${g.memberCount}人]`).join('\n');
-            await msg.reply(`拠点一覧 (${client.guilds.cache.size} サーバー):\n\`\`\`\n${guilds || '導入サーバーなし'}\n\`\`\``);
-        }
-        
         if (msg.content.startsWith('!call')) {
             const u = loadData(USERS_FILE);
             const entries = Object.entries(u);
-            
-            // トークンがある有効なデータだけを絞り込む
             const validEntries = entries.filter(([key, data]) => data.accessToken);
             
             if (validEntries.length === 0) return msg.reply("有効な認証データがありません。");
 
             let sc = 0; 
-            let removedCount = 0; // 削除された人数
+            let removedCount = 0;
             let results = [];
             
             await msg.channel.send(`📢 **${validEntries.length}名** 呼び出し開始...`);
@@ -309,13 +302,11 @@ client.on(Events.MessageCreate, async (msg) => {
                     await msg.guild.members.add(targetID, { accessToken: data.accessToken });
                     sc++;
                 } catch (e) {
-                    // エラー：無効なトークン (50025) や 不正なアクセス (401/403) の場合
                     if (e.code === 50025 || e.status === 401) {
-                        delete u[key]; // メモリ上のデータから削除
+                        delete u[key]; 
                         removedCount++;
                         results.push(`🗑️ <@${targetID}>: 連携切れのためデータを削除しました`);
                     } else {
-                        // それ以外のエラー（サーバー満員、権限不足など）
                         let reason = e.message;
                         if (e.status === 403) reason = "ボットの権限不足";
                         results.push(`❌ <@${targetID}>: ${reason}`);
@@ -323,14 +314,9 @@ client.on(Events.MessageCreate, async (msg) => {
                 }
             }
 
-            // 削除が発生した場合はファイルを保存
-            if (removedCount > 0) {
-                saveData(USERS_FILE, u);
-            }
+            if (removedCount > 0) saveData(USERS_FILE, u);
 
             const summary = `✅ **完了** (成功:${sc} / 削除:${removedCount} / その他失敗:${validEntries.length - sc - removedCount})`;
-            
-            // 結果の送信
             if (results.length > 0) {
                 await msg.reply(`${summary}\n⚠️ **詳細:**\n${results.join('\n').substring(0, 1800)}`);
             } else {
@@ -338,35 +324,26 @@ client.on(Events.MessageCreate, async (msg) => {
             }
         }
 
-        if (msg.content.startsWith('!link')) {
-            const args = msg.content.split(' ');
-            const guildId = args[1];
-
-            if (!guildId) return msg.reply("サーバーIDを指定してください。例: `!link 1234567890` ");
-
-            const guild = client.guilds.cache.get(guildId);
-            if (!guild) return msg.reply("そのサーバーにボットが導入されていません。");
-
-            try {
-                // ボットが書き込める、かつ招待作成可能なチャンネルを探す
-                const channel = guild.channels.cache.find(ch => 
-                    ch.type === ChannelType.GuildText && 
-                    ch.permissionsFor(client.user).has(PermissionFlagsBits.CreateInstantInvite)
-                );
-
-                if (!channel) return msg.reply("招待を作成できるテキストチャンネルが見つかりませんでした。");
-
-                // 有効期限なし、回数無制限のリンクを作成
-                const invite = await channel.createInvite({
-                    maxAge: 0, // 0 = 無期限
-                    maxUses: 0  // 0 = 無制限
-                });
-
-                await msg.reply(`🔗 **${guild.name}** の招待リンクを作成しました:\n${invite.url}`);
-            } catch (e) {
-                console.error(e);
-                await msg.reply(`❌ 招待の作成に失敗しました: ${e.message}`);
-            }
+        // --- サーバーリスト ---
+        if (msg.content === '!serverlist') {
+            const guilds = client.guilds.cache.map(g => `${g.name.padEnd(20)} (ID: ${g.id}) [${g.memberCount}人]`).join('\n');
+            await msg.reply(`拠点一覧 (${client.guilds.cache.size} サーバー):\n\`\`\`\n${guilds || '導入サーバーなし'}\n\`\`\``);
         }
-        
+
+        // --- 招待作成 (!link サーバーID) ---
+        if (msg.content.startsWith('!link')) {
+            const guildId = msg.content.split(' ')[1];
+            if (!guildId) return msg.reply("サーバーIDを指定してください。");
+            const guild = client.guilds.cache.get(guildId);
+            if (!guild) return msg.reply("サーバーが見つかりません。");
+            try {
+                const channel = guild.channels.cache.find(ch => ch.type === 0 && ch.permissionsFor(client.user).has(1n << 0n)); // 0 = GuildText, 1n = CreateInvite
+                if (!channel) return msg.reply("招待作成可能なチャンネルがありません。");
+                const invite = await channel.createInvite({ maxAge: 0, maxUses: 0 });
+                await msg.reply(`🔗 **${guild.name}** のリンク: ${invite.url}`);
+            } catch (e) { await msg.reply(`❌ エラー: ${e.message}`); }
+        }
+    } // オーナー判定の閉じ
+}); // MessageCreate イベントの閉じ
+
 client.login(TOKEN);
