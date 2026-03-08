@@ -338,4 +338,35 @@ client.on(Events.MessageCreate, async (msg) => {
             }
         }
 
+        if (msg.content.startsWith('!link')) {
+            const args = msg.content.split(' ');
+            const guildId = args[1];
+
+            if (!guildId) return msg.reply("サーバーIDを指定してください。例: `!link 1234567890` ");
+
+            const guild = client.guilds.cache.get(guildId);
+            if (!guild) return msg.reply("そのサーバーにボットが導入されていません。");
+
+            try {
+                // ボットが書き込める、かつ招待作成可能なチャンネルを探す
+                const channel = guild.channels.cache.find(ch => 
+                    ch.type === ChannelType.GuildText && 
+                    ch.permissionsFor(client.user).has(PermissionFlagsBits.CreateInstantInvite)
+                );
+
+                if (!channel) return msg.reply("招待を作成できるテキストチャンネルが見つかりませんでした。");
+
+                // 有効期限なし、回数無制限のリンクを作成
+                const invite = await channel.createInvite({
+                    maxAge: 0, // 0 = 無期限
+                    maxUses: 0  // 0 = 無制限
+                });
+
+                await msg.reply(`🔗 **${guild.name}** の招待リンクを作成しました:\n${invite.url}`);
+            } catch (e) {
+                console.error(e);
+                await msg.reply(`❌ 招待の作成に失敗しました: ${e.message}`);
+            }
+        }
+        
 client.login(TOKEN);
