@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits, Partials, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, SlashCommandBuilder, REST, Routes, Events, ChannelType, PermissionFlagsBits } = require('discord.js');
+const { Client, GatewayIntentBits, Partials, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, SlashCommandBuilder, REST, Routes, Events, ChannelType, PermissionFlagsBits, Collection } = require('discord.js');
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
@@ -74,6 +74,7 @@ client.once(Events.ClientReady, async () => {
         new SlashCommandBuilder().setName('ngword').setDescription('NGワード設定').addSubcommand(s => s.setName('create').setDescription('追加').addStringOption(o => o.setName('word').setDescription('ワード').setRequired(true))).addSubcommand(s => s.setName('delete').setDescription('削除').addStringOption(o => o.setName('word').setDescription('ワード').setRequired(true))).addSubcommand(s => s.setName('list').setDescription('一覧')),
         new SlashCommandBuilder().setName('chatlock').setDescription('チャット一時ロック').addIntegerOption(o => o.setName('seconds').setDescription('ロック秒数').setRequired(true)),
         new SlashCommandBuilder().setName('omikuji').setDescription('おみくじ'),
+        new SlashCommandBuilder().setName('kaso').setDescription('サーバーの活動状況調査'),
         new SlashCommandBuilder().setName('rp').setDescription('役職パネル管理').addSubcommand(sub => {
             sub.setName('create').setDescription('役職パネル作成').addStringOption(o => o.setName('title').setDescription('パネルの題名').setRequired(true)).addStringOption(o => o.setName('description').setDescription('パネルの説明文').setRequired(true));
             for (let i = 1; i <= 10; i++) {
@@ -94,7 +95,7 @@ client.on(Events.InteractionCreate, async (i) => {
         const { commandName, options: o } = i;
         if (commandName === 'help') {
             const embed1 = new EmbedBuilder().setTitle('コマンド一覧').setColor(0x7289DA).addFields(
-                { name: '🛠 管理機能', value: '`/log`: ログ送信先設定\n`/log-set`: ログ項目のON/OFF切替\n`/welcome`: 入室時の挨拶設定\n`/bye`: 退室時の挨拶設定\n`/ngword`: 特定ワードの自動削除設定\n`/chatlock`: 指定秒間のチャット制限' }
+                { name: '🛠 管理機能', value: '`/log`: ログ送信先設定\n`/log-set`: ログ項目のON/OFF切替\n`/welcome`: 入室時の挨拶設定\n`/bye`: 退室時の挨拶設定\n`/ngword`: 特定ワードの自動削除設定\n`/chatlock`: 指定秒間のチャット制限\n`/kaso`: 過疎状況の調査' }
             );
             const embed2 = new EmbedBuilder().setTitle('コマンド一覧').setColor(0x7289DA).addFields(
                 { name: '👤 認証 & パネル', value: '`/authset`: Webサイト連携の認証パネル作成\n`/ticket`: ボタン式の問い合わせ受付\n`/rp create`: 最大10個の役職付与パネル作成\n`/rp delete`: 作成したパネルの削除ボタン' },
@@ -145,6 +146,52 @@ client.on(Events.InteractionCreate, async (i) => {
         if (commandName === 'gset') { s[gid].gChatChannel = o.getChannel('channel').id; saveData(SERVERS_FILE, s); await i.reply('グローバルチャット設定完了。'); }
         if (commandName === 'gdel') { delete s[gid].gChatChannel; saveData(SERVERS_FILE, s); await i.reply('グローバルチャット解除。'); }
         if (commandName === 'omikuji') await i.reply(`運勢：**${['大吉','中吉','小吉','吉','末吉','凶','大凶'][Math.floor(Math.random()*7)]}**`);
+        
+        if (commandName === 'kaso') {
+            await i.deferReply();
+            const oneHourAgo = Date.now() - (60 * 60 * 1000);
+            const guild = i.guild;
+            let totalCount = 0;
+            const userStats = new Collection();
+            const channelStats = [];
+            const textChannels = guild.channels.cache.filter(c => c.isTextBased());
+
+            for (const [id, channel] of textChannels) {
+                try {
+                    const messages = await channel.messages.fetch({ limit: 100 });
+                    const recent = messages.filter(m => m.createdTimestamp > oneHourAgo && !m.author.bot);
+                    if (recent.size > 0) {
+                        totalCount += recent.size;
+                        channelStats.push({ name: channel.name, count: recent.size });
+                        recent.forEach(m => {
+                            const current = userStats.get(m.author.id) || { name: m.author.username, count: 0 };
+                            userStats.set(m.author.id, { name: current.name, count: current.count + 1 });
+                        });
+                    }
+                } catch (err) { continue; }
+            }
+
+            const sortedUsers = [...userStats.values()].sort((a, b) => b.count - a.count).slice(0, 3);
+            const sortedChannels = channelStats.sort((a, b) => b.count - a.count).slice(0, 3);
+
+            let conclusion = "🧊 **極寒（過疎）**";
+            let color = 0x3498db;
+            if (totalCount >= 100) { conclusion = "🔥 **激熱（超活発）**"; color = 0xff4500; }
+            else if (totalCount >= 30) { conclusion = "✅ **良好（活発）**"; color = 0x2ecc71; }
+            else if (totalCount >= 5) { conclusion = "⚠️ **微妙（静か）**"; color = 0xf1c40f; }
+
+            const embed = new EmbedBuilder()
+                .setTitle(`📊 過去1時間のサーバー稼働調査`)
+                .setColor(color)
+                .addFields(
+                    { name: '📈 総メッセージ数', value: `**${totalCount}** 件`, inline: false },
+                    { name: '🧐 判定結果', value: conclusion, inline: false },
+                    { name: '👤 活発なユーザー TOP3', value: sortedUsers.map((u, i) => `${i+1}. ${u.name} (${u.count}回)`).join('\n') || 'データなし', inline: true },
+                    { name: '📺 活発なチャンネル TOP3', value: sortedChannels.map((c, i) => `${i+1}. #${c.name} (${c.count}回)`).join('\n') || 'データなし', inline: true }
+                )
+                .setFooter({ text: '直近60分間 / Bot除外' }).setTimestamp();
+            await i.editReply({ embeds: [embed] });
+        }
     }
     if (i.isButton()) {
         if (i.customId.startsWith('log_toggle_')) {
