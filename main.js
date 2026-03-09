@@ -47,12 +47,22 @@ async function sendLog(guild, embed) {
     }
 }
 
+function createMainSetRow() {
+    return new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('set_menu_log').setLabel('ログ設定').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId('set_menu_msg').setLabel('入退室通知').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId('set_menu_ng').setLabel('NGワード').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId('set_menu_lock').setLabel('ロック状態').setStyle(ButtonStyle.Danger)
+    );
+}
+
 function createLogConfigRow(c) {
     return new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('log_toggle_edit').setLabel(`編集: ${c.edit ? 'ON' : 'OFF'}`).setStyle(c.edit ? ButtonStyle.Success : ButtonStyle.Danger),
         new ButtonBuilder().setCustomId('log_toggle_delete').setLabel(`削除: ${c.delete ? 'ON' : 'OFF'}`).setStyle(c.delete ? ButtonStyle.Success : ButtonStyle.Danger),
         new ButtonBuilder().setCustomId('log_toggle_join').setLabel(`入室: ${c.join ? 'ON' : 'OFF'}`).setStyle(c.join ? ButtonStyle.Success : ButtonStyle.Danger),
-        new ButtonBuilder().setCustomId('log_toggle_leave').setLabel(`退出: ${c.leave ? 'ON' : 'OFF'}`).setStyle(c.leave ? ButtonStyle.Success : ButtonStyle.Danger)
+        new ButtonBuilder().setCustomId('log_toggle_leave').setLabel(`退出: ${c.leave ? 'ON' : 'OFF'}`).setStyle(c.leave ? ButtonStyle.Success : ButtonStyle.Danger),
+        new ButtonBuilder().setCustomId('set_back_main').setLabel('戻る').setStyle(ButtonStyle.Secondary)
     );
 }
 
@@ -63,8 +73,8 @@ client.once(Events.ClientReady, async () => {
     console.log(`${client.user.tag} ログイン完了`);
     const commands = [
         new SlashCommandBuilder().setName('help').setDescription('コマンド一覧を表示'),
+        new SlashCommandBuilder().setName('set').setDescription('サーバーの各種設定を一括管理'),
         new SlashCommandBuilder().setName('log').setDescription('ログ送信先設定').addChannelOption(o => o.setName('channel').setDescription('送信先').setRequired(true)),
-        new SlashCommandBuilder().setName('log-set').setDescription('ログ項目切替'),
         new SlashCommandBuilder().setName('welcome').setDescription('入室通知設定').addChannelOption(o => o.setName('channel').setDescription('送信先').setRequired(true)).addStringOption(o => o.setName('message').setDescription('{user}, {server}, {members}が使えます').setRequired(true)),
         new SlashCommandBuilder().setName('bye').setDescription('退室通知設定').addChannelOption(o => o.setName('channel').setDescription('送信先').setRequired(true)).addStringOption(o => o.setName('message').setDescription('{user}, {server}, {members}が使えます').setRequired(true)),
         new SlashCommandBuilder().setName('authset').setDescription('Web連携認証パネル作成').addStringOption(o => o.setName('title').setDescription('題名').setRequired(true)).addStringOption(o => o.setName('description').setDescription('説明').setRequired(true)).addStringOption(o => o.setName('button').setDescription('ボタン名').setRequired(true)).addRoleOption(o => o.setName('role').setDescription('付与ロール').setRequired(true)),
@@ -91,20 +101,29 @@ client.on(Events.InteractionCreate, async (i) => {
     const s = loadData(SERVERS_FILE); 
     const gid = i.guildId;
     if (!s[gid]) s[gid] = { logConfig: { edit: true, delete: true, join: true, leave: true }, ngwords: [], locked: false };
+    
     if (i.isChatInputCommand()) {
         const { commandName, options: o } = i;
+
+        if (commandName === 'set') {
+            const embed = new EmbedBuilder()
+                .setTitle('⚙️ サーバー管理パネル')
+                .setDescription('下のボタンから各項目の設定を確認・変更できます。')
+                .setColor(0x5865F2);
+            await i.reply({ embeds: [embed], components: [createMainSetRow()], ephemeral: true });
+        }
+
         if (commandName === 'help') {
             const embed1 = new EmbedBuilder().setTitle('コマンド一覧').setColor(0x7289DA).addFields(
-                { name: '🛠 管理機能', value: '`/log`: ログ送信先設定\n`/log-set`: ログ項目のON/OFF切替\n`/welcome`: 入室時の挨拶設定\n`/bye`: 退室時の挨拶設定\n`/ngword`: 特定ワードの自動削除設定\n`/chatlock`: 指定秒間のチャット制限\n`/kaso`: 過疎状況の調査' }
+                { name: '🛠 管理機能', value: '`/set`: 設定の一括管理\n`/log`: ログ送信先設定\n`/welcome`: 入室通知設定\n`/bye`: 退室通知設定\n`/ngword`: NGワード設定\n`/chatlock`: チャット制限\n`/kaso`: 過疎調査' }
             );
             const embed2 = new EmbedBuilder().setTitle('コマンド一覧').setColor(0x7289DA).addFields(
-                { name: '👤 認証 & パネル', value: '`/authset`: Webサイト連携の認証パネル作成\n`/ticket`: ボタン式の問い合わせ受付\n`/rp create`: 最大10個の役職付与パネル作成\n`/rp delete`: 作成したパネルの削除ボタン' },
-                { name: '🌐 交流', value: '`/gset`: 他サーバーと繋がるチャット設定\n`/gdel`: グローバルチャット解除\n`/omikuji`: 今日の運勢' }
+                { name: '👤 認証 & パネル', value: '`/authset`: 認証パネル作成\n`/ticket`: 問い合わせ受付\n`/rp create`: 役職パネル作成\n`/rp delete`: パネル削除' },
+                { name: '🌐 交流', value: '`/gset`: グローバルチャット\n`/gdel`: チャット解除\n`/omikuji`: おみくじ' }
             );
             await i.reply({ embeds: [embed1, embed2], ephemeral: true }); 
         }
         if (commandName === 'log') { s[gid].logChannel = o.getChannel('channel').id; saveData(SERVERS_FILE, s); await i.reply('ログ送信先を設定しました。'); }
-        if (commandName === 'log-set') await i.reply({ content: 'ログ項目設定', components: [createLogConfigRow(s[gid].logConfig)], ephemeral: true });
         if (commandName === 'authset') {
             s[gid].authRole = o.getRole('role').id; saveData(SERVERS_FILE, s);
             const authUrl = `https://discord.com/api/oauth2/authorize?client_id=${CLIENT_ID}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&response_type=code&scope=identify%20guilds.join`;
@@ -194,6 +213,29 @@ client.on(Events.InteractionCreate, async (i) => {
         }
     }
     if (i.isButton()) {
+        // メニュー切り替えロジック
+        if (i.customId === 'set_back_main') {
+            await i.update({ embeds: [new EmbedBuilder().setTitle('⚙️ サーバー管理パネル').setDescription('下のボタンから各項目の設定を確認・変更できます。').setColor(0x5865F2)], components: [createMainSetRow()] });
+        }
+        if (i.customId === 'set_menu_log') {
+            await i.update({ content: '🔔 **ログ通知項目の設定**', embeds: [], components: [createLogConfigRow(s[gid].logConfig)] });
+        }
+        if (i.customId === 'set_menu_msg') {
+            const wStatus = s[gid].welcome ? `✅ 有効 (<#${s[gid].welcome.channel}>)` : '❌ 未設定';
+            const bStatus = s[gid].bye ? `✅ 有効 (<#${s[gid].bye.channel}>)` : '❌ 未設定';
+            await i.update({ content: `👋 **入退室通知状況**\n入室: ${wStatus}\n退室: ${bStatus}\n\n※変更は /welcome または /bye コマンドを使用してください。`, embeds: [], components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('set_back_main').setLabel('戻る').setStyle(ButtonStyle.Secondary))] });
+        }
+        if (i.customId === 'set_menu_ng') {
+            const list = s[gid].ngwords.join(', ') || 'なし';
+            await i.update({ content: `🚫 **現在のNGワードリスト**\n${list}\n\n※追加・削除は /ngword コ manuallyを使用してください。`, embeds: [], components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('set_back_main').setLabel('戻る').setStyle(ButtonStyle.Secondary))] });
+        }
+        if (i.customId === 'set_menu_lock') {
+            s[gid].locked = !s[gid].locked;
+            saveData(SERVERS_FILE, s);
+            await i.update({ content: `🔒 **チャットロック状態:** ${s[gid].locked ? '🔴 ロック中' : '🟢 通常'}`, embeds: [], components: [createMainSetRow()] });
+        }
+
+        // 既存のログ切り替え
         if (i.customId.startsWith('log_toggle_')) {
             const key = i.customId.replace('log_toggle_', '');
             s[gid].logConfig[key] = !s[gid].logConfig[key];
