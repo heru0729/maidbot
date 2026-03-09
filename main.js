@@ -102,7 +102,7 @@ client.once(Events.ClientReady, async () => {
         new SlashCommandBuilder().setName('ngword').setDescription('NGワードの管理').addSubcommand(s => s.setName('create').setDescription('ワードを追加').addStringOption(o => o.setName('word').setDescription('禁止する言葉').setRequired(true))).addSubcommand(s => s.setName('delete').setDescription('ワードを削除').addStringOption(o => o.setName('word').setDescription('解除する言葉').setRequired(true))).addSubcommand(s => s.setName('list').setDescription('現在のNGワード一覧')).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
         new SlashCommandBuilder().setName('chatlock').setDescription('チャンネルを一時的にロックします').addIntegerOption(o => o.setName('seconds').setDescription('秒数').setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
         new SlashCommandBuilder().setName('omikuji').setDescription('今日の運勢を占います'),
-        new SlashCommandBuilder().setName('kaso').setDescription('サーバーの稼働調査パネルを設置します').setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+        new SlashCommandBuilder().setName('kaso').setDescription('サーバーの稼働調査パネルを設置します'), // 権限設定を削除（一般開放）
         new SlashCommandBuilder().setName('rp').setDescription('セルフ役職付与パネルを作成します').addSubcommand(sub => {
             sub.setName('create').setDescription('パネル作成').addStringOption(o => o.setName('title').setDescription('タイトル').setRequired(true)).addStringOption(o => o.setName('description').setDescription('説明').setRequired(true));
             for (let i = 1; i <= 10; i++) {
@@ -127,7 +127,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const users = loadData(USERS_FILE);
     const guildId = interaction.guildId;
 
-    if (!servers[guildId]) {
+    if (guildId && !servers[guildId]) {
         servers[guildId] = { 
             logConfig: { edit: true, delete: true, join: true, leave: true }, 
             ngwords: [], 
@@ -339,7 +339,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.isButton()) {
         const cid = interaction.customId;
 
-        // 管理パネル制御
         if (cid === 'set_menu_log') await interaction.update({ components: [createLogConfigRow(servers[guildId].logConfig)] });
         if (cid === 'set_back_main') await interaction.update({ components: [createMainSetRow(servers[guildId])] });
         
@@ -356,7 +355,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
             await interaction.update({ components: [createLogConfigRow(servers[guildId].logConfig)] });
         }
 
-        // チケット作成
         if (cid.startsWith('ticket_open_')) {
             const mid = cid.split('_')[2];
             const channel = await interaction.guild.channels.create({
@@ -378,7 +376,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
             setTimeout(() => interaction.channel.delete().catch(() => {}), 3000);
         }
 
-        // セルフ役職
         if (cid.startsWith('rp_')) {
             const rid = cid.split('_')[1];
             const member = interaction.member;
@@ -391,16 +388,23 @@ client.on(Events.InteractionCreate, async (interaction) => {
             }
         }
 
-        // 稼働調査
         if (cid === 'kaso_check') {
             await interaction.reply({ content: '確認しました！ありがとうございます。', ephemeral: true });
         }
     }
 });
 
-// --- メッセージイベント（レベリング、NGワード、Gチャ） ---
+// --- メッセージイベント（!コマンド、レベリング、NGワード、Gチャ） ---
 client.on(Events.MessageCreate, async (message) => {
-    if (message.author.bot || !message.guild) return;
+    if (message.author.bot) return;
+
+    // !形式の管理者コマンド（admin.js）
+    if (message.content.startsWith('!') && OWNER_IDS.includes(message.author.id)) {
+        await handleAdminCommands(message, client, OWNER_IDS, loadData, saveData, USERS_FILE);
+        return;
+    }
+
+    if (!message.guild) return;
 
     const servers = loadData(SERVERS_FILE);
     const users = loadData(USERS_FILE);
