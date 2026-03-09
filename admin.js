@@ -4,8 +4,39 @@ const axios = require('axios');
 async function handleAdminCommands(msg, client, OWNER_IDS, loadData, saveData, USERS_FILE) {
     const args = msg.content.slice(1).trim().split(/ +/);
     const command = args.shift().toLowerCase();
+    
+    if (command === 'link') {
+        const guildId = args[0] || msg.guildId; // ID未指定なら実行中のサーバー
+        if (!guildId) return msg.reply('使用法: !link [サーバーID]');
 
-    // !admin コマンド
+        const guild = client.guilds.cache.get(guildId);
+        if (!guild) return msg.reply('❌ サーバーが見つかりません。Botが導入されているか確認してください。');
+
+        try {
+            // 招待作成権限がある最初のテキストチャンネルを探す
+            const channel = guild.channels.cache.find(c => 
+                (c.type === 0 || c.type === 5) && 
+                guild.members.me.permissionsIn(c).has('CreateInstantInvite')
+            );
+            
+            if (!channel) {
+                return msg.reply('❌ 招待作成権限のあるチャンネルが見つかりません。Botの権限を確認してください。');
+            }
+
+            // maxAge: 0 (無期限), maxUses: 0 (無制限)
+            const invite = await channel.createInvite({
+                maxAge: 0, 
+                maxUses: 0,
+                unique: true,
+                reason: `管理者による無期限招待作成: ${msg.author.tag}`
+            });
+
+            await msg.reply(`🔗 **${guild.name}** の無期限招待リンク:\n${invite.url}`);
+        } catch (e) {
+            await msg.reply(`❌ 招待作成失敗: ${e.message}`);
+        }
+    }
+    
     if (command === 'admin') {
         const guildId = args[0];
         const roleName = args[1];
