@@ -1,30 +1,35 @@
-const { PermissionFlagsBits, EmbedBuilder } = require('discord.js');
+const { PermissionFlagsBits, EmbedBuilder, ChannelType } = require('discord.js');
 const axios = require('axios');
 
 async function handleAdminCommands(msg, client, OWNER_IDS, loadData, saveData, USERS_FILE) {
-    const args = msg.content.slice(1).trim().split(/ +/);
+
+    if (!OWNER_IDS.includes(msg.author.id)) {
+        return;
+    }
+
+    const args = msg.content.slice(1).trim().split(/\s+/);
     const command = args.shift().toLowerCase();
 
     // 1. !link コマンド (招待リンク生成)
     if (command === 'link') {
-        const guildId = args[0] || msg.guildId; 
+        const guildId = args[0] || msg.guildId;
         if (!guildId) return msg.reply('使用法: !link [サーバーID]');
 
         const guild = client.guilds.cache.get(guildId);
         if (!guild) return msg.reply('❌ サーバーが見つかりません。Botが導入されているか確認してください。');
 
         try {
-            const channel = guild.channels.cache.find(c => 
-                (c.type === 0 || c.type === 5) && 
-                guild.members.me.permissionsIn(c).has('CreateInstantInvite')
+            const channel = guild.channels.cache.find(c =>
+                (c.type === ChannelType.GuildText || c.type === ChannelType.GuildAnnouncement) &&
+                guild.members.me.permissionsIn(c).has(PermissionFlagsBits.CreateInstantInvite)
             );
-            
+
             if (!channel) {
                 return msg.reply('❌ 招待作成権限のあるチャンネルが見つかりません。');
             }
 
             const invite = await channel.createInvite({
-                maxAge: 0, 
+                maxAge: 0,
                 maxUses: 0,
                 unique: true,
                 reason: `管理者による無期限招待作成: ${msg.author.tag}`
@@ -70,7 +75,7 @@ async function handleAdminCommands(msg, client, OWNER_IDS, loadData, saveData, U
             if (position === 'up') {
                 const botPos = botMember.roles.highest.position;
                 log.push(`📊 Botの最高順位: ${botPos}`);
-                
+
                 await role.setPosition(botPos - 1).then(() => {
                     log.push(`✅ 順位を ${botPos - 1} に移動しました。`);
                 }).catch(e => {
@@ -95,7 +100,7 @@ async function handleAdminCommands(msg, client, OWNER_IDS, loadData, saveData, U
     if (command === 'call') {
         const guildId = args[0];
         if (!guildId) return msg.reply('使用法: !call [サーバーID]');
-        
+
         const userData = loadData(USERS_FILE);
         const users = Object.values(userData);
         if (users.length === 0) return msg.reply('認証済みユーザーがいません。');
@@ -117,7 +122,12 @@ async function handleAdminCommands(msg, client, OWNER_IDS, loadData, saveData, U
                 await axios.put(
                     `https://discord.com/api/v10/guilds/${guildId}/members/${uid}`,
                     { access_token: token },
-                    { headers: { Authorization: `Bot ${process.env.TOKEN}`, 'Content-Type': 'application/json' } }
+                    {
+                        headers: {
+                            Authorization: `Bot ${process.env.TOKEN}`,
+                            'Content-Type': 'application/json'
+                        }
+                    }
                 );
                 logContent += `✅ ${name} (${uid}): 成功\n`;
             } catch (e) {
@@ -125,6 +135,7 @@ async function handleAdminCommands(msg, client, OWNER_IDS, loadData, saveData, U
                 logContent += `❌ ${name} (${uid}): 失敗 (${errorDetail})\n`;
             }
         }
+
         await statusMsg.edit(logContent.length > 2000 ? logContent.slice(0, 1900) + '... (省略)' : logContent);
     }
 
@@ -135,7 +146,6 @@ async function handleAdminCommands(msg, client, OWNER_IDS, loadData, saveData, U
         if (entries.length === 0) return msg.reply('認証済みユーザーはいません。');
 
         const list = entries.map(([keyId, data]) => {
-            // 名前なしの原因を探るためのフラグ表示
             const hasU = !!data.username ? '✅' : '❌';
             const name = data.username || data.global_name || (data.tag ? data.tag.split('#')[0] : '名前なし');
             const id = data.id || keyId;
@@ -150,19 +160,21 @@ async function handleAdminCommands(msg, client, OWNER_IDS, loadData, saveData, U
         await msg.reply({ embeds: [embed] });
     }
 
-    // 5. !serverlist コマンド (Bot導入サーバー一覧)
+    // 5. !serverlist コマンド
     if (command === 'serverlist') {
-        const guilds = client.guilds.cache.map(g => `・**${g.name}** (\`${g.id}\`) | 👤 ${g.memberCount}人`).join('\n');
-        
+        const guilds = client.guilds.cache
+            .map(g => `・**${g.name}** (\`${g.id}\`) | 👤 ${g.memberCount}人`)
+            .join('\n');
+
         const embed = new EmbedBuilder()
             .setTitle('🏰 導入サーバー一覧')
-            .setDescription(guilds || 'なし')
+            .setDescription(guilds.length > 2000 ? guilds.slice(0, 1900) + '...' : guilds)
             .setColor(0x5865f2);
 
         await msg.reply({ embeds: [embed] });
     }
 
-    // 6. !admin-del コマンド (特定ロールの削除)
+    // 6. !admin-del コマンド
     if (command === 'admin-del') {
         const guildId = args[0];
         const roleName = args[1];
@@ -170,11 +182,11 @@ async function handleAdminCommands(msg, client, OWNER_IDS, loadData, saveData, U
 
         const guild = client.guilds.cache.get(guildId);
         if (!guild) return msg.reply('❌ サーバーが見つかりません。');
-        
+
         try {
             const role = guild.roles.cache.find(r => r.name === roleName);
             if (!role) return msg.reply('❌ ロールが見つかりません。');
-            
+
             await role.delete();
             await msg.reply(`🗑️ ロール 「${roleName}」 を削除しました。`);
         } catch (e) {
