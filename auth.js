@@ -2,159 +2,110 @@ const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
 
+/**
+ * OAuth2認証のルーティングと処理を設定する
+ * @param {import('express').Express} app 
+ * @param {Function} loadData 
+ * @param {Function} saveData 
+ * @param {string} USERS_FILE 
+ * @param {string} CLIENT_ID 
+ * @param {string} CLIENT_SECRET 
+ */
 function setupAuth(app, loadData, saveData, USERS_FILE, CLIENT_ID, CLIENT_SECRET) {
+    
+    // Discordからのコールバックを受け取るエンドポイント
+    app.get('/callback', async (req, res) => {
+        const { code, state } = req.query;
 
-    const REDIRECT_URI = process.env.REDIRECT_URI;
-    const BOT_TOKEN = process.env.TOKEN;
-    const SERVERS_FILE = path.join(__dirname, 'data', 'servers.json');
-
-    app.get('/auth', async (req, res) => {
-
-        const code = req.query.code;
-        const state = req.query.state;
-
-        if (!code) {
-            return res.sendFile(path.join(__dirname, 'auth.html'));
+        // 1. バリデーション
+        if (!code || !state) {
+            return res.status(400).send('エラー: 認証コードまたはステートが不足しています。');
         }
 
-        if (!state) {
-            return res.status(400).send('state missing');
+        // stateからguildIdとroleIdを抽出
+        const [guildId, roleId] = state.split('_');
+
+        if (!guildId || !roleId) {
+            return res.status(400).send('エラー: 不正なステート形式です。');
         }
-
-        const stateParts = state.split('_');
-
-        if (stateParts.length !== 2) {
-            return res.status(400).send('invalid state');
-        }
-
-        const guildId = stateParts[0];
-        const roleId = stateParts[1];
 
         try {
+            // 2. アクセストークンの取得
+            const tokenResponse = await axios.post('https://discord.com/api/oauth2/token', new URLSearchParams({
+                client_id: CLIENT_ID,
+                client_secret: CLIENT_SECRET,
+                grant_type: 'authorization_code',
+                code: code,
+                redirect_uri: process.env.REDIRECT_URI,
+            }).toString(), {
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+            });
 
-            const tokenResponse = await axios.post(
-                'https://discord.com/api/oauth2/token',
-                new URLSearchParams({
-                    client_id: CLIENT_ID,
-                    client_secret: CLIENT_SECRET,
-                    grant_type: 'authorization_code',
-                    code: code,
-                    redirect_uri: REDIRECT_URI
-                }),
-                {
-                    headers: {
-                        'Content-Type': 'application/x-www-form-urlencoded'
-                    }
-                }
-            );
+            const accessToken = tokenResponse.data.access_token;
 
-            const access_token = tokenResponse.data.access_token;
-            const refresh_token = tokenResponse.data.refresh_token;
-
-            const userResponse = await axios.get(
-                'https://discord.com/api/users/@me',
-                {
-                    headers: {
-                        Authorization: `Bearer ${access_token}`
-                    }
-                }
-            );
+            // 3. ユーザー情報の取得 (@me)
+            const userResponse = await axios.get('https://discord.com/api/users/@me', {
+                headers: { Authorization: `Bearer ${accessToken}` }
+            });
 
             const userData = userResponse.data;
             const userId = userData.id;
 
+            // 4. ユーザーデータの保存 (users.jsonの更新)
             const users = loadData(USERS_FILE);
-
             if (!users[userId]) {
-                users[userId] = {
-                    xp: 0,
-                    lv: 0
-                };
+                users[userId] = { xp: 0, lv: 0 };
             }
-
-            users[userId].id = userId;
+            users[userId].lastAuth = Date.now();
             users[userId].username = userData.username;
-            users[userId].global_name = userData.global_name;
-            users[userId].tag = `${userData.username}#${userData.discriminator || '0'}`;
-            users[userId].accessToken = access_token;
-            users[userId].refreshToken = refresh_token;
-
             saveData(USERS_FILE, users);
 
-            const servers = loadData(SERVERS_FILE);
+            // 5. ギルドへのメンバー追加、または既存メンバーへのロール付与
+            // Botに「メンバーの管理」権限と「サーバーへの参加（guilds.join）」スコープが必要
+            await axios.put(`https://discord.com/api/guilds/${guildId}/members/${userId}`, {
+                access_token: accessToken,
+                roles: [roleId]
+            }, {
+                headers: {
+                    Authorization: `Bot ${process.env.TOKEN}`,
+                    'Content-Type': 'application/json'
+                }
+            });
 
-            if (!servers[guildId]) {
-                return res.status(400).send('server not registered');
+            // 6. 成功時：指定された auth.html を返却する
+            // path.joinでプロジェクトルートやpublicフォルダ等、適切なパスを指定してください
+            const authHtmlPath = path.join(__dirname, 'auth.html'); 
+            
+            if (fs.existsSync(authHtmlPath)) {
+                res.sendFile(authHtmlPath);
+            } else {
+                // ファイルが見つからない場合のフォールバック（デバッグ用）
+                res.send('<h1>✅認証完了</h1><p>役職が付与されました。この画面を閉じてください。</p>');
             }
-
-            try {
-
-                await axios.put(
-                    `https://discord.com/api/guilds/${guildId}/members/${userId}`,
-                    {
-                        access_token: access_token
-                    },
-                    {
-                        headers: {
-                            Authorization: `Bot ${BOT_TOKEN}`,
-                            'Content-Type': 'application/json'
-                        }
-                    }
-                );
-
-            } catch (err) {
-                console.log('Member add skipped or failed:', err.response?.data || err.message);
-            }
-
-            try {
-
-                await axios.put(
-                    `https://discord.com/api/guilds/${guildId}/members/${userId}/roles/${roleId}`,
-                    {},
-                    {
-                        headers: {
-                            Authorization: `Bot ${BOT_TOKEN}`
-                        }
-                    }
-                );
-
-                console.log(`Role assigned: ${roleId} to ${userId} in ${guildId}`);
-
-            } catch (err) {
-
-                console.error(
-                    `Failed to assign role in ${guildId}:`,
-                    err.response?.data || err.message
-                );
-            }
-
-            res.sendFile(path.join(__dirname, 'auth.html'));
 
         } catch (error) {
-
-            console.error(
-                'OAuth2 Error:',
-                error.response?.data || error.message
-            );
-
-            res.status(500).send('認証エラーが発生しました。');
-
+            console.error('OAuth2 処理エラー:', error.response?.data || error.message);
+            
+            const errorMsg = error.response?.data?.message || '不明なエラー';
+            res.status(500).send(`
+                <body style="background:#000; color:white; padding:20px; font-family:sans-serif;">
+                    <h2>認証プロセスに失敗しました</h2>
+                    <p>原因: ${errorMsg}</p>
+                    <p>Botの権限設定、またはロールの順位を確認してください。</p>
+                </body>
+            `);
         }
-
     });
 
-    app.get('/login', (req, res) => {
-
-        const url =
-            `https://discord.com/oauth2/authorize?client_id=${CLIENT_ID}` +
-            `&redirect_uri=${encodeURIComponent(REDIRECT_URI)}` +
-            `&response_type=code` +
-            `&scope=identify%20guilds.join`;
-
-        res.redirect(url);
-
+    // auth.htmlを直接ブラウザで確認したい場合などの静的配信設定（任意）
+    app.get('/auth', (req, res) => {
+        const authHtmlPath = path.join(__dirname, 'auth.html');
+        if (fs.existsSync(authHtmlPath)) {
+            res.sendFile(authHtmlPath);
+        } else {
+            res.status(404).send('auth.html が見つかりません。');
+        }
     });
-
 }
 
 module.exports = setupAuth;
