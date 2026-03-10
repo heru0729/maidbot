@@ -27,6 +27,7 @@ function saveData(f, d) { fs.writeFileSync(f, JSON.stringify(d, null, 4)); }
 const getNextLevelXP = (lv) => (lv + 1) * 500;
 const xpCooldowns = new Map();
 const messageHistory = new Map();
+const ngwordViolations = new Map();
 
 function replacePlaceholders(t, m) {
     if (!t) return "";
@@ -116,6 +117,27 @@ function createLogConfigRow(c) {
     );
 }
 
+function buildNgwordPanel(s) {
+    const conf = s;
+    const list = conf.ngwords?.length > 0 ? conf.ngwords.map(w => `\`${w}\``).join('、') : 'なし';
+    const exemptRoles = conf.ngwordExemptRoles?.length > 0 ? conf.ngwordExemptRoles.map(r => `<@&${r}>`).join('、') : 'なし';
+    const timeoutSec = conf.ngwordTimeoutSeconds || 0;
+    const violationLimit = conf.ngwordViolationLimit || 3;
+    const content = `🚫 **NGワード管理**\n\nNGワード: ${list}\n除外ロール: ${exemptRoles}\n連呼罰則: ${violationLimit}回でタイムアウト ${timeoutSec}秒`;
+    const row1 = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('ngword_add').setLabel('ワード追加').setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId('ngword_del').setLabel('ワード削除').setStyle(ButtonStyle.Danger),
+        new ButtonBuilder().setCustomId('ngword_exempt_add').setLabel('除外ロール追加').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId('ngword_exempt_del').setLabel('除外ロール削除').setStyle(ButtonStyle.Secondary)
+    );
+    const row2 = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('ngword_timeout_set').setLabel('タイムアウト秒数設定').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId('ngword_violation_set').setLabel('連呼回数設定').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId('set_back_main').setLabel('戻る').setStyle(ButtonStyle.Secondary)
+    );
+    return { content, components: [row1, row2] };
+}
+
 function buildSetPanel(s) {
     return { content: '⚙️ **サーバー管理設定パネル**\n下のボタンから各機能の設定を行ってください。', components: [createMainSetRow(s), createMainSetRow2()], ephemeral: true };
 }
@@ -128,6 +150,7 @@ client.once(Events.ClientReady, async () => {
     const commands = [
         new SlashCommandBuilder().setName('help').setDescription('ボットのコマンド一覧を表示します'),
         new SlashCommandBuilder().setName('set').setDescription('サーバー管理用設定パネルを開きます').setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+        new SlashCommandBuilder().setName('support').setDescription('サポートサーバーの招待リンクを表示します'),
         new SlashCommandBuilder().setName('rank').setDescription('現在のレベルとXPを確認します').addUserOption(o => o.setName('user').setDescription('確認したいユーザー')),
         new SlashCommandBuilder().setName('ranking').setDescription('レベルランキングを表示します').addIntegerOption(o => o.setName('page').setDescription('ページ番号')),
         new SlashCommandBuilder().setName('serverinfo').setDescription('現在のサーバーの詳細情報を表示します'),
@@ -163,11 +186,15 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const guildId = interaction.guildId;
 
     if (guildId && !servers[guildId]) {
-        servers[guildId] = { logConfig: { edit: true, delete: true, join: true, leave: true }, ngwords: [], locked: false, kasoIgnoreChannels: [], leveling: true };
+        servers[guildId] = { logConfig: { edit: true, delete: true, join: true, leave: true }, ngwords: [], ngwordExemptRoles: [], ngwordTimeoutSeconds: 60, ngwordViolationLimit: 3, locked: false, kasoIgnoreChannels: [], leveling: true };
     }
 
     if (interaction.isChatInputCommand()) {
         const { commandName, options } = interaction;
+
+        if (commandName === 'support') {
+            await interaction.reply({ content: 'サポートサーバーはこちら: https://discord.gg/ntdWV5EWT3', ephemeral: true });
+        }
 
         if (commandName === 'set') {
             await interaction.reply(buildSetPanel(servers[guildId]));
@@ -175,21 +202,27 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         if (commandName === 'rank') {
             const target = options.getUser('user') || interaction.user;
-            const data = users[target.id] || { xp: 0, lv: 0 };
-            const next = getNextLevelXP(data.lv);
-            const sorted = Object.entries(users).sort((a, b) => b[1].xp - a[1].xp);
+            const raw = users[target.id] || {};
+            const xp = typeof raw.xp === 'number' ? raw.xp : 0;
+            const lv = typeof raw.lv === 'number' ? raw.lv : 0;
+            const next = getNextLevelXP(lv);
+            const sorted = Object.entries(users)
+                .filter(([, v]) => typeof v.xp === 'number')
+                .sort((a, b) => b[1].xp - a[1].xp);
             const rank = sorted.findIndex(e => e[0] === target.id) + 1;
             const embed = new EmbedBuilder().setTitle(`📊 ${target.username} のステータス`).setThumbnail(target.displayAvatarURL()).addFields(
-                { name: '現在のレベル', value: `Lv.${data.lv}`, inline: true },
-                { name: '現在のXP', value: `${data.xp} / ${next}`, inline: true },
-                { name: '世界ランキング', value: `${rank || '--'}位`, inline: true }
+                { name: '現在のレベル', value: `Lv.${lv}`, inline: true },
+                { name: '現在のXP', value: `${xp} / ${next}`, inline: true },
+                { name: '世界ランキング', value: rank > 0 ? `${rank}位` : '--', inline: true }
             ).setColor(0x2ecc71);
             await interaction.reply({ embeds: [embed] });
         }
 
         if (commandName === 'ranking') {
             const page = options.getInteger('page') || 1;
-            const sorted = Object.entries(users).sort((a, b) => b[1].xp - a[1].xp);
+            const sorted = Object.entries(users)
+                .filter(([, v]) => typeof v.xp === 'number')
+                .sort((a, b) => b[1].xp - a[1].xp);
             const start = (page - 1) * 20;
             const current = sorted.slice(start, start + 20);
             if (current.length === 0) return interaction.reply('該当するデータがありません。');
@@ -342,6 +375,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (cid === 'modal_ngword_add') {
             const word = interaction.fields.getTextInputValue('ngword_input').trim();
             if (!word) return interaction.reply({ content: '❌ ワードを入力してください。', ephemeral: true });
+            if (!servers[guildId].ngwords) servers[guildId].ngwords = [];
             if (!servers[guildId].ngwords.includes(word)) {
                 servers[guildId].ngwords.push(word);
                 saveData(SERVERS_FILE, servers);
@@ -353,13 +387,81 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         if (cid === 'modal_ngword_del') {
             const word = interaction.fields.getTextInputValue('ngword_del_input').trim();
-            const before = servers[guildId].ngwords.length;
-            servers[guildId].ngwords = servers[guildId].ngwords.filter(w => w !== word);
+            const before = servers[guildId].ngwords?.length || 0;
+            servers[guildId].ngwords = (servers[guildId].ngwords || []).filter(w => w !== word);
             saveData(SERVERS_FILE, servers);
-            if (servers[guildId].ngwords.length < before) {
+            if ((servers[guildId].ngwords?.length || 0) < before) {
                 await interaction.reply({ content: `✅ 「${word}」をNGワードから削除しました。`, ephemeral: true });
             } else {
                 await interaction.reply({ content: '⚠️ そのワードは登録されていません。', ephemeral: true });
+            }
+        }
+
+        if (cid === 'modal_ngword_exempt_add') {
+            const roleId = interaction.fields.getTextInputValue('exempt_role_id').trim();
+            const role = interaction.guild.roles.cache.get(roleId);
+            if (!role) return interaction.reply({ content: '❌ ロールIDが見つかりません。', ephemeral: true });
+            if (!servers[guildId].ngwordExemptRoles) servers[guildId].ngwordExemptRoles = [];
+            if (!servers[guildId].ngwordExemptRoles.includes(roleId)) {
+                servers[guildId].ngwordExemptRoles.push(roleId);
+                saveData(SERVERS_FILE, servers);
+                await interaction.reply({ content: `✅ ${role} を除外ロールに追加しました。`, ephemeral: true });
+            } else {
+                await interaction.reply({ content: '⚠️ 既に登録されています。', ephemeral: true });
+            }
+        }
+
+        if (cid === 'modal_ngword_exempt_del') {
+            const roleId = interaction.fields.getTextInputValue('exempt_role_del_id').trim();
+            const before = servers[guildId].ngwordExemptRoles?.length || 0;
+            servers[guildId].ngwordExemptRoles = (servers[guildId].ngwordExemptRoles || []).filter(r => r !== roleId);
+            saveData(SERVERS_FILE, servers);
+            if ((servers[guildId].ngwordExemptRoles?.length || 0) < before) {
+                await interaction.reply({ content: `✅ <@&${roleId}> を除外ロールから削除しました。`, ephemeral: true });
+            } else {
+                await interaction.reply({ content: '⚠️ そのロールは登録されていません。', ephemeral: true });
+            }
+        }
+
+        if (cid === 'modal_ngword_timeout') {
+            const sec = parseInt(interaction.fields.getTextInputValue('timeout_seconds').trim());
+            if (isNaN(sec) || sec < 0) return interaction.reply({ content: '❌ 正しい秒数を入力してください。', ephemeral: true });
+            servers[guildId].ngwordTimeoutSeconds = sec;
+            saveData(SERVERS_FILE, servers);
+            await interaction.reply({ content: `✅ タイムアウト秒数を ${sec}秒 に設定しました。`, ephemeral: true });
+        }
+
+        if (cid === 'modal_ngword_violation') {
+            const count = parseInt(interaction.fields.getTextInputValue('violation_count').trim());
+            if (isNaN(count) || count < 1) return interaction.reply({ content: '❌ 1以上の数値を入力してください。', ephemeral: true });
+            servers[guildId].ngwordViolationLimit = count;
+            saveData(SERVERS_FILE, servers);
+            await interaction.reply({ content: `✅ 連呼罰則を ${count}回 に設定しました。`, ephemeral: true });
+        }
+
+        if (cid === 'modal_kaso_exclude') {
+            const channelId = interaction.fields.getTextInputValue('kaso_exclude_channel_id').trim();
+            const channel = interaction.guild.channels.cache.get(channelId);
+            if (!channel) return interaction.reply({ content: '❌ チャンネルIDが見つかりません。', ephemeral: true });
+            if (!servers[guildId].kasoIgnoreChannels) servers[guildId].kasoIgnoreChannels = [];
+            if (!servers[guildId].kasoIgnoreChannels.includes(channelId)) {
+                servers[guildId].kasoIgnoreChannels.push(channelId);
+                saveData(SERVERS_FILE, servers);
+                await interaction.reply({ content: `✅ <#${channelId}> を調査除外チャンネルに追加しました。`, ephemeral: true });
+            } else {
+                await interaction.reply({ content: '⚠️ 既に登録されています。', ephemeral: true });
+            }
+        }
+
+        if (cid === 'modal_kaso_exclude_del') {
+            const channelId = interaction.fields.getTextInputValue('kaso_exclude_del_id').trim();
+            const before = servers[guildId].kasoIgnoreChannels?.length || 0;
+            servers[guildId].kasoIgnoreChannels = (servers[guildId].kasoIgnoreChannels || []).filter(c => c !== channelId);
+            saveData(SERVERS_FILE, servers);
+            if ((servers[guildId].kasoIgnoreChannels?.length || 0) < before) {
+                await interaction.reply({ content: `✅ <#${channelId}> を除外から削除しました。`, ephemeral: true });
+            } else {
+                await interaction.reply({ content: '⚠️ そのチャンネルは登録されていません。', ephemeral: true });
             }
         }
     }
@@ -410,13 +512,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
 
         if (cid === 'set_menu_ngword') {
-            const list = servers[guildId].ngwords.length > 0 ? servers[guildId].ngwords.map(w => `\`${w}\``).join('、') : 'なし';
-            const row = new ActionRowBuilder().addComponents(
-                new ButtonBuilder().setCustomId('ngword_add').setLabel('追加').setStyle(ButtonStyle.Success),
-                new ButtonBuilder().setCustomId('ngword_del').setLabel('削除').setStyle(ButtonStyle.Danger),
-                new ButtonBuilder().setCustomId('set_back_main').setLabel('戻る').setStyle(ButtonStyle.Secondary)
-            );
-            await interaction.update({ content: `🚫 **NGワード管理**\n\n現在のNGワード: ${list}`, components: [row] });
+            await interaction.update(buildNgwordPanel(servers[guildId]));
         }
 
         if (cid === 'ngword_add') {
@@ -428,6 +524,57 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (cid === 'ngword_del') {
             const modal = new ModalBuilder().setCustomId('modal_ngword_del').setTitle('NGワード削除');
             modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('ngword_del_input').setLabel('削除するワード').setStyle(TextInputStyle.Short).setRequired(true)));
+            await interaction.showModal(modal);
+        }
+
+        if (cid === 'ngword_exempt_add') {
+            const modal = new ModalBuilder().setCustomId('modal_ngword_exempt_add').setTitle('除外ロール追加');
+            modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('exempt_role_id').setLabel('除外するロールID').setStyle(TextInputStyle.Short).setPlaceholder('ロールIDを入力').setRequired(true)));
+            await interaction.showModal(modal);
+        }
+
+        if (cid === 'ngword_exempt_del') {
+            const modal = new ModalBuilder().setCustomId('modal_ngword_exempt_del').setTitle('除外ロール削除');
+            modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('exempt_role_del_id').setLabel('削除するロールID').setStyle(TextInputStyle.Short).setRequired(true)));
+            await interaction.showModal(modal);
+        }
+
+        if (cid === 'ngword_timeout_set') {
+            const modal = new ModalBuilder().setCustomId('modal_ngword_timeout').setTitle('タイムアウト秒数設定');
+            const input = new TextInputBuilder().setCustomId('timeout_seconds').setLabel('秒数 (0=タイムアウトなし)').setStyle(TextInputStyle.Short).setPlaceholder('例: 300').setRequired(true);
+            if (servers[guildId].ngwordTimeoutSeconds != null) input.setValue(String(servers[guildId].ngwordTimeoutSeconds));
+            modal.addComponents(new ActionRowBuilder().addComponents(input));
+            await interaction.showModal(modal);
+        }
+
+        if (cid === 'ngword_violation_set') {
+            const modal = new ModalBuilder().setCustomId('modal_ngword_violation').setTitle('連呼罰則回数設定');
+            const input = new TextInputBuilder().setCustomId('violation_count').setLabel('何回でタイムアウトするか').setStyle(TextInputStyle.Short).setPlaceholder('例: 3').setRequired(true);
+            if (servers[guildId].ngwordViolationLimit != null) input.setValue(String(servers[guildId].ngwordViolationLimit));
+            modal.addComponents(new ActionRowBuilder().addComponents(input));
+            await interaction.showModal(modal);
+        }
+
+        if (cid === 'set_menu_kaso') {
+            const ignored = servers[guildId].kasoIgnoreChannels || [];
+            const list = ignored.length > 0 ? ignored.map(c => `<#${c}>`).join('、') : 'なし';
+            const row = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('kaso_exclude_add').setLabel('除外チャンネル追加').setStyle(ButtonStyle.Primary),
+                new ButtonBuilder().setCustomId('kaso_exclude_del').setLabel('除外チャンネル削除').setStyle(ButtonStyle.Danger),
+                new ButtonBuilder().setCustomId('set_back_main').setLabel('戻る').setStyle(ButtonStyle.Secondary)
+            );
+            await interaction.update({ content: `📊 **調査除外設定**\n\n現在の除外チャンネル: ${list}\n※チケットチャンネル（ticket-）は自動除外されます`, components: [row] });
+        }
+
+        if (cid === 'kaso_exclude_add') {
+            const modal = new ModalBuilder().setCustomId('modal_kaso_exclude').setTitle('除外チャンネル追加');
+            modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('kaso_exclude_channel_id').setLabel('除外するチャンネルID').setStyle(TextInputStyle.Short).setPlaceholder('チャンネルIDを入力').setRequired(true)));
+            await interaction.showModal(modal);
+        }
+
+        if (cid === 'kaso_exclude_del') {
+            const modal = new ModalBuilder().setCustomId('modal_kaso_exclude_del').setTitle('除外チャンネル削除');
+            modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('kaso_exclude_del_id').setLabel('削除するチャンネルID').setStyle(TextInputStyle.Short).setRequired(true)));
             await interaction.showModal(modal);
         }
 
@@ -476,17 +623,48 @@ client.on(Events.MessageCreate, async (message) => {
     const servers = loadData(SERVERS_FILE);
     const users = loadData(USERS_FILE);
     const gid = message.guildId;
-    recordMessage(gid, message.channelId, message.author.id);
-    if (servers[gid]?.ngwords?.length > 0 && containsNgWord(message.content, servers[gid].ngwords)) {
-        await message.delete().catch(() => {});
-        return message.channel.send(`<@${message.author.id}> 不適切な言葉が含まれていたため削除しました。`).then(m => setTimeout(() => m.delete().catch(() => {}), 3000));
+
+    // チケットチャンネルは自動除外してkaso記録
+    const isTicketChannel = message.channel.name?.startsWith('ticket-');
+    if (!isTicketChannel) {
+        recordMessage(gid, message.channelId, message.author.id);
     }
+
+    // NGワード判定
+    if (servers[gid]?.ngwords?.length > 0) {
+        const exemptRoles = servers[gid].ngwordExemptRoles || [];
+        const memberRoles = message.member?.roles?.cache;
+        const isExempt = exemptRoles.some(rid => memberRoles?.has(rid));
+        if (!isExempt && containsNgWord(message.content, servers[gid].ngwords)) {
+            await message.delete().catch(() => {});
+            const violationKey = `${gid}_${message.author.id}`;
+            const now = Date.now();
+            const violations = ngwordViolations.get(violationKey) || { count: 0, resetAt: now + 60000 };
+            if (now > violations.resetAt) { violations.count = 0; violations.resetAt = now + 60000; }
+            violations.count++;
+            ngwordViolations.set(violationKey, violations);
+
+            const limit = servers[gid].ngwordViolationLimit || 3;
+            const timeoutSec = servers[gid].ngwordTimeoutSeconds || 60;
+
+            if (violations.count >= limit && timeoutSec > 0) {
+                ngwordViolations.delete(violationKey);
+                await message.member.timeout(timeoutSec * 1000, 'NGワード連呼').catch(() => {});
+                return message.channel.send(`<@${message.author.id}> NGワードを連呼したため ${timeoutSec}秒 タイムアウトしました。`).then(m => setTimeout(() => m.delete().catch(() => {}), 5000));
+            }
+            return message.channel.send(`<@${message.author.id}> 不適切な言葉が含まれていたため削除しました。(${violations.count}/${limit}回)`).then(m => setTimeout(() => m.delete().catch(() => {}), 3000));
+        }
+    }
+
+    // レベリング（30秒クールダウン）
     if (servers[gid]?.leveling !== false) {
         const cooldownKey = `${gid}_${message.author.id}`;
         const now = Date.now();
         if (now - (xpCooldowns.get(cooldownKey) || 0) >= 30000) {
             xpCooldowns.set(cooldownKey, now);
             if (!users[message.author.id]) users[message.author.id] = { xp: 0, lv: 0 };
+            if (typeof users[message.author.id].xp !== 'number') users[message.author.id].xp = 0;
+            if (typeof users[message.author.id].lv !== 'number') users[message.author.id].lv = 0;
             users[message.author.id].xp += 15;
             if (users[message.author.id].xp >= getNextLevelXP(users[message.author.id].lv)) {
                 users[message.author.id].lv++;
@@ -495,6 +673,8 @@ client.on(Events.MessageCreate, async (message) => {
             saveData(USERS_FILE, users);
         }
     }
+
+    // グローバルチャット
     if (servers[gid]?.gChatChannel === message.channelId) {
         const embed = new EmbedBuilder().setAuthor({ name: `${message.author.tag} (${message.guild.name})`, iconURL: message.author.displayAvatarURL() }).setDescription(message.content || ' ').setColor(0x00ff00).setTimestamp();
         if (message.attachments.size > 0) embed.setImage(message.attachments.first().url);
