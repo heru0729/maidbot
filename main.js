@@ -1,4 +1,5 @@
-const { Client, GatewayIntentBits, Partials, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, SlashCommandBuilder, REST, Routes, Events, ChannelType, PermissionFlagsBits, Collection } = require('discord.js');
+const { Client, GatewayIntentBits, Partials, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, SlashCommandBuilder, REST, Routes, Events, ChannelType, PermissionFlagsBits, StringSelectMenuBuilder, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
+
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
@@ -8,18 +9,18 @@ const handleAdminCommands = require('./admin.js');
 const app = express();
 const client = new Client({
     intents: [
-        GatewayIntentBits.Guilds, 
-        GatewayIntentBits.GuildMessages, 
-        GatewayIntentBits.MessageContent, 
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.MessageContent,
         GatewayIntentBits.GuildMembers
     ],
     partials: [Partials.Channel, Partials.Message]
 });
 
 // 環境変数とファイルパス
-const TOKEN = process.env.TOKEN; 
+const TOKEN = process.env.TOKEN;
 const OWNER_IDS = process.env.OWNER_ID ? process.env.OWNER_ID.split(',').map(id => id.trim()) : [];
-const CLIENT_ID = process.env.CLIENT_ID; 
+const CLIENT_ID = process.env.CLIENT_ID;
 const CLIENT_SECRET = process.env.CLIENT_SECRET;
 const REDIRECT_URI = process.env.REDIRECT_URI;
 
@@ -37,6 +38,9 @@ function saveData(f, d) {
 }
 
 const getNextLevelXP = (lv) => (lv + 1) * 500;
+
+// XPクールダウン管理 (30秒)
+const xpCooldowns = new Map();
 
 function replacePlaceholders(t, m) {
     if (!t) return "";
@@ -56,6 +60,93 @@ async function sendLog(guild, embed) {
     }
 }
 
+// --- NGワード正規化（規制回避対策） ---
+// 全角→半角、ひらがな↔カタカナ、繰り返し文字圧縮、ゼロ幅文字除去、記号除去
+function normalizeText(text) {
+    return text
+        // ゼロ幅文字・制御文字除去
+        .replace(/[\u200B-\u200D\uFEFF\u00AD\u034F\u2060-\u2064\u2066-\u206F]/g, '')
+        // 全角英数字→半角
+        .replace(/[Ａ-Ｚａ-ｚ０-９]/g, s => String.fromCharCode(s.charCodeAt(0) - 0xFEE0))
+        // 全角スペース→半角
+        .replace(/　/g, ' ')
+        // カタカナ→ひらがな
+        .replace(/[\u30A1-\u30F6]/g, s => String.fromCharCode(s.charCodeAt(0) - 0x60))
+        // 半角カタカナ→ひらがな（濁点結合を考慮した簡易変換）
+        .replace(/[ｦ-ﾟ]/g, s => {
+            const map = 'をぁぃぅぇぉゃゅょっーあいうえおかきくけこさしすせそたちつてとなにぬねのはひふへほまみむめもやゆよらりるれろわん゛゜';
+            const idx = s.charCodeAt(0) - 0xFF66;
+            return idx >= 0 && idx < map.length ? map[idx] : s;
+        })
+        // 記号・スペース・ドット・ハイフン等を除去
+        .replace(/[\s\-_\.・。、!！?？~〜ー\/\\|*#@$%^&()（）\[\]【】「」『』{}]/g, '')
+        // 繰り返し文字を1文字に圧縮（aaaa→a、ああああ→あ）
+        .replace(/(.)\1{2,}/g, '$1')
+        // 小文字化
+        .toLowerCase();
+}
+
+function containsNgWord(text, ngwords) {
+    const normalized = normalizeText(text);
+    for (const word of ngwords) {
+        const normalizedWord = normalizeText(word);
+        if (normalizedWord && normalized.includes(normalizedWord)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// --- メッセージ履歴キャッシュ（/kaso用） ---
+// guildId -> [{ channelId, authorId, timestamp }]
+const messageHistory = new Map();
+
+function recordMessage(guildId, channelId, authorId) {
+    if (!messageHistory.has(guildId)) messageHistory.set(guildId, []);
+    const arr = messageHistory.get(guildId);
+    arr.push({ channelId, authorId, timestamp: Date.now() });
+    // 1時間以上古いものを定期削除
+    const oneHourAgo = Date.now() - 60 * 60 * 1000;
+    while (arr.length > 0 && arr[0].timestamp < oneHourAgo) arr.shift();
+}
+
+function getHourlyStats(guildId, ignoredChannels = []) {
+    const arr = messageHistory.get(guildId) || [];
+    const oneHourAgo = Date.now() - 60 * 60 * 1000;
+    const recent = arr.filter(m => m.timestamp >= oneHourAgo && !ignoredChannels.includes(m.channelId));
+
+    const total = recent.length;
+
+    // ユーザー別カウント
+    const userCount = {};
+    for (const m of recent) {
+        userCount[m.authorId] = (userCount[m.authorId] || 0) + 1;
+    }
+    const topUsers = Object.entries(userCount).sort((a, b) => b[1] - a[1]).slice(0, 3);
+
+    // チャンネル別カウント
+    const channelCount = {};
+    for (const m of recent) {
+        channelCount[m.channelId] = (channelCount[m.channelId] || 0) + 1;
+    }
+    const topChannels = Object.entries(channelCount).sort((a, b) => b[1] - a[1]).slice(0, 3);
+
+    // 判定
+    let judgment, color;
+    if (total >= 50) {
+        judgment = '🔥 活発';
+        color = 0x00ff00;
+    } else if (total >= 10) {
+        judgment = '💬 普通';
+        color = 0xffff00;
+    } else {
+        judgment = '💤 過疎';
+        color = 0xff4444;
+    }
+
+    return { total, topUsers, topChannels, judgment, color };
+}
+
 // --- UIコンポーネント生成 ---
 function createMainSetRow(s) {
     return new ActionRowBuilder().addComponents(
@@ -63,6 +154,14 @@ function createMainSetRow(s) {
         new ButtonBuilder().setCustomId('set_menu_kaso').setLabel('調査除外設定').setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId('set_lv_toggle').setLabel(`レベル機能: ${s.leveling !== false ? 'ON' : 'OFF'}`).setStyle(s.leveling !== false ? ButtonStyle.Success : ButtonStyle.Danger),
         new ButtonBuilder().setCustomId('set_menu_lock').setLabel('一括ロック切替').setStyle(ButtonStyle.Danger)
+    );
+}
+
+function createMainSetRow2(s) {
+    return new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('set_menu_welcome').setLabel('入室通知設定').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId('set_menu_bye').setLabel('退室通知設定').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId('set_menu_ngword').setLabel('NGワード管理').setStyle(ButtonStyle.Danger)
     );
 }
 
@@ -76,6 +175,14 @@ function createLogConfigRow(c) {
     );
 }
 
+function buildSetPanelMessage(s) {
+    return {
+        content: '⚙️ **サーバー管理設定パネル**\n下のボタンから各機能の設定を行ってください。',
+        components: [createMainSetRow(s), createMainSetRow2(s)],
+        ephemeral: true
+    };
+}
+
 // Webサーバー & OAuth2 連携
 setupAuth(app, loadData, saveData, USERS_FILE, CLIENT_ID, CLIENT_SECRET);
 app.listen(process.env.PORT || 3000, '0.0.0.0', () => console.log('Web Server Ready'));
@@ -83,7 +190,7 @@ app.listen(process.env.PORT || 3000, '0.0.0.0', () => console.log('Web Server Re
 // --- コマンド登録 ---
 client.once(Events.ClientReady, async () => {
     console.log(`${client.user.tag} としてログインしました。`);
-    
+
     const commands = [
         new SlashCommandBuilder().setName('help').setDescription('ボットのコマンド一覧を表示します'),
         new SlashCommandBuilder().setName('set').setDescription('サーバー管理用設定パネルを開きます').setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
@@ -93,16 +200,13 @@ client.once(Events.ClientReady, async () => {
         new SlashCommandBuilder().setName('userinfo').setDescription('ユーザーの詳細情報を表示します').addUserOption(o => o.setName('user').setDescription('対象ユーザー')),
         new SlashCommandBuilder().setName('clear').setDescription('指定した件数のメッセージを削除します').addIntegerOption(o => o.setName('num').setDescription('件数 (1-100)').setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages),
         new SlashCommandBuilder().setName('log').setDescription('ログの送信先チャンネルを設定します').addChannelOption(o => o.setName('channel').setDescription('送信先').setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-        new SlashCommandBuilder().setName('welcome').setDescription('入室通知の設定をします').addChannelOption(o => o.setName('channel').setDescription('送信先').setRequired(true)).addStringOption(o => o.setName('message').setDescription('メッセージ内容').setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-        new SlashCommandBuilder().setName('bye').setDescription('退室通知の設定をします').addChannelOption(o => o.setName('channel').setDescription('送信先').setRequired(true)).addStringOption(o => o.setName('message').setDescription('メッセージ内容').setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
         new SlashCommandBuilder().setName('authset').setDescription('OAuth2認証用のパネルを設置します').addStringOption(o => o.setName('title').setDescription('埋め込みタイトル').setRequired(true)).addStringOption(o => o.setName('description').setDescription('埋め込み説明').setRequired(true)).addStringOption(o => o.setName('button').setDescription('ボタンのラベル').setRequired(true)).addRoleOption(o => o.setName('role').setDescription('認証後に付与するロール').setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
         new SlashCommandBuilder().setName('ticket').setDescription('問い合わせチケットパネルを作成します').addStringOption(o => o.setName('title').setDescription('タイトル').setRequired(true)).addStringOption(o => o.setName('description').setDescription('説明').setRequired(true)).addStringOption(o => o.setName('button').setDescription('ボタン名').setRequired(true)).addRoleOption(o => o.setName('mention-role').setDescription('通知先ロール').setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
         new SlashCommandBuilder().setName('gset').setDescription('グローバルチャットの送信先チャンネルを設定します').addChannelOption(o => o.setName('channel').setDescription('チャンネル').setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
         new SlashCommandBuilder().setName('gdel').setDescription('グローバルチャットの設定を解除します').setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-        new SlashCommandBuilder().setName('ngword').setDescription('NGワードの管理').addSubcommand(s => s.setName('create').setDescription('ワードを追加').addStringOption(o => o.setName('word').setDescription('禁止する言葉').setRequired(true))).addSubcommand(s => s.setName('delete').setDescription('ワードを削除').addStringOption(o => o.setName('word').setDescription('解除する言葉').setRequired(true))).addSubcommand(s => s.setName('list').setDescription('現在のNGワード一覧')).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
         new SlashCommandBuilder().setName('chatlock').setDescription('チャンネルを一時的にロックします').addIntegerOption(o => o.setName('seconds').setDescription('秒数').setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
         new SlashCommandBuilder().setName('omikuji').setDescription('今日の運勢を占います'),
-        new SlashCommandBuilder().setName('kaso').setDescription('サーバーの稼働調査パネルを設置します'), // 権限設定を削除（一般開放）
+        new SlashCommandBuilder().setName('kaso').setDescription('過去1時間のサーバー稼働調査を表示します'),
         new SlashCommandBuilder().setName('rp').setDescription('セルフ役職付与パネルを作成します').addSubcommand(sub => {
             sub.setName('create').setDescription('パネル作成').addStringOption(o => o.setName('title').setDescription('タイトル').setRequired(true)).addStringOption(o => o.setName('description').setDescription('説明').setRequired(true));
             for (let i = 1; i <= 10; i++) {
@@ -128,26 +232,25 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const guildId = interaction.guildId;
 
     if (guildId && !servers[guildId]) {
-        servers[guildId] = { 
-            logConfig: { edit: true, delete: true, join: true, leave: true }, 
-            ngwords: [], 
-            locked: false, 
-            kasoIgnoreChannels: [], 
-            leveling: true 
+        servers[guildId] = {
+            logConfig: { edit: true, delete: true, join: true, leave: true },
+            ngwords: [],
+            locked: false,
+            kasoIgnoreChannels: [],
+            leveling: true
         };
     }
 
+    // ==================== スラッシュコマンド ====================
     if (interaction.isChatInputCommand()) {
         const { commandName, options } = interaction;
 
+        // /set
         if (commandName === 'set') {
-            await interaction.reply({ 
-                content: '⚙️ **サーバー管理設定パネル**\n下のボタンから各機能の設定を行ってください。', 
-                components: [createMainSetRow(servers[guildId])], 
-                ephemeral: true 
-            });
+            await interaction.reply(buildSetPanelMessage(servers[guildId]));
         }
 
+        // /rank
         if (commandName === 'rank') {
             const target = options.getUser('user') || interaction.user;
             const data = users[target.id] || { xp: 0, lv: 0 };
@@ -166,6 +269,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
             await interaction.reply({ embeds: [embed] });
         }
 
+        // /ranking
         if (commandName === 'ranking') {
             const page = options.getInteger('page') || 1;
             const sorted = Object.entries(users).sort((a, b) => b[1].xp - a[1].xp);
@@ -183,6 +287,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
             await interaction.reply({ embeds: [embed] });
         }
 
+        // /serverinfo
         if (commandName === 'serverinfo') {
             const g = interaction.guild;
             const embed = new EmbedBuilder()
@@ -199,6 +304,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
             await interaction.reply({ embeds: [embed] });
         }
 
+        // /userinfo
         if (commandName === 'userinfo') {
             const user = options.getUser('user') || interaction.user;
             const member = await interaction.guild.members.fetch(user.id);
@@ -214,6 +320,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
             await interaction.reply({ embeds: [embed] });
         }
 
+        // /clear
         if (commandName === 'clear') {
             const num = options.getInteger('num');
             if (num < 1 || num > 100) return interaction.reply({ content: '1〜100の間で指定してください。', ephemeral: true });
@@ -221,6 +328,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
             await interaction.reply({ content: `✅ ${deleted.size}件のメッセージを削除しました。`, ephemeral: true });
         }
 
+        // /log
         if (commandName === 'log') {
             const channel = options.getChannel('channel');
             servers[guildId].logChannel = channel.id;
@@ -228,18 +336,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
             await interaction.reply(`ログ送信先を ${channel} に設定しました。`);
         }
 
-        if (commandName === 'welcome') {
-            servers[guildId].welcome = { channel: options.getChannel('channel').id, message: options.getString('message') };
-            saveData(SERVERS_FILE, servers);
-            await interaction.reply('入室通知を設定しました。');
-        }
-
-        if (commandName === 'bye') {
-            servers[guildId].bye = { channel: options.getChannel('channel').id, message: options.getString('message') };
-            saveData(SERVERS_FILE, servers);
-            await interaction.reply('退室通知を設定しました。');
-        }
-
+        // /authset
         if (commandName === 'authset') {
             const role = options.getRole('role');
             const embed = new EmbedBuilder()
@@ -252,6 +349,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
             await interaction.reply({ embeds: [embed], components: [row] });
         }
 
+        // /ticket
         if (commandName === 'ticket') {
             const mid = options.getRole('mention-role').id;
             const embed = new EmbedBuilder().setTitle(options.getString('title')).setDescription(options.getString('description')).setColor(0x5865f2);
@@ -261,39 +359,21 @@ client.on(Events.InteractionCreate, async (interaction) => {
             await interaction.reply({ embeds: [embed], components: [row] });
         }
 
+        // /gset
         if (commandName === 'gset') {
             servers[guildId].gChatChannel = options.getChannel('channel').id;
             saveData(SERVERS_FILE, servers);
             await interaction.reply('グローバルチャットを有効にしました。');
         }
 
+        // /gdel
         if (commandName === 'gdel') {
             delete servers[guildId].gChatChannel;
             saveData(SERVERS_FILE, servers);
             await interaction.reply('グローバルチャットを解除しました。');
         }
 
-        if (commandName === 'ngword') {
-            const sub = options.getSubcommand();
-            const word = options.getString('word');
-            if (sub === 'create') {
-                if (!servers[guildId].ngwords.includes(word)) {
-                    servers[guildId].ngwords.push(word);
-                    saveData(SERVERS_FILE, servers);
-                    await interaction.reply(`「${word}」を禁止用語に追加しました。`);
-                } else {
-                    await interaction.reply('既に登録されています。');
-                }
-            } else if (sub === 'delete') {
-                servers[guildId].ngwords = servers[guildId].ngwords.filter(w => w !== word);
-                saveData(SERVERS_FILE, servers);
-                await interaction.reply(`「${word}」を禁止用語から削除しました。`);
-            } else if (sub === 'list') {
-                const list = servers[guildId].ngwords.join(', ') || 'なし';
-                await interaction.reply(`現在のNGワード: ${list}`);
-            }
-        }
-
+        // /chatlock
         if (commandName === 'chatlock') {
             const sec = options.getInteger('seconds');
             await interaction.channel.permissionOverwrites.edit(interaction.guild.roles.everyone, { SendMessages: false });
@@ -304,18 +384,55 @@ client.on(Events.InteractionCreate, async (interaction) => {
             }, sec * 1000);
         }
 
+        // /omikuji
         if (commandName === 'omikuji') {
             const results = ['大吉', '中吉', '小吉', '吉', '末吉', '凶', '大凶'];
             const res = results[Math.floor(Math.random() * results.length)];
             await interaction.reply(`今日のあなたの運勢は... **${res}** です！`);
         }
 
+        // /kaso（過去1時間のメッセージ統計で稼働判定）
         if (commandName === 'kaso') {
-            const embed = new EmbedBuilder().setTitle('稼働調査').setDescription('サーバーに参加している方は、下のボタンを押してください。').setColor(0x000000);
-            const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('kaso_check').setLabel('参加中').setStyle(ButtonStyle.Success));
-            await interaction.reply({ embeds: [embed], components: [row] });
+            await interaction.deferReply();
+            const conf = servers[guildId] || {};
+            const ignoredChannels = conf.kasoIgnoreChannels || [];
+            const stats = getHourlyStats(guildId, ignoredChannels);
+
+            // ユーザー名解決
+            const topUserLines = [];
+            for (const [uid, count] of stats.topUsers) {
+                let name;
+                try {
+                    const member = await interaction.guild.members.fetch(uid);
+                    name = member.displayName;
+                } catch {
+                    name = `<@${uid}>`;
+                }
+                topUserLines.push(`**${name}** (${count}回)`);
+            }
+
+            // チャンネル名解決
+            const topChannelLines = [];
+            for (const [cid, count] of stats.topChannels) {
+                topChannelLines.push(`<#${cid}> (${count}回)`);
+            }
+
+            const embed = new EmbedBuilder()
+                .setTitle('📊 過去1時間のサーバー稼働調査')
+                .setColor(stats.color)
+                .addFields(
+                    { name: '総メッセージ数', value: `${stats.total} 件`, inline: false },
+                    { name: '判定結果', value: stats.judgment, inline: false },
+                    { name: '活発なユーザー TOP3', value: topUserLines.length > 0 ? topUserLines.join('\n') : 'データなし', inline: true },
+                    { name: '活発なチャンネル TOP3', value: topChannelLines.length > 0 ? topChannelLines.join('\n') : 'データなし', inline: true }
+                )
+                .setFooter({ text: '直近60分間 / Bot除外' })
+                .setTimestamp();
+
+            await interaction.editReply({ embeds: [embed] });
         }
 
+        // /rp
         if (commandName === 'rp') {
             const sub = options.getSubcommand();
             if (sub === 'create') {
@@ -336,16 +453,87 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
     }
 
+    // ==================== モーダル送信 ====================
+    if (interaction.isModalSubmit()) {
+        const cid = interaction.customId;
+
+        // 入室通知設定モーダル
+        if (cid === 'modal_welcome') {
+            const channelId = interaction.fields.getTextInputValue('welcome_channel_id');
+            const message = interaction.fields.getTextInputValue('welcome_message');
+            const channel = interaction.guild.channels.cache.get(channelId.trim());
+            if (!channel) return interaction.reply({ content: '❌ 指定されたチャンネルIDが見つかりません。', ephemeral: true });
+            servers[guildId].welcome = { channel: channel.id, message };
+            saveData(SERVERS_FILE, servers);
+            await interaction.reply({ content: `✅ 入室通知を ${channel} に設定しました。\nメッセージ: \`${message}\`\n\n使用可能な変数: \`{user}\` \`{server}\` \`{members}\``, ephemeral: true });
+        }
+
+        // 退室通知設定モーダル
+        if (cid === 'modal_bye') {
+            const channelId = interaction.fields.getTextInputValue('bye_channel_id');
+            const message = interaction.fields.getTextInputValue('bye_message');
+            const channel = interaction.guild.channels.cache.get(channelId.trim());
+            if (!channel) return interaction.reply({ content: '❌ 指定されたチャンネルIDが見つかりません。', ephemeral: true });
+            servers[guildId].bye = { channel: channel.id, message };
+            saveData(SERVERS_FILE, servers);
+            await interaction.reply({ content: `✅ 退室通知を ${channel} に設定しました。\nメッセージ: \`${message}\`\n\n使用可能な変数: \`{user}\` \`{server}\` \`{members}\``, ephemeral: true });
+        }
+
+        // NGワード追加モーダル
+        if (cid === 'modal_ngword_add') {
+            const word = interaction.fields.getTextInputValue('ngword_input').trim();
+            if (!word) return interaction.reply({ content: '❌ ワードを入力してください。', ephemeral: true });
+            if (!servers[guildId].ngwords.includes(word)) {
+                servers[guildId].ngwords.push(word);
+                saveData(SERVERS_FILE, servers);
+                await interaction.reply({ content: `✅ 「${word}」をNGワードに追加しました。`, ephemeral: true });
+            } else {
+                await interaction.reply({ content: '⚠️ そのワードは既に登録されています。', ephemeral: true });
+            }
+        }
+
+        // NGワード削除モーダル
+        if (cid === 'modal_ngword_del') {
+            const word = interaction.fields.getTextInputValue('ngword_del_input').trim();
+            const before = servers[guildId].ngwords.length;
+            servers[guildId].ngwords = servers[guildId].ngwords.filter(w => w !== word);
+            saveData(SERVERS_FILE, servers);
+            if (servers[guildId].ngwords.length < before) {
+                await interaction.reply({ content: `✅ 「${word}」をNGワードから削除しました。`, ephemeral: true });
+            } else {
+                await interaction.reply({ content: '⚠️ そのワードは登録されていません。', ephemeral: true });
+            }
+        }
+    }
+
+    // ==================== ボタン ====================
     if (interaction.isButton()) {
         const cid = interaction.customId;
 
-        if (cid === 'set_menu_log') await interaction.update({ components: [createLogConfigRow(servers[guildId].logConfig)] });
-        if (cid === 'set_back_main') await interaction.update({ components: [createMainSetRow(servers[guildId])] });
-        
+        // --- /set パネル関連 ---
+        if (cid === 'set_menu_log') {
+            await interaction.update({ components: [createLogConfigRow(servers[guildId].logConfig)] });
+        }
+
+        if (cid === 'set_back_main') {
+            await interaction.update(buildSetPanelMessage(servers[guildId]));
+        }
+
         if (cid === 'set_lv_toggle') {
             servers[guildId].leveling = !servers[guildId].leveling;
             saveData(SERVERS_FILE, servers);
-            await interaction.update({ components: [createMainSetRow(servers[guildId])] });
+            await interaction.update(buildSetPanelMessage(servers[guildId]));
+        }
+
+        if (cid === 'set_menu_lock') {
+            servers[guildId].locked = !servers[guildId].locked;
+            const everyone = interaction.guild.roles.everyone;
+            const channels = interaction.guild.channels.cache.filter(c => c.type === ChannelType.GuildText);
+            for (const [, ch] of channels) {
+                await ch.permissionOverwrites.edit(everyone, { SendMessages: servers[guildId].locked ? false : null }).catch(() => {});
+            }
+            saveData(SERVERS_FILE, servers);
+            await interaction.update(buildSetPanelMessage(servers[guildId]));
         }
 
         if (cid.startsWith('log_toggle_')) {
@@ -355,6 +543,62 @@ client.on(Events.InteractionCreate, async (interaction) => {
             await interaction.update({ components: [createLogConfigRow(servers[guildId].logConfig)] });
         }
 
+        // --- 入室通知設定（モーダル） ---
+        if (cid === 'set_menu_welcome') {
+            const modal = new ModalBuilder().setCustomId('modal_welcome').setTitle('入室通知の設定');
+            const channelInput = new TextInputBuilder().setCustomId('welcome_channel_id').setLabel('送信先チャンネルID').setStyle(TextInputStyle.Short).setPlaceholder('チャンネルIDを入力 (右クリック→IDをコピー)').setRequired(true);
+            const messageInput = new TextInputBuilder().setCustomId('welcome_message').setLabel('通知メッセージ').setStyle(TextInputStyle.Paragraph).setPlaceholder('例: {user}さん、{server}へようこそ！（{members}人目）').setRequired(true);
+            if (servers[guildId].welcome?.message) messageInput.setValue(servers[guildId].welcome.message);
+            modal.addComponents(
+                new ActionRowBuilder().addComponents(channelInput),
+                new ActionRowBuilder().addComponents(messageInput)
+            );
+            await interaction.showModal(modal);
+        }
+
+        // --- 退室通知設定（モーダル） ---
+        if (cid === 'set_menu_bye') {
+            const modal = new ModalBuilder().setCustomId('modal_bye').setTitle('退室通知の設定');
+            const channelInput = new TextInputBuilder().setCustomId('bye_channel_id').setLabel('送信先チャンネルID').setStyle(TextInputStyle.Short).setPlaceholder('チャンネルIDを入力 (右クリック→IDをコピー)').setRequired(true);
+            const messageInput = new TextInputBuilder().setCustomId('bye_message').setLabel('通知メッセージ').setStyle(TextInputStyle.Paragraph).setPlaceholder('例: {user}さんがサーバーを退出しました。').setRequired(true);
+            if (servers[guildId].bye?.message) messageInput.setValue(servers[guildId].bye.message);
+            modal.addComponents(
+                new ActionRowBuilder().addComponents(channelInput),
+                new ActionRowBuilder().addComponents(messageInput)
+            );
+            await interaction.showModal(modal);
+        }
+
+        // --- NGワード管理パネル ---
+        if (cid === 'set_menu_ngword') {
+            const conf = servers[guildId];
+            const list = conf.ngwords.length > 0 ? conf.ngwords.map(w => `\`${w}\``).join('、') : 'なし';
+            const row = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('ngword_add').setLabel('追加').setStyle(ButtonStyle.Success),
+                new ButtonBuilder().setCustomId('ngword_del').setLabel('削除').setStyle(ButtonStyle.Danger),
+                new ButtonBuilder().setCustomId('set_back_main').setLabel('戻る').setStyle(ButtonStyle.Secondary)
+            );
+            await interaction.update({
+                content: `🚫 **NGワード管理**\n\n現在のNGワード: ${list}`,
+                components: [row]
+            });
+        }
+
+        if (cid === 'ngword_add') {
+            const modal = new ModalBuilder().setCustomId('modal_ngword_add').setTitle('NGワード追加');
+            const input = new TextInputBuilder().setCustomId('ngword_input').setLabel('禁止するワード').setStyle(TextInputStyle.Short).setRequired(true);
+            modal.addComponents(new ActionRowBuilder().addComponents(input));
+            await interaction.showModal(modal);
+        }
+
+        if (cid === 'ngword_del') {
+            const modal = new ModalBuilder().setCustomId('modal_ngword_del').setTitle('NGワード削除');
+            const input = new TextInputBuilder().setCustomId('ngword_del_input').setLabel('削除するワード').setStyle(TextInputStyle.Short).setRequired(true);
+            modal.addComponents(new ActionRowBuilder().addComponents(input));
+            await interaction.showModal(modal);
+        }
+
+        // --- チケット ---
         if (cid.startsWith('ticket_open_')) {
             const mid = cid.split('_')[2];
             const channel = await interaction.guild.channels.create({
@@ -376,6 +620,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
             setTimeout(() => interaction.channel.delete().catch(() => {}), 3000);
         }
 
+        // --- セルフ役職 ---
         if (cid.startsWith('rp_')) {
             const rid = cid.split('_')[1];
             const member = interaction.member;
@@ -386,10 +631,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
                 await member.roles.add(rid);
                 await interaction.reply({ content: '役職を付与しました。', ephemeral: true });
             }
-        }
-
-        if (cid === 'kaso_check') {
-            await interaction.reply({ content: '確認しました！ありがとうございます。', ephemeral: true });
         }
     }
 });
@@ -410,26 +651,35 @@ client.on(Events.MessageCreate, async (message) => {
     const users = loadData(USERS_FILE);
     const gid = message.guildId;
 
-    // NGワード判定
-    if (servers[gid]?.ngwords) {
-        for (const word of servers[gid].ngwords) {
-            if (message.content.includes(word)) {
-                await message.delete().catch(() => {});
-                return message.channel.send(`<@${message.author.id}> 不適切な言葉が含まれていたため削除しました。`).then(m => setTimeout(() => m.delete(), 3000));
-            }
+    // /kaso用にメッセージを記録
+    recordMessage(gid, message.channelId, message.author.id);
+
+    // NGワード判定（正規化して規制回避対策）
+    if (servers[gid]?.ngwords && servers[gid].ngwords.length > 0) {
+        if (containsNgWord(message.content, servers[gid].ngwords)) {
+            await message.delete().catch(() => {});
+            return message.channel.send(`<@${message.author.id}> 不適切な言葉が含まれていたため削除しました。`).then(m => setTimeout(() => m.delete().catch(() => {}), 3000));
         }
     }
 
-    // レベリング
+    // レベリング（30秒クールダウン）
     if (servers[gid]?.leveling !== false) {
-        if (!users[message.author.id]) users[message.author.id] = { xp: 0, lv: 0 };
-        users[message.author.id].xp += 15;
-        const nextXP = getNextLevelXP(users[message.author.id].lv);
-        if (users[message.author.id].xp >= nextXP) {
-            users[message.author.id].lv++;
-            message.reply(`🎉 レベルアップ！ **Lv.${users[message.author.id].lv}** になりました！`);
+        const cooldownKey = `${gid}_${message.author.id}`;
+        const now = Date.now();
+        const lastXP = xpCooldowns.get(cooldownKey) || 0;
+
+        if (now - lastXP >= 30 * 1000) {
+            xpCooldowns.set(cooldownKey, now);
+
+            if (!users[message.author.id]) users[message.author.id] = { xp: 0, lv: 0 };
+            users[message.author.id].xp += 15;
+            const nextXP = getNextLevelXP(users[message.author.id].lv);
+            if (users[message.author.id].xp >= nextXP) {
+                users[message.author.id].lv++;
+                message.reply(`🎉 レベルアップ！ **Lv.${users[message.author.id].lv}** になりました！`);
+            }
+            saveData(USERS_FILE, users);
         }
-        saveData(USERS_FILE, users);
     }
 
     // グローバルチャット
@@ -439,7 +689,7 @@ client.on(Events.MessageCreate, async (message) => {
             .setDescription(message.content || ' ')
             .setColor(0x00ff00)
             .setTimestamp();
-        
+
         if (message.attachments.size > 0) {
             embed.setImage(message.attachments.first().url);
         }
