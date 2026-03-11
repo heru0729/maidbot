@@ -449,95 +449,60 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         }
 
-        if (commandName === 'avatar') {
+if (commandName === 'avatar') {
+    await interaction.deferReply();
     try {
-        const user = interaction.options.getUser('user') || interaction.user;
-        const avatarUrlPNG = user.displayAvatarURL({ size: 1024, extension: 'png' });
-        const avatarUrlWEBP = user.displayAvatarURL({ size: 1024, extension: 'webp' });
-        const avatarUrlJPG = user.displayAvatarURL({ size: 1024, extension: 'jpg' });
-        const embed = new EmbedBuilder()
-            .setTitle(`🖼️ ${user.username} のアバター`)
-            .setImage(avatarUrlPNG)
-            .setColor(0x3498db)
-            .addFields({ 
-                name: 'ダウンロードリンク', 
-                value: `[PNG](${avatarUrlPNG}) | [WEBP](${avatarUrlWEBP}) | [JPG](${avatarUrlJPG})` 
-            })
-            .setTimestamp()
-            .setFooter({ text: `Requested by ${interaction.user.tag}`, iconURL: interaction.user.displayAvatarURL() });
-        await interaction.reply({ embeds: [embed] });
-    } catch (error) {
-        console.error('アバターコマンド実行中にエラーが発生しました:', error);
-        await interaction.reply({ 
-            content: 'アバターの取得中にエラーが発生しました。もう一度試してください。', 
-            ephemeral: true 
-        });
-    }
+        const target = interaction.options.getUser('target'), idInput = interaction.options.getString('user_id');
+        let user = target || (idInput ? await interaction.client.users.fetch(idInput).catch(() => null) : interaction.user);
+        if (!user) return await interaction.editReply({ content: 'ユーザーが見つかりませんでした。', ephemeral: true });
+        const png = user.displayAvatarURL({ size: 1024, extension: 'png' }), webp = user.displayAvatarURL({ size: 1024, extension: 'webp' });
+        const embed = new EmbedBuilder().setTitle(`🖼️ ${user.username} のアバター`).setDescription(`**ID:** \`${user.id}\``).setImage(png).setColor(0x3498db).addFields({ name: 'ダウンロード', value: `[PNG](${png}) | [WEBP](${webp})` }).setTimestamp().setFooter({ text: `Requested by ${interaction.user.tag}`, iconURL: interaction.user.displayAvatarURL() });
+        await interaction.editReply({ embeds: [embed] });
+    } catch (e) { console.error(e); if (interaction.deferred) await interaction.editReply({ content: 'エラーが発生しました。' }); }
 }
-
-        if (commandName === 'calc') {
-            const expr = options.getString('expression');
-            try {
-                if (!/^[\d\s\+\-\*\/\.\(\)%\^]+$/.test(expr)) throw new Error('使用できない文字が含まれています');
-                const result = Function(`"use strict"; return (${expr.replace(/\^/g, '**')})`)();
-                if (!isFinite(result)) throw new Error('ゼロ除算または計算不能');
-                const embed = new EmbedBuilder().setTitle('🧮 計算結果').setColor(0x3498db)
-                    .addFields({ name: '式', value: `\`${expr}\``, inline: true }, { name: '結果', value: `\`${result}\``, inline: true });
-                await interaction.reply({ embeds: [embed] });
-            } catch (e) {
-                await interaction.reply({ content: `❌ 計算エラー: ${e.message}`, ...EPH });
-            }
-        }
-
-        if (commandName === 'janken') {
-            const hands = ['グー', 'チョキ', 'パー'];
-            const emojis = { 'グー': '✊', 'チョキ': '✌️', 'パー': '✋' };
-            const userHand = options.getString('hand');
-            const botHand = hands[Math.floor(Math.random() * 3)];
-            let result, color;
-            if (userHand === botHand) { result = '引き分け 🤝'; color = 0xFFFF00; }
-            else if ((userHand === 'グー' && botHand === 'チョキ') || (userHand === 'チョキ' && botHand === 'パー') || (userHand === 'パー' && botHand === 'グー')) { result = 'あなたの勝ち 🎉'; color = 0x00FF00; }
-            else { result = 'Botの勝ち 😈'; color = 0xFF0000; }
-            const embed = new EmbedBuilder().setTitle('✊✌️✋ じゃんけん！').setColor(color)
-                .addFields({ name: 'あなた', value: `${emojis[userHand]} ${userHand}`, inline: true }, { name: 'Bot', value: `${emojis[botHand]} ${botHand}`, inline: true }, { name: '結果', value: result, inline: false });
-            await interaction.reply({ embeds: [embed] });
-        }
-
-        if (commandName === 'remind') {
-            const minutes = options.getInteger('minutes');
-            const msg = options.getString('message');
-            if (isNaN(sec) || sec < 1 || sec > 1440) return interaction.reply({ content: '...', ephemeral: true });
-            await interaction.reply({ content: `⏰ **${minutes}分後**にリマインドします！\n内容: \`${msg}\``, ...EPH });
-            setTimeout(async () => {
-                const embed = new EmbedBuilder().setTitle('⏰ リマインダー').setDescription(msg).setColor(0xf39c12).setTimestamp().setFooter({ text: `${interaction.guild.name} でのリマインダー` });
-                try { const dm = await interaction.user.createDM(); await dm.send({ content: `<@${interaction.user.id}>`, embeds: [embed] }); }
-                catch { interaction.channel?.send({ content: `<@${interaction.user.id}>`, embeds: [embed] }).catch(() => {}); }
-            }, minutes * 60 * 1000);
-        }
-
-
-        if (commandName === 'coinflip') {
-            const result = Math.random() < 0.5 ? '表 🪙' : '裏 🔄';
-            await interaction.reply(`コインを投げました... **${result}** が出ました！`);
-        }
-
-        if (commandName === 'dice') {
-            const sides = options.getInteger('sides') || 6;
-            const result = Math.floor(Math.random() * sides) + 1;
-            const embed = new EmbedBuilder().setTitle('🎲 ダイスロール').setColor(0x9b59b6)
-                .addFields({ name: `d${sides}`, value: `**${result}**`, inline: true });
-            await interaction.reply({ embeds: [embed] });
-        }
-
-        if (commandName === 'choose') {
-            const choices = options.getString('choices').split(',').map(c => c.trim()).filter(Boolean);
-            if (choices.length < 2) return interaction.reply({ content: '❌ 選択肢を2つ以上カンマ区切りで入力してください。', ...EPH });
-            const chosen = choices[Math.floor(Math.random() * choices.length)];
-            const embed = new EmbedBuilder().setTitle('🎯 選択結果').setColor(0x1abc9c)
-                .setDescription(`**${chosen}**`).setFooter({ text: `${choices.length}個の選択肢から選びました` });
-            await interaction.reply({ embeds: [embed] });
-        }
-    }
+if (commandName === 'calc') {
+    const expr = options.getString('expression');
+    try {
+        if (!/^[\d\s\+\-\*\/\.\(\)%\^]+$/.test(expr)) throw new Error('使用できない文字が含まれています');
+        const result = Function(`"use strict"; return (${expr.replace(/\^/g, '**')})`)();
+        if (!isFinite(result)) throw new Error('計算不能');
+        const embed = new EmbedBuilder().setTitle('🧮 計算結果').setColor(0x3498db).addFields({ name: '式', value: `\`${expr}\``, inline: true }, { name: '結果', value: `\`${result}\``, inline: true });
+        await interaction.reply({ embeds: [embed] });
+    } catch (e) { await interaction.reply({ content: `❌ 計算エラー: ${e.message}`, ephemeral: true }); }
+}
+if (commandName === 'janken') {
+    const hands = ['グー', 'チョキ', 'パー'], emojis = { 'グー': '✊', 'チョキ': '✌️', 'パー': '✋' }, userHand = options.getString('hand'), botHand = hands[Math.floor(Math.random() * 3)];
+    let result, color;
+    if (userHand === botHand) { result = '引き分け 🤝'; color = 0xFFFF00; }
+    else if ((userHand === 'グー' && botHand === 'チョキ') || (userHand === 'チョキ' && botHand === 'パー') || (userHand === 'パー' && botHand === 'グー')) { result = 'あなたの勝ち 🎉'; color = 0x00FF00; }
+    else { result = 'Botの勝ち 😈'; color = 0xFF0000; }
+    const embed = new EmbedBuilder().setTitle('✊✌️✋ じゃんけん！').setColor(color).addFields({ name: 'あなた', value: `${emojis[userHand]} ${userHand}`, inline: true }, { name: 'Bot', value: `${emojis[botHand]} ${botHand}`, inline: true }, { name: '結果', value: result, inline: false });
+    await interaction.reply({ embeds: [embed] });
+}
+if (commandName === 'remind') {
+    const min = options.getInteger('minutes'), msg = options.getString('message');
+    if (min < 1 || min > 1440) return interaction.reply({ content: '1分から1440分の間で指定してください。', ephemeral: true });
+    await interaction.reply({ content: `⏰ **${min}分後**にリマインドします！\n内容: \`${msg}\``, ephemeral: true });
+    setTimeout(async () => {
+        const embed = new EmbedBuilder().setTitle('⏰ リマインダー').setDescription(msg).setColor(0xf39c12).setTimestamp().setFooter({ text: `リマインダー` });
+        try { const dm = await interaction.user.createDM(); await dm.send({ content: `<@${interaction.user.id}>`, embeds: [embed] }); }
+        catch { interaction.channel?.send({ content: `<@${interaction.user.id}>`, embeds: [embed] }).catch(() => {}); }
+    }, min * 60 * 1000);
+}
+if (commandName === 'coinflip') {
+    await interaction.reply(`コインを投げました... **${Math.random() < 0.5 ? '表 🪙' : '裏 🔄'}** が出ました！`);
+}
+if (commandName === 'dice') {
+    const sides = options.getInteger('sides') || 6, result = Math.floor(Math.random() * sides) + 1;
+    const embed = new EmbedBuilder().setTitle('🎲 ダイスロール').setColor(0x9b59b6).addFields({ name: `d${sides}`, value: `**${result}**`, inline: true });
+    await interaction.reply({ embeds: [embed] });
+}
+if (commandName === 'choose') {
+    const choices = options.getString('choices').split(',').map(c => c.trim()).filter(Boolean);
+    if (choices.length < 2) return interaction.reply({ content: '❌ 選択肢を2つ以上入力してください。', ephemeral: true });
+    const chosen = choices[Math.floor(Math.random() * choices.length)], embed = new EmbedBuilder().setTitle('🎯 選択結果').setColor(0x1abc9c).setDescription(`**${chosen}**`).setFooter({ text: `${choices.length}個の選択肢から選びました` });
+    await interaction.reply({ embeds: [embed] });
+}
 
     // ==================== セレクトメニュー ====================
     if (interaction.isChannelSelectMenu()) {
