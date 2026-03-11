@@ -440,9 +440,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
             if (count === 0) return interaction.reply({ content: '最低1つの役職を指定してください。', ...EPH });
             await interaction.reply({ embeds: [embed], components: [row] });
         }
-
-        }
-
 if (commandName === 'avatar') {
     await interaction.deferReply();
     try {
@@ -497,6 +494,9 @@ if (commandName === 'choose') {
     const chosen = choices[Math.floor(Math.random() * choices.length)], embed = new EmbedBuilder().setTitle('🎯 選択結果').setColor(0x1abc9c).setDescription(`**${chosen}**`).setFooter({ text: `${choices.length}個の選択肢から選びました` });
     await interaction.reply({ embeds: [embed] });
 }
+        }
+
+
 
     // ==================== セレクトメニュー ====================
     if (interaction.isChannelSelectMenu()) {
