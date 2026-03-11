@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits, Partials, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, SlashCommandBuilder, REST, Routes, Events, ChannelType, PermissionFlagsBits, ModalBuilder, TextInputBuilder, TextInputStyle, MessageFlags } = require('discord.js');
+const { Client, GatewayIntentBits, Partials, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, SlashCommandBuilder, REST, Routes, Events, ChannelType, PermissionFlagsBits, ModalBuilder, TextInputBuilder, TextInputStyle, MessageFlags, ChannelSelectMenuBuilder, RoleSelectMenuBuilder, StringSelectMenuBuilder } = require('discord.js');
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
@@ -28,6 +28,9 @@ const getNextLevelXP = (lv) => (lv + 1) * 500;
 const xpCooldowns = new Map();
 const messageHistory = new Map();
 const ngwordViolations = new Map();
+// チャンネル選択後にメッセージ入力を待つための一時保存
+const pendingWelcomeChannel = new Map();
+const pendingByeChannel = new Map();
 const EPH = { flags: MessageFlags.Ephemeral };
 
 function replacePlaceholders(t, m) {
@@ -185,6 +188,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         servers[guildId] = { logConfig: { edit: true, delete: true, join: true, leave: true }, ngwords: [], ngwordExemptRoles: [], ngwordTimeoutSeconds: 60, ngwordViolationLimit: 3, locked: false, kasoIgnoreChannels: [], leveling: true };
     }
 
+    // ==================== スラッシュコマンド ====================
     if (interaction.isChatInputCommand()) {
         const { commandName, options } = interaction;
 
@@ -345,27 +349,118 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
     }
 
+    // ==================== セレクトメニュー ====================
+    if (interaction.isChannelSelectMenu()) {
+        const cid = interaction.customId;
+        const channelId = interaction.values[0];
+
+        // ログチャンネル設定
+        if (cid === 'select_log_channel') {
+            servers[guildId].logChannel = channelId;
+            saveData(SERVERS_FILE, servers);
+            await interaction.update({ content: `✅ ログ送信先を <#${channelId}> に設定しました。`, components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('set_back_main').setLabel('戻る').setStyle(ButtonStyle.Secondary))] });
+        }
+
+        // 入室通知チャンネル選択 → メッセージ入力モーダルへ
+        if (cid === 'select_welcome_channel') {
+            pendingWelcomeChannel.set(`${guildId}_${interaction.user.id}`, channelId);
+            const modal = new ModalBuilder().setCustomId('modal_welcome_message').setTitle('入室通知メッセージ');
+            const input = new TextInputBuilder().setCustomId('welcome_message').setLabel('通知メッセージ').setStyle(TextInputStyle.Paragraph).setPlaceholder('{user} {server} {members} が使えます').setRequired(true);
+            if (servers[guildId].welcome?.message) input.setValue(servers[guildId].welcome.message);
+            modal.addComponents(new ActionRowBuilder().addComponents(input));
+            await interaction.showModal(modal);
+        }
+
+        // 退室通知チャンネル選択 → メッセージ入力モーダルへ
+        if (cid === 'select_bye_channel') {
+            pendingByeChannel.set(`${guildId}_${interaction.user.id}`, channelId);
+            const modal = new ModalBuilder().setCustomId('modal_bye_message').setTitle('退室通知メッセージ');
+            const input = new TextInputBuilder().setCustomId('bye_message').setLabel('通知メッセージ').setStyle(TextInputStyle.Paragraph).setPlaceholder('{user} {server} {members} が使えます').setRequired(true);
+            if (servers[guildId].bye?.message) input.setValue(servers[guildId].bye.message);
+            modal.addComponents(new ActionRowBuilder().addComponents(input));
+            await interaction.showModal(modal);
+        }
+
+        // 調査除外チャンネル追加
+        if (cid === 'select_kaso_exclude_add') {
+            if (!servers[guildId].kasoIgnoreChannels) servers[guildId].kasoIgnoreChannels = [];
+            if (!servers[guildId].kasoIgnoreChannels.includes(channelId)) {
+                servers[guildId].kasoIgnoreChannels.push(channelId);
+                saveData(SERVERS_FILE, servers);
+                await interaction.update({ content: `✅ <#${channelId}> を除外しました。`, components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('set_menu_kaso').setLabel('戻る').setStyle(ButtonStyle.Secondary))] });
+            } else {
+                await interaction.update({ content: '⚠️ そのチャンネルは既に除外されています。', components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('set_menu_kaso').setLabel('戻る').setStyle(ButtonStyle.Secondary))] });
+            }
+        }
+
+        // 調査除外チャンネル削除
+        if (cid === 'select_kaso_exclude_del') {
+            const before = servers[guildId].kasoIgnoreChannels?.length || 0;
+            servers[guildId].kasoIgnoreChannels = (servers[guildId].kasoIgnoreChannels || []).filter(c => c !== channelId);
+            saveData(SERVERS_FILE, servers);
+            if ((servers[guildId].kasoIgnoreChannels?.length || 0) < before) {
+                await interaction.update({ content: `✅ <#${channelId}> の除外を解除しました。`, components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('set_menu_kaso').setLabel('戻る').setStyle(ButtonStyle.Secondary))] });
+            } else {
+                await interaction.update({ content: '⚠️ そのチャンネルは除外リストにありません。', components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('set_menu_kaso').setLabel('戻る').setStyle(ButtonStyle.Secondary))] });
+            }
+        }
+    }
+
+    if (interaction.isRoleSelectMenu()) {
+        const cid = interaction.customId;
+        const roleId = interaction.values[0];
+
+        // NGワード除外ロール追加
+        if (cid === 'select_ngword_exempt_add') {
+            if (!servers[guildId].ngwordExemptRoles) servers[guildId].ngwordExemptRoles = [];
+            if (!servers[guildId].ngwordExemptRoles.includes(roleId)) {
+                servers[guildId].ngwordExemptRoles.push(roleId);
+                saveData(SERVERS_FILE, servers);
+                await interaction.update({ content: `✅ <@&${roleId}> を除外ロールに追加しました。`, components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('set_menu_ngword').setLabel('戻る').setStyle(ButtonStyle.Secondary))] });
+            } else {
+                await interaction.update({ content: '⚠️ そのロールは既に登録されています。', components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('set_menu_ngword').setLabel('戻る').setStyle(ButtonStyle.Secondary))] });
+            }
+        }
+
+        // NGワード除外ロール削除
+        if (cid === 'select_ngword_exempt_del') {
+            const before = servers[guildId].ngwordExemptRoles?.length || 0;
+            servers[guildId].ngwordExemptRoles = (servers[guildId].ngwordExemptRoles || []).filter(r => r !== roleId);
+            saveData(SERVERS_FILE, servers);
+            if ((servers[guildId].ngwordExemptRoles?.length || 0) < before) {
+                await interaction.update({ content: `✅ <@&${roleId}> を除外ロールから削除しました。`, components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('set_menu_ngword').setLabel('戻る').setStyle(ButtonStyle.Secondary))] });
+            } else {
+                await interaction.update({ content: '⚠️ そのロールは登録されていません。', components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('set_menu_ngword').setLabel('戻る').setStyle(ButtonStyle.Secondary))] });
+            }
+        }
+    }
+
+    // ==================== モーダル ====================
     if (interaction.isModalSubmit()) {
         const cid = interaction.customId;
 
-        if (cid === 'modal_welcome') {
-            const channelId = interaction.fields.getTextInputValue('welcome_channel_id');
+        // 入室通知メッセージ（チャンネルはセレクトメニューで選択済み）
+        if (cid === 'modal_welcome_message') {
             const message = interaction.fields.getTextInputValue('welcome_message');
-            const channel = interaction.guild.channels.cache.get(channelId.trim());
-            if (!channel) return interaction.reply({ content: '❌ チャンネルIDが見つかりません。', ...EPH });
-            servers[guildId].welcome = { channel: channel.id, message };
+            const channelId = pendingWelcomeChannel.get(`${guildId}_${interaction.user.id}`);
+            if (!channelId) return interaction.reply({ content: '❌ チャンネル選択がタイムアウトしました。再度設定してください。', ...EPH });
+            pendingWelcomeChannel.delete(`${guildId}_${interaction.user.id}`);
+            servers[guildId].welcome = { channel: channelId, message };
             saveData(SERVERS_FILE, servers);
-            await interaction.reply({ content: `✅ 入室通知を ${channel} に設定しました。\nメッセージ: \`${message}\`\n変数: \`{user}\` \`{server}\` \`{members}\``, ...EPH });
+            await interaction.reply({ content: `✅ 入室通知を <#${channelId}> に設定しました。\nメッセージ: \`${message}\`\n変数: \`{user}\` \`{server}\` \`{members}\``, ...EPH });
         }
-        if (cid === 'modal_bye') {
-            const channelId = interaction.fields.getTextInputValue('bye_channel_id');
+
+        // 退室通知メッセージ（チャンネルはセレクトメニューで選択済み）
+        if (cid === 'modal_bye_message') {
             const message = interaction.fields.getTextInputValue('bye_message');
-            const channel = interaction.guild.channels.cache.get(channelId.trim());
-            if (!channel) return interaction.reply({ content: '❌ チャンネルIDが見つかりません。', ...EPH });
-            servers[guildId].bye = { channel: channel.id, message };
+            const channelId = pendingByeChannel.get(`${guildId}_${interaction.user.id}`);
+            if (!channelId) return interaction.reply({ content: '❌ チャンネル選択がタイムアウトしました。再度設定してください。', ...EPH });
+            pendingByeChannel.delete(`${guildId}_${interaction.user.id}`);
+            servers[guildId].bye = { channel: channelId, message };
             saveData(SERVERS_FILE, servers);
-            await interaction.reply({ content: `✅ 退室通知を ${channel} に設定しました。\nメッセージ: \`${message}\`\n変数: \`{user}\` \`{server}\` \`{members}\``, ...EPH });
+            await interaction.reply({ content: `✅ 退室通知を <#${channelId}> に設定しました。\nメッセージ: \`${message}\`\n変数: \`{user}\` \`{server}\` \`{members}\``, ...EPH });
         }
+
         if (cid === 'modal_ngword_add') {
             const word = interaction.fields.getTextInputValue('ngword_input').trim();
             if (!word) return interaction.reply({ content: '❌ ワードを入力してください。', ...EPH });
@@ -378,6 +473,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
                 await interaction.reply({ content: '⚠️ そのワードは既に登録されています。', ...EPH });
             }
         }
+
         if (cid === 'modal_ngword_del') {
             const word = interaction.fields.getTextInputValue('ngword_input').trim();
             const before = servers[guildId].ngwords?.length || 0;
@@ -389,30 +485,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
                 await interaction.reply({ content: '⚠️ そのワードは登録されていません。', ...EPH });
             }
         }
-        if (cid === 'modal_ngword_exempt_add') {
-            const roleId = interaction.fields.getTextInputValue('exempt_role_id').trim();
-            const role = interaction.guild.roles.cache.get(roleId);
-            if (!role) return interaction.reply({ content: '❌ ロールIDが見つかりません。', ...EPH });
-            if (!servers[guildId].ngwordExemptRoles) servers[guildId].ngwordExemptRoles = [];
-            if (!servers[guildId].ngwordExemptRoles.includes(roleId)) {
-                servers[guildId].ngwordExemptRoles.push(roleId);
-                saveData(SERVERS_FILE, servers);
-                await interaction.reply({ content: `✅ ${role} を除外ロールに追加しました。`, ...EPH });
-            } else {
-                await interaction.reply({ content: '⚠️ 既に登録されています。', ...EPH });
-            }
-        }
-        if (cid === 'modal_ngword_exempt_del') {
-            const roleId = interaction.fields.getTextInputValue('exempt_role_del_id').trim();
-            const before = servers[guildId].ngwordExemptRoles?.length || 0;
-            servers[guildId].ngwordExemptRoles = (servers[guildId].ngwordExemptRoles || []).filter(r => r !== roleId);
-            saveData(SERVERS_FILE, servers);
-            if ((servers[guildId].ngwordExemptRoles?.length || 0) < before) {
-                await interaction.reply({ content: `✅ <@&${roleId}> を除外ロールから削除しました。`, ...EPH });
-            } else {
-                await interaction.reply({ content: '⚠️ そのロールは登録されていません。', ...EPH });
-            }
-        }
+
         if (cid === 'modal_ngword_timeout') {
             const sec = parseInt(interaction.fields.getTextInputValue('timeout_seconds').trim());
             if (isNaN(sec) || sec < 0) return interaction.reply({ content: '❌ 正しい秒数を入力してください。', ...EPH });
@@ -420,6 +493,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
             saveData(SERVERS_FILE, servers);
             await interaction.reply({ content: `✅ タイムアウト秒数を ${sec}秒 に設定しました。`, ...EPH });
         }
+
         if (cid === 'modal_ngword_violation') {
             const count = parseInt(interaction.fields.getTextInputValue('violation_count').trim());
             if (isNaN(count) || count < 1) return interaction.reply({ content: '❌ 1以上の数値を入力してください。', ...EPH });
@@ -427,38 +501,32 @@ client.on(Events.InteractionCreate, async (interaction) => {
             saveData(SERVERS_FILE, servers);
             await interaction.reply({ content: `✅ 連呼罰則を ${count}回 に設定しました。`, ...EPH });
         }
-        if (cid === 'modal_kaso_exclude') {
-            const channelId = interaction.fields.getTextInputValue('kaso_exclude_channel_id').trim();
-            const channel = interaction.guild.channels.cache.get(channelId);
-            if (!channel) return interaction.reply({ content: '❌ チャンネルIDが見つかりません。', ...EPH });
-            if (!servers[guildId].kasoIgnoreChannels) servers[guildId].kasoIgnoreChannels = [];
-            if (!servers[guildId].kasoIgnoreChannels.includes(channelId)) {
-                servers[guildId].kasoIgnoreChannels.push(channelId);
-                saveData(SERVERS_FILE, servers);
-                await interaction.reply({ content: `✅ <#${channelId}> を除外しました。`, ...EPH });
-            } else {
-                await interaction.reply({ content: '⚠️ 既に登録されています。', ...EPH });
-            }
-        }
-        if (cid === 'modal_kaso_exclude_del') {
-            const channelId = interaction.fields.getTextInputValue('kaso_exclude_del_id').trim();
-            const before = servers[guildId].kasoIgnoreChannels?.length || 0;
-            servers[guildId].kasoIgnoreChannels = (servers[guildId].kasoIgnoreChannels || []).filter(c => c !== channelId);
-            saveData(SERVERS_FILE, servers);
-            if ((servers[guildId].kasoIgnoreChannels?.length || 0) < before) {
-                await interaction.reply({ content: `✅ <#${channelId}> の除外を解除しました。`, ...EPH });
-            } else {
-                await interaction.reply({ content: '⚠️ そのチャンネルは登録されていません。', ...EPH });
-            }
-        }
     }
 
+    // ==================== ボタン ====================
     if (interaction.isButton()) {
         const cid = interaction.customId;
 
-        if (cid === 'set_menu_log') await interaction.update({ components: [createLogConfigRow(servers[guildId].logConfig)] });
+        if (cid === 'set_menu_log') {
+            // ログ設定：チャンネル選択メニュー + ON/OFF切替
+            const select = new ChannelSelectMenuBuilder().setCustomId('select_log_channel').setPlaceholder('ログ送信先チャンネルを選択').addChannelTypes(ChannelType.GuildText);
+            await interaction.update({
+                content: `📋 **ログ設定**\n\n現在のログチャンネル: ${servers[guildId].logChannel ? `<#${servers[guildId].logChannel}>` : '未設定'}\n\nチャンネルを選択してください。`,
+                components: [
+                    new ActionRowBuilder().addComponents(select),
+                    createLogConfigRow(servers[guildId].logConfig)
+                ]
+            });
+        }
+
         if (cid === 'set_back_main') await interaction.update(buildSetPanel(servers[guildId]));
-        if (cid === 'set_lv_toggle') { servers[guildId].leveling = !servers[guildId].leveling; saveData(SERVERS_FILE, servers); await interaction.update(buildSetPanel(servers[guildId])); }
+
+        if (cid === 'set_lv_toggle') {
+            servers[guildId].leveling = !servers[guildId].leveling;
+            saveData(SERVERS_FILE, servers);
+            await interaction.update(buildSetPanel(servers[guildId]));
+        }
+
         if (cid === 'set_menu_lock') {
             servers[guildId].locked = !servers[guildId].locked;
             const channels = interaction.guild.channels.cache.filter(c => c.type === ChannelType.GuildText);
@@ -466,13 +534,49 @@ client.on(Events.InteractionCreate, async (interaction) => {
             saveData(SERVERS_FILE, servers);
             await interaction.update(buildSetPanel(servers[guildId]));
         }
+
         if (cid.startsWith('log_toggle_')) {
             const key = cid.replace('log_toggle_', '');
             servers[guildId].logConfig[key] = !servers[guildId].logConfig[key];
             saveData(SERVERS_FILE, servers);
-            await interaction.update({ components: [createLogConfigRow(servers[guildId].logConfig)] });
+            const select = new ChannelSelectMenuBuilder().setCustomId('select_log_channel').setPlaceholder('ログ送信先チャンネルを選択').addChannelTypes(ChannelType.GuildText);
+            await interaction.update({
+                content: `📋 **ログ設定**\n\n現在のログチャンネル: ${servers[guildId].logChannel ? `<#${servers[guildId].logChannel}>` : '未設定'}`,
+                components: [
+                    new ActionRowBuilder().addComponents(select),
+                    createLogConfigRow(servers[guildId].logConfig)
+                ]
+            });
         }
+
+        // 入室通知設定 → チャンネル選択メニュー表示
+        if (cid === 'set_menu_welcome') {
+            const current = servers[guildId].welcome;
+            const select = new ChannelSelectMenuBuilder().setCustomId('select_welcome_channel').setPlaceholder('送信先チャンネルを選択').addChannelTypes(ChannelType.GuildText);
+            await interaction.update({
+                content: `📥 **入室通知設定**\n\n現在の設定:\nチャンネル: ${current?.channel ? `<#${current.channel}>` : '未設定'}\nメッセージ: ${current?.message || '未設定'}\n\nチャンネルを選択後、メッセージを入力します。`,
+                components: [
+                    new ActionRowBuilder().addComponents(select),
+                    new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('set_back_main').setLabel('戻る').setStyle(ButtonStyle.Secondary))
+                ]
+            });
+        }
+
+        // 退室通知設定 → チャンネル選択メニュー表示
+        if (cid === 'set_menu_bye') {
+            const current = servers[guildId].bye;
+            const select = new ChannelSelectMenuBuilder().setCustomId('select_bye_channel').setPlaceholder('送信先チャンネルを選択').addChannelTypes(ChannelType.GuildText);
+            await interaction.update({
+                content: `📤 **退室通知設定**\n\n現在の設定:\nチャンネル: ${current?.channel ? `<#${current.channel}>` : '未設定'}\nメッセージ: ${current?.message || '未設定'}\n\nチャンネルを選択後、メッセージを入力します。`,
+                components: [
+                    new ActionRowBuilder().addComponents(select),
+                    new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('set_back_main').setLabel('戻る').setStyle(ButtonStyle.Secondary))
+                ]
+            });
+        }
+
         if (cid === 'set_menu_ngword') await interaction.update(buildNgwordPanel(servers[guildId]));
+
         if (cid === 'ngword_add') {
             const modal = new ModalBuilder().setCustomId('modal_ngword_add').setTitle('NGワード追加');
             modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('ngword_input').setLabel('追加するワード').setStyle(TextInputStyle.Short).setRequired(true)));
@@ -483,16 +587,31 @@ client.on(Events.InteractionCreate, async (interaction) => {
             modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('ngword_input').setLabel('削除するワード').setStyle(TextInputStyle.Short).setRequired(true)));
             await interaction.showModal(modal);
         }
+
+        // 除外ロール追加 → ロール選択メニュー表示
         if (cid === 'ngword_exempt_add') {
-            const modal = new ModalBuilder().setCustomId('modal_ngword_exempt_add').setTitle('除外ロール追加');
-            modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('exempt_role_id').setLabel('除外するロールID').setStyle(TextInputStyle.Short).setPlaceholder('ロールIDを入力').setRequired(true)));
-            await interaction.showModal(modal);
+            const select = new RoleSelectMenuBuilder().setCustomId('select_ngword_exempt_add').setPlaceholder('除外するロールを選択');
+            await interaction.update({
+                content: '🔓 **除外ロール追加**\n\n除外するロールを選択してください。',
+                components: [
+                    new ActionRowBuilder().addComponents(select),
+                    new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('set_menu_ngword').setLabel('戻る').setStyle(ButtonStyle.Secondary))
+                ]
+            });
         }
+
+        // 除外ロール削除 → ロール選択メニュー表示
         if (cid === 'ngword_exempt_del') {
-            const modal = new ModalBuilder().setCustomId('modal_ngword_exempt_del').setTitle('除外ロール削除');
-            modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('exempt_role_del_id').setLabel('削除するロールID').setStyle(TextInputStyle.Short).setRequired(true)));
-            await interaction.showModal(modal);
+            const select = new RoleSelectMenuBuilder().setCustomId('select_ngword_exempt_del').setPlaceholder('削除するロールを選択');
+            await interaction.update({
+                content: '🔒 **除外ロール削除**\n\n削除するロールを選択してください。',
+                components: [
+                    new ActionRowBuilder().addComponents(select),
+                    new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('set_menu_ngword').setLabel('戻る').setStyle(ButtonStyle.Secondary))
+                ]
+            });
         }
+
         if (cid === 'ngword_timeout_set') {
             const modal = new ModalBuilder().setCustomId('modal_ngword_timeout').setTitle('タイムアウト秒数設定');
             const input = new TextInputBuilder().setCustomId('timeout_seconds').setLabel('秒数 (0=タイムアウトなし)').setStyle(TextInputStyle.Short).setPlaceholder('例: 300').setRequired(true);
@@ -500,6 +619,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
             modal.addComponents(new ActionRowBuilder().addComponents(input));
             await interaction.showModal(modal);
         }
+
         if (cid === 'ngword_violation_set') {
             const modal = new ModalBuilder().setCustomId('modal_ngword_violation').setTitle('連呼罰則回数設定');
             const input = new TextInputBuilder().setCustomId('violation_count').setLabel('何回でタイムアウトするか').setStyle(TextInputStyle.Short).setPlaceholder('例: 3').setRequired(true);
@@ -507,42 +627,23 @@ client.on(Events.InteractionCreate, async (interaction) => {
             modal.addComponents(new ActionRowBuilder().addComponents(input));
             await interaction.showModal(modal);
         }
-        if (cid === 'set_menu_welcome') {
-            const modal = new ModalBuilder().setCustomId('modal_welcome').setTitle('入室通知の設定');
-            const channelInput = new TextInputBuilder().setCustomId('welcome_channel_id').setLabel('送信先チャンネルID').setStyle(TextInputStyle.Short).setPlaceholder('チャンネルIDを入力').setRequired(true);
-            const messageInput = new TextInputBuilder().setCustomId('welcome_message').setLabel('通知メッセージ').setStyle(TextInputStyle.Paragraph).setPlaceholder('{user} {server} {members} が使えます').setRequired(true);
-            if (servers[guildId].welcome?.message) messageInput.setValue(servers[guildId].welcome.message);
-            modal.addComponents(new ActionRowBuilder().addComponents(channelInput), new ActionRowBuilder().addComponents(messageInput));
-            await interaction.showModal(modal);
-        }
-        if (cid === 'set_menu_bye') {
-            const modal = new ModalBuilder().setCustomId('modal_bye').setTitle('退室通知の設定');
-            const channelInput = new TextInputBuilder().setCustomId('bye_channel_id').setLabel('送信先チャンネルID').setStyle(TextInputStyle.Short).setPlaceholder('チャンネルIDを入力').setRequired(true);
-            const messageInput = new TextInputBuilder().setCustomId('bye_message').setLabel('通知メッセージ').setStyle(TextInputStyle.Paragraph).setPlaceholder('{user} {server} {members} が使えます').setRequired(true);
-            if (servers[guildId].bye?.message) messageInput.setValue(servers[guildId].bye.message);
-            modal.addComponents(new ActionRowBuilder().addComponents(channelInput), new ActionRowBuilder().addComponents(messageInput));
-            await interaction.showModal(modal);
-        }
+
+        // 調査除外設定 → チャンネル選択メニュー表示
         if (cid === 'set_menu_kaso') {
             const ignored = servers[guildId].kasoIgnoreChannels || [];
             const list = ignored.length > 0 ? ignored.map(c => `<#${c}>`).join('、') : 'なし';
-            const row = new ActionRowBuilder().addComponents(
-                new ButtonBuilder().setCustomId('kaso_exclude_add').setLabel('除外チャンネル追加').setStyle(ButtonStyle.Primary),
-                new ButtonBuilder().setCustomId('kaso_exclude_del').setLabel('除外チャンネル削除').setStyle(ButtonStyle.Danger),
-                new ButtonBuilder().setCustomId('set_back_main').setLabel('戻る').setStyle(ButtonStyle.Secondary)
-            );
-            await interaction.update({ content: `📊 **調査除外設定**\n\n除外チャンネル: ${list}\n※ticket-チャンネルは自動除外`, components: [row] });
+            const selectAdd = new ChannelSelectMenuBuilder().setCustomId('select_kaso_exclude_add').setPlaceholder('除外するチャンネルを選択').addChannelTypes(ChannelType.GuildText);
+            const selectDel = new ChannelSelectMenuBuilder().setCustomId('select_kaso_exclude_del').setPlaceholder('除外を解除するチャンネルを選択').addChannelTypes(ChannelType.GuildText);
+            await interaction.update({
+                content: `📊 **調査除外設定**\n\n除外チャンネル: ${list}\n※ticket-チャンネルは自動除外`,
+                components: [
+                    new ActionRowBuilder().addComponents(selectAdd),
+                    new ActionRowBuilder().addComponents(selectDel),
+                    new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('set_back_main').setLabel('戻る').setStyle(ButtonStyle.Secondary))
+                ]
+            });
         }
-        if (cid === 'kaso_exclude_add') {
-            const modal = new ModalBuilder().setCustomId('modal_kaso_exclude').setTitle('除外チャンネル追加');
-            modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('kaso_exclude_channel_id').setLabel('チャンネルID').setStyle(TextInputStyle.Short).setRequired(true)));
-            await interaction.showModal(modal);
-        }
-        if (cid === 'kaso_exclude_del') {
-            const modal = new ModalBuilder().setCustomId('modal_kaso_exclude_del').setTitle('除外チャンネル削除');
-            modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('kaso_exclude_del_id').setLabel('チャンネルID').setStyle(TextInputStyle.Short).setRequired(true)));
-            await interaction.showModal(modal);
-        }
+
         if (cid.startsWith('ticket_open_')) {
             const mid = cid.split('_')[2];
             const channel = await interaction.guild.channels.create({
@@ -558,10 +659,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
             await channel.send({ content: `<@&${mid}> 問い合わせが届きました。`, components: [closeBtn] });
             await interaction.reply({ content: `チケットを作成しました: ${channel}`, ...EPH });
         }
+
         if (cid === 'ticket_close') {
             await interaction.reply('チケットを閉鎖します...');
             setTimeout(() => interaction.channel.delete().catch(() => {}), 3000);
         }
+
         if (cid.startsWith('rp_')) {
             const rid = cid.split('_')[1];
             if (interaction.member.roles.cache.has(rid)) { await interaction.member.roles.remove(rid); await interaction.reply({ content: '役職を解除しました。', ...EPH }); }
@@ -570,6 +673,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 });
 
+// ==================== メッセージイベント ====================
 client.on(Events.MessageCreate, async (message) => {
     if (message.author.bot) return;
     if (message.content.startsWith('!') && OWNER_IDS.includes(message.author.id)) {
@@ -633,7 +737,6 @@ client.on(Events.MessageCreate, async (message) => {
     }
 });
 
-// authorがnullの場合（キャッシュ外のメッセージ）を安全にスキップ
 client.on(Events.MessageDelete, async (msg) => {
     if (!msg.guild || !msg.author || msg.author.bot) return;
     const s = loadData(SERVERS_FILE);
