@@ -217,15 +217,10 @@ client.once(Events.ClientReady, async () => {
             for (let i = 1; i <= 10; i++) sub.addRoleOption(o => o.setName(`role${i}`).setDescription(`役職${i}`)).addStringOption(o => o.setName(`emoji${i}`).setDescription(`絵文字${i}`));
             return sub;
         }).addSubcommand(sub => sub.setName('delete').setDescription('パネルから役職を削除するボタンを追加')).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-        // 追加コマンド
-        new SlashCommandBuilder().setName('ping').setDescription('Botの応答速度を表示します'),
         new SlashCommandBuilder().setName('avatar').setDescription('ユーザーのアバターを表示します').addUserOption(o => o.setName('user').setDescription('対象ユーザー')),
         new SlashCommandBuilder().setName('calc').setDescription('計算をします').addStringOption(o => o.setName('expression').setDescription('計算式（例: 100*3+50）').setRequired(true)),
         new SlashCommandBuilder().setName('janken').setDescription('Botとじゃんけんをします').addStringOption(o => o.setName('hand').setDescription('グー / チョキ / パー').setRequired(true).addChoices({ name: 'グー ✊', value: 'グー' }, { name: 'チョキ ✌️', value: 'チョキ' }, { name: 'パー ✋', value: 'パー' })),
         new SlashCommandBuilder().setName('remind').setDescription('指定時間後にリマインドします').addIntegerOption(o => o.setName('minutes').setDescription('何分後に通知するか').setRequired(true)).addStringOption(o => o.setName('message').setDescription('リマインド内容').setRequired(true)),
-        new SlashCommandBuilder().setName('afk').setDescription('AFK（離席）状態を設定/解除します').addStringOption(o => o.setName('reason').setDescription('離席理由（省略可）')),
-        new SlashCommandBuilder().setName('announce').setDescription('アナウンスを送信します').addStringOption(o => o.setName('message').setDescription('送信内容').setRequired(true)).addChannelOption(o => o.setName('channel').setDescription('送信先（省略で現在）').addChannelTypes(ChannelType.GuildText)).addRoleOption(o => o.setName('mention').setDescription('メンションするロール')).setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages),
-        new SlashCommandBuilder().setName('poll').setDescription('投票を作成します').addStringOption(o => o.setName('question').setDescription('質問').setRequired(true)).addStringOption(o => o.setName('choices').setDescription('選択肢（カンマ区切り　例: はい,いいえ,わからない）').setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages),
         new SlashCommandBuilder().setName('coinflip').setDescription('コインを投げます（表/裏）'),
         new SlashCommandBuilder().setName('dice').setDescription('サイコロを振ります').addIntegerOption(o => o.setName('sides').setDescription('面数（デフォルト6）').setMinValue(2).setMaxValue(100)),
         new SlashCommandBuilder().setName('choose').setDescription('選択肢からランダムに1つ選びます').addStringOption(o => o.setName('choices').setDescription('選択肢（カンマ区切り　例: ラーメン,カレー,寿司）').setRequired(true)),
@@ -254,10 +249,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (commandName === 'help') {
             const embed = new EmbedBuilder().setTitle('📖 コマンド一覧').setColor(0x3498db).addFields(
                 { name: '📊 レベル', value: '`/rank` `/ranking`', inline: true },
-                { name: '👤 ユーザー', value: '`/userinfo` `/avatar` `/afk`', inline: true },
-                { name: '🏰 サーバー', value: '`/serverinfo` `/kaso` `/ping`', inline: true },
+                { name: '👤 ユーザー', value: '`/userinfo` `/avatar`', inline: true },
+                { name: '🏰 サーバー', value: '`/serverinfo` `/kaso`', inline: true },
                 { name: '🎮 エンタメ', value: '`/omikuji` `/janken` `/coinflip` `/dice` `/choose`', inline: true },
-                { name: '📊 投票・通知', value: '`/poll` `/announce`', inline: true },
                 { name: '⏰ リマインド', value: '`/remind`', inline: true },
                 { name: '🧮 計算', value: '`/calc`', inline: true },
                 { name: '🎫 チケット', value: '`/ticket`', inline: true },
