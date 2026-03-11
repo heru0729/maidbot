@@ -249,7 +249,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (commandName === 'help') {
             const embed = new EmbedBuilder().setTitle('📖 コマンド一覧').setColor(0x3498db).addFields(
                 { name: '📊 レベル', value: '`/rank` `/ranking`', inline: true },
-                { name: '👤 ユーザー', value: '`/userinfo` `/avatar`', inline: true },
+                { name: '👤 ユーザー', value: '`/userinfo`', inline: true },
                 { name: '🏰 サーバー', value: '`/serverinfo` `/kaso`', inline: true },
                 { name: '🎮 エンタメ', value: '`/omikuji` `/janken` `/coinflip` `/dice` `/choose`', inline: true },
                 { name: '⏰ リマインド', value: '`/remind`', inline: true },
@@ -440,17 +440,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
             if (count === 0) return interaction.reply({ content: '最低1つの役職を指定してください。', ...EPH });
             await interaction.reply({ embeds: [embed], components: [row] });
         }
-if (commandName === 'avatar') {
-    await interaction.deferReply();
-    try {
-        const target = interaction.options.getUser('target'), idInput = interaction.options.getString('user_id');
-        let user = target || (idInput ? await interaction.client.users.fetch(idInput).catch(() => null) : interaction.user);
-        if (!user) return await interaction.editReply({ content: 'ユーザーが見つかりませんでした。', ephemeral: true });
-        const png = user.displayAvatarURL({ size: 1024, extension: 'png' }), webp = user.displayAvatarURL({ size: 1024, extension: 'webp' });
-        const embed = new EmbedBuilder().setTitle(`🖼️ ${user.username} のアバター`).setDescription(`**ID:** \`${user.id}\``).setImage(png).setColor(0x3498db).addFields({ name: 'ダウンロード', value: `[PNG](${png}) | [WEBP](${webp})` }).setTimestamp().setFooter({ text: `Requested by ${interaction.user.tag}`, iconURL: interaction.user.displayAvatarURL() });
-        await interaction.editReply({ embeds: [embed] });
-    } catch (e) { console.error(e); if (interaction.deferred) await interaction.editReply({ content: 'エラーが発生しました。' }); }
-}
+        
 if (commandName === 'calc') {
     const expr = options.getString('expression');
     try {
