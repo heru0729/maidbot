@@ -30,7 +30,8 @@ const messageHistory = new Map();
 const ngwordViolations = new Map();
 const pendingWelcomeChannel = new Map();
 const pendingByeChannel = new Map();
-const kasoCooldowns = new Map(); // /kaso クールダウン (guildId → timestamp)
+const kasoCooldowns = new Map();
+const afkUsers = new Map(); // `${guildId}_${userId}` → { reason, since }
 const EPH = { flags: MessageFlags.Ephemeral };
 
 // ステータス更新関数
@@ -101,10 +102,10 @@ function getHourlyStats(guildId, ignoredChannels = []) {
     return { total, topUsers, topChannels, judgment, color };
 }
 
-// 認証済みユーザーのみのランキングデータ取得
-function getAuthRanking(users) {
+// 全ユーザーランキングデータ取得（認証不要）
+function getAllRanking(users) {
     return Object.entries(users)
-        .filter(([, v]) => typeof v.xp === 'number' && v.accessToken)
+        .filter(([, v]) => typeof v.xp === 'number')
         .sort((a, b) => b[1].xp - a[1].xp);
 }
 
@@ -123,7 +124,7 @@ function buildRankingEmbed(sorted, page) {
         return `${icon} ${name} — Lv.${e[1].lv ?? 0} (${e[1].xp} XP)`;
     }).join('\n');
     const embed = new EmbedBuilder()
-        .setTitle('🏆 レベルランキング（認証済み）')
+        .setTitle('🏆 レベルランキング')
         .setDescription(list || 'データなし')
         .setColor(0xf1c40f)
         .setFooter({ text: `ページ ${safePage} / ${totalPages}　全 ${sorted.length} ユーザー` });
@@ -191,8 +192,6 @@ app.listen(process.env.PORT || 3000, '0.0.0.0', () => console.log('Web Server Re
 
 client.once(Events.ClientReady, async () => {
     console.log(`${client.user.tag} としてログインしました。`);
-
-    // ステータス更新（起動時 + 30秒ごと）
     updateStatus();
     setInterval(updateStatus, 30000);
 
@@ -201,7 +200,7 @@ client.once(Events.ClientReady, async () => {
         new SlashCommandBuilder().setName('set').setDescription('サーバー管理用設定パネルを開きます').setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
         new SlashCommandBuilder().setName('support').setDescription('サポートサーバーの招待リンクを表示します'),
         new SlashCommandBuilder().setName('rank').setDescription('現在のレベルとXPを確認します').addUserOption(o => o.setName('user').setDescription('確認したいユーザー')),
-        new SlashCommandBuilder().setName('ranking').setDescription('認証済みユーザーのレベルランキングを表示します'),
+        new SlashCommandBuilder().setName('ranking').setDescription('レベルランキングを表示します'),
         new SlashCommandBuilder().setName('serverinfo').setDescription('現在のサーバーの詳細情報を表示します'),
         new SlashCommandBuilder().setName('userinfo').setDescription('ユーザーの詳細情報を表示します').addUserOption(o => o.setName('user').setDescription('対象ユーザー')),
         new SlashCommandBuilder().setName('clear').setDescription('指定した件数のメッセージを削除します').addIntegerOption(o => o.setName('num').setDescription('件数 (1-100)').setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages),
@@ -217,7 +216,19 @@ client.once(Events.ClientReady, async () => {
             sub.setName('create').setDescription('パネル作成').addStringOption(o => o.setName('title').setDescription('タイトル').setRequired(true)).addStringOption(o => o.setName('description').setDescription('説明').setRequired(true));
             for (let i = 1; i <= 10; i++) sub.addRoleOption(o => o.setName(`role${i}`).setDescription(`役職${i}`)).addStringOption(o => o.setName(`emoji${i}`).setDescription(`絵文字${i}`));
             return sub;
-        }).addSubcommand(sub => sub.setName('delete').setDescription('パネルから役職を削除するボタンを追加')).setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+        }).addSubcommand(sub => sub.setName('delete').setDescription('パネルから役職を削除するボタンを追加')).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+        // 追加コマンド
+        new SlashCommandBuilder().setName('ping').setDescription('Botの応答速度を表示します'),
+        new SlashCommandBuilder().setName('avatar').setDescription('ユーザーのアバターを表示します').addUserOption(o => o.setName('user').setDescription('対象ユーザー')),
+        new SlashCommandBuilder().setName('calc').setDescription('計算をします').addStringOption(o => o.setName('expression').setDescription('計算式（例: 100*3+50）').setRequired(true)),
+        new SlashCommandBuilder().setName('janken').setDescription('Botとじゃんけんをします').addStringOption(o => o.setName('hand').setDescription('グー / チョキ / パー').setRequired(true).addChoices({ name: 'グー ✊', value: 'グー' }, { name: 'チョキ ✌️', value: 'チョキ' }, { name: 'パー ✋', value: 'パー' })),
+        new SlashCommandBuilder().setName('remind').setDescription('指定時間後にリマインドします').addIntegerOption(o => o.setName('minutes').setDescription('何分後に通知するか').setRequired(true)).addStringOption(o => o.setName('message').setDescription('リマインド内容').setRequired(true)),
+        new SlashCommandBuilder().setName('afk').setDescription('AFK（離席）状態を設定/解除します').addStringOption(o => o.setName('reason').setDescription('離席理由（省略可）')),
+        new SlashCommandBuilder().setName('announce').setDescription('アナウンスを送信します').addStringOption(o => o.setName('message').setDescription('送信内容').setRequired(true)).addChannelOption(o => o.setName('channel').setDescription('送信先（省略で現在）').addChannelTypes(ChannelType.GuildText)).addRoleOption(o => o.setName('mention').setDescription('メンションするロール')).setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages),
+        new SlashCommandBuilder().setName('poll').setDescription('投票を作成します').addStringOption(o => o.setName('question').setDescription('質問').setRequired(true)).addStringOption(o => o.setName('choices').setDescription('選択肢（カンマ区切り　例: はい,いいえ,わからない）').setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages),
+        new SlashCommandBuilder().setName('coinflip').setDescription('コインを投げます（表/裏）'),
+        new SlashCommandBuilder().setName('dice').setDescription('サイコロを振ります').addIntegerOption(o => o.setName('sides').setDescription('面数（デフォルト6）').setMinValue(2).setMaxValue(100)),
+        new SlashCommandBuilder().setName('choose').setDescription('選択肢からランダムに1つ選びます').addStringOption(o => o.setName('choices').setDescription('選択肢（カンマ区切り　例: ラーメン,カレー,寿司）').setRequired(true)),
     ].map(cmd => cmd.toJSON());
 
     const rest = new REST({ version: '10' }).setToken(TOKEN);
@@ -242,23 +253,20 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         if (commandName === 'help') {
             const embed = new EmbedBuilder().setTitle('📖 コマンド一覧').setColor(0x3498db).addFields(
-                { name: '/help', value: 'このメニューを表示', inline: true },
-                { name: '/set', value: '管理設定パネル', inline: true },
-                { name: '/support', value: 'サポートサーバー', inline: true },
-                { name: '/rank [user]', value: 'レベル・XP確認', inline: true },
-                { name: '/ranking', value: 'XPランキング（認証済み）', inline: true },
-                { name: '/serverinfo', value: 'サーバー情報', inline: true },
-                { name: '/userinfo [user]', value: 'ユーザー情報', inline: true },
-                { name: '/clear [num]', value: 'メッセージ一括削除', inline: true },
-                { name: '/log [channel]', value: 'ログ送信先設定', inline: true },
-                { name: '/authset', value: 'OAuth2認証パネル設置', inline: true },
-                { name: '/ticket', value: 'チケットパネル作成', inline: true },
-                { name: '/gset / /gdel', value: 'グローバルチャット', inline: true },
-                { name: '/chatlock [sec]', value: 'チャンネル一時ロック', inline: true },
-                { name: '/omikuji', value: '今日の運勢', inline: true },
-                { name: '/kaso', value: '過疎調査（3分CD）', inline: true },
-                { name: '/rp create', value: '役職付与パネル作成', inline: true }
-            );
+                { name: '📊 レベル', value: '`/rank` `/ranking`', inline: true },
+                { name: '👤 ユーザー', value: '`/userinfo` `/avatar` `/afk`', inline: true },
+                { name: '🏰 サーバー', value: '`/serverinfo` `/kaso` `/ping`', inline: true },
+                { name: '🎮 エンタメ', value: '`/omikuji` `/janken` `/coinflip` `/dice` `/choose`', inline: true },
+                { name: '📊 投票・通知', value: '`/poll` `/announce`', inline: true },
+                { name: '⏰ リマインド', value: '`/remind`', inline: true },
+                { name: '🧮 計算', value: '`/calc`', inline: true },
+                { name: '🎫 チケット', value: '`/ticket`', inline: true },
+                { name: '🔐 認証', value: '`/authset`', inline: true },
+                { name: '🌐 グローバル', value: '`/gset` `/gdel`', inline: true },
+                { name: '🏷️ 役職', value: '`/rp create`', inline: true },
+                { name: '⚙️ 管理', value: '`/set` `/clear` `/log` `/chatlock`', inline: true },
+                { name: '❓ その他', value: '`/support` `/help`', inline: true }
+            ).setFooter({ text: '/set で各種サーバー設定が可能です' });
             await interaction.reply({ embeds: [embed], ...EPH });
         }
 
@@ -271,24 +279,25 @@ client.on(Events.InteractionCreate, async (interaction) => {
             const xp = typeof raw.xp === 'number' ? raw.xp : 0;
             const lv = typeof raw.lv === 'number' ? raw.lv : 0;
             const next = getNextLevelXP(lv);
-            const sorted = getAuthRanking(users);
+            const sorted = getAllRanking(users);
             const rank = sorted.findIndex(e => e[0] === target.id) + 1;
-            const isAuthed = !!users[target.id]?.accessToken;
+            const filled = Math.round((xp / next) * 10);
+            const progressBar = '█'.repeat(filled) + '░'.repeat(10 - filled);
             const embed = new EmbedBuilder()
                 .setTitle(`📊 ${target.username} のステータス`)
                 .setThumbnail(target.displayAvatarURL())
                 .addFields(
-                    { name: '認証状態', value: isAuthed ? '✅ 認証済み' : '❌ 未認証', inline: true },
-                    { name: '現在のレベル', value: `Lv.${lv}`, inline: true },
-                    { name: '現在のXP', value: `${xp} / ${next}`, inline: true },
-                    { name: 'ランキング順位', value: isAuthed && rank > 0 ? `${rank}位` : '対象外（未認証）', inline: true }
-                ).setColor(isAuthed ? 0x2ecc71 : 0x95a5a6);
+                    { name: 'レベル', value: `Lv.${lv}`, inline: true },
+                    { name: 'ランキング', value: rank > 0 ? `${rank}位` : '--', inline: true },
+                    { name: '\u200b', value: '\u200b', inline: true },
+                    { name: `XP (${xp} / ${next})`, value: `\`${progressBar}\``, inline: false }
+                ).setColor(0x2ecc71);
             await interaction.reply({ embeds: [embed] });
         }
 
         if (commandName === 'ranking') {
-            const sorted = getAuthRanking(users);
-            if (sorted.length === 0) return interaction.reply({ content: '認証済みユーザーがまだいません。', ...EPH });
+            const sorted = getAllRanking(users);
+            if (sorted.length === 0) return interaction.reply({ content: 'まだランキングデータがありません。', ...EPH });
             const { embed, safePage, totalPages } = buildRankingEmbed(sorted, 1);
             await interaction.reply({ embeds: [embed], components: totalPages > 1 ? [buildRankingRow(safePage, totalPages)] : [] });
         }
@@ -315,7 +324,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
             const member = await interaction.guild.members.fetch(user.id).catch(() => null);
             const createdTs = Math.floor(user.createdTimestamp / 1000);
             const joinedTs = member ? Math.floor(member.joinedTimestamp / 1000) : null;
-            // アカウント年齢計算
             const ageMs = Date.now() - user.createdTimestamp;
             const ageDays = Math.floor(ageMs / 86400000);
             const ageYears = Math.floor(ageDays / 365);
@@ -381,12 +389,22 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
 
         if (commandName === 'omikuji') {
-            const results = ['大吉 🎊', '中吉 🎉', '小吉 🙂', '吉 😊', '末吉 😐', '凶 😟', '大凶 😱'];
-            await interaction.reply(`🎴 今日のあなたの運勢は... **${results[Math.floor(Math.random() * results.length)]}** です！`);
+            const results = [
+                { label: '大吉 🎊', color: 0xFFD700, msg: '最高の一日になるでしょう！' },
+                { label: '中吉 🎉', color: 0x00FF7F, msg: '良いことが起きそうです。' },
+                { label: '小吉 🙂', color: 0x7FFFD4, msg: 'まずまずの運勢です。' },
+                { label: '吉 😊', color: 0x87CEEB, msg: '穏やかな一日を過ごせそうです。' },
+                { label: '末吉 😐', color: 0xD3D3D3, msg: '慎重に行動すると良いでしょう。' },
+                { label: '凶 😟', color: 0xFFA07A, msg: '注意が必要な日です。' },
+                { label: '大凶 😱', color: 0xFF4500, msg: '今日は無理をしない方が良いかも...' },
+            ];
+            const r = results[Math.floor(Math.random() * results.length)];
+            const embed = new EmbedBuilder().setTitle(`🎴 おみくじ結果: **${r.label}**`).setDescription(r.msg).setColor(r.color).setTimestamp();
+            await interaction.reply({ embeds: [embed] });
         }
 
         if (commandName === 'kaso') {
-            const KASO_COOLDOWN = 3 * 60 * 1000; // 3分
+            const KASO_COOLDOWN = 3 * 60 * 1000;
             const now = Date.now();
             const lastUsed = kasoCooldowns.get(guildId) || 0;
             const remaining = KASO_COOLDOWN - (now - lastUsed);
@@ -428,13 +446,103 @@ client.on(Events.InteractionCreate, async (interaction) => {
             if (count === 0) return interaction.reply({ content: '最低1つの役職を指定してください。', ...EPH });
             await interaction.reply({ embeds: [embed], components: [row] });
         }
+
+        }
+
+        if (commandName === 'avatar') {
+    try {
+        const user = interaction.options.getUser('user') || interaction.user;
+        const avatarUrlPNG = user.displayAvatarURL({ size: 1024, extension: 'png' });
+        const avatarUrlWEBP = user.displayAvatarURL({ size: 1024, extension: 'webp' });
+        const avatarUrlJPG = user.displayAvatarURL({ size: 1024, extension: 'jpg' });
+        const embed = new EmbedBuilder()
+            .setTitle(`🖼️ ${user.username} のアバター`)
+            .setImage(avatarUrlPNG)
+            .setColor(0x3498db)
+            .addFields({ 
+                name: 'ダウンロードリンク', 
+                value: `[PNG](${avatarUrlPNG}) | [WEBP](${avatarUrlWEBP}) | [JPG](${avatarUrlJPG})` 
+            })
+            .setTimestamp()
+            .setFooter({ text: `Requested by ${interaction.user.tag}`, iconURL: interaction.user.displayAvatarURL() });
+        await interaction.reply({ embeds: [embed] });
+    } catch (error) {
+        console.error('アバターコマンド実行中にエラーが発生しました:', error);
+        await interaction.reply({ 
+            content: 'アバターの取得中にエラーが発生しました。もう一度試してください。', 
+            ephemeral: true 
+        });
+    }
+}
+
+        if (commandName === 'calc') {
+            const expr = options.getString('expression');
+            try {
+                if (!/^[\d\s\+\-\*\/\.\(\)%\^]+$/.test(expr)) throw new Error('使用できない文字が含まれています');
+                const result = Function(`"use strict"; return (${expr.replace(/\^/g, '**')})`)();
+                if (!isFinite(result)) throw new Error('ゼロ除算または計算不能');
+                const embed = new EmbedBuilder().setTitle('🧮 計算結果').setColor(0x3498db)
+                    .addFields({ name: '式', value: `\`${expr}\``, inline: true }, { name: '結果', value: `\`${result}\``, inline: true });
+                await interaction.reply({ embeds: [embed] });
+            } catch (e) {
+                await interaction.reply({ content: `❌ 計算エラー: ${e.message}`, ...EPH });
+            }
+        }
+
+        if (commandName === 'janken') {
+            const hands = ['グー', 'チョキ', 'パー'];
+            const emojis = { 'グー': '✊', 'チョキ': '✌️', 'パー': '✋' };
+            const userHand = options.getString('hand');
+            const botHand = hands[Math.floor(Math.random() * 3)];
+            let result, color;
+            if (userHand === botHand) { result = '引き分け 🤝'; color = 0xFFFF00; }
+            else if ((userHand === 'グー' && botHand === 'チョキ') || (userHand === 'チョキ' && botHand === 'パー') || (userHand === 'パー' && botHand === 'グー')) { result = 'あなたの勝ち 🎉'; color = 0x00FF00; }
+            else { result = 'Botの勝ち 😈'; color = 0xFF0000; }
+            const embed = new EmbedBuilder().setTitle('✊✌️✋ じゃんけん！').setColor(color)
+                .addFields({ name: 'あなた', value: `${emojis[userHand]} ${userHand}`, inline: true }, { name: 'Bot', value: `${emojis[botHand]} ${botHand}`, inline: true }, { name: '結果', value: result, inline: false });
+            await interaction.reply({ embeds: [embed] });
+        }
+
+        if (commandName === 'remind') {
+            const minutes = options.getInteger('minutes');
+            const msg = options.getString('message');
+            if (isNaN(sec) || sec < 1 || sec > 1440) return interaction.reply({ content: '...', ephemeral: true });
+            await interaction.reply({ content: `⏰ **${minutes}分後**にリマインドします！\n内容: \`${msg}\``, ...EPH });
+            setTimeout(async () => {
+                const embed = new EmbedBuilder().setTitle('⏰ リマインダー').setDescription(msg).setColor(0xf39c12).setTimestamp().setFooter({ text: `${interaction.guild.name} でのリマインダー` });
+                try { const dm = await interaction.user.createDM(); await dm.send({ content: `<@${interaction.user.id}>`, embeds: [embed] }); }
+                catch { interaction.channel?.send({ content: `<@${interaction.user.id}>`, embeds: [embed] }).catch(() => {}); }
+            }, minutes * 60 * 1000);
+        }
+
+
+        if (commandName === 'coinflip') {
+            const result = Math.random() < 0.5 ? '表 🪙' : '裏 🔄';
+            await interaction.reply(`コインを投げました... **${result}** が出ました！`);
+        }
+
+        if (commandName === 'dice') {
+            const sides = options.getInteger('sides') || 6;
+            const result = Math.floor(Math.random() * sides) + 1;
+            const embed = new EmbedBuilder().setTitle('🎲 ダイスロール').setColor(0x9b59b6)
+                .addFields({ name: `d${sides}`, value: `**${result}**`, inline: true });
+            await interaction.reply({ embeds: [embed] });
+        }
+
+        if (commandName === 'choose') {
+            const choices = options.getString('choices').split(',').map(c => c.trim()).filter(Boolean);
+            if (choices.length < 2) return interaction.reply({ content: '❌ 選択肢を2つ以上カンマ区切りで入力してください。', ...EPH });
+            const chosen = choices[Math.floor(Math.random() * choices.length)];
+            const embed = new EmbedBuilder().setTitle('🎯 選択結果').setColor(0x1abc9c)
+                .setDescription(`**${chosen}**`).setFooter({ text: `${choices.length}個の選択肢から選びました` });
+            await interaction.reply({ embeds: [embed] });
+        }
     }
 
     // ==================== セレクトメニュー ====================
     if (interaction.isChannelSelectMenu()) {
         const cid = interaction.customId;
         const channelId = interaction.values[0];
-
         if (cid === 'select_log_channel') {
             servers[guildId].logChannel = channelId;
             saveData(SERVERS_FILE, servers);
@@ -532,20 +640,15 @@ client.on(Events.InteractionCreate, async (interaction) => {
                 servers[guildId].ngwords.push(word);
                 saveData(SERVERS_FILE, servers);
                 await interaction.reply({ content: `✅ 「${word}」をNGワードに追加しました。`, ...EPH });
-            } else {
-                await interaction.reply({ content: '⚠️ そのワードは既に登録されています。', ...EPH });
-            }
+            } else { await interaction.reply({ content: '⚠️ そのワードは既に登録されています。', ...EPH }); }
         }
         if (cid === 'modal_ngword_del') {
             const word = interaction.fields.getTextInputValue('ngword_input').trim();
             const before = servers[guildId].ngwords?.length || 0;
             servers[guildId].ngwords = (servers[guildId].ngwords || []).filter(w => w !== word);
             saveData(SERVERS_FILE, servers);
-            if ((servers[guildId].ngwords?.length || 0) < before) {
-                await interaction.reply({ content: `✅ 「${word}」をNGワードから削除しました。`, ...EPH });
-            } else {
-                await interaction.reply({ content: '⚠️ そのワードは登録されていません。', ...EPH });
-            }
+            if ((servers[guildId].ngwords?.length || 0) < before) { await interaction.reply({ content: `✅ 「${word}」をNGワードから削除しました。`, ...EPH }); }
+            else { await interaction.reply({ content: '⚠️ そのワードは登録されていません。', ...EPH }); }
         }
         if (cid === 'modal_ngword_timeout') {
             const sec = parseInt(interaction.fields.getTextInputValue('timeout_seconds').trim());
@@ -567,29 +670,21 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.isButton()) {
         const cid = interaction.customId;
 
-        // ランキングページ移動
         if (cid.startsWith('ranking_prev_') || cid.startsWith('ranking_next_')) {
             const isPrev = cid.startsWith('ranking_prev_');
             const currentPage = parseInt(cid.split('_')[2]);
             const newPage = isPrev ? currentPage - 1 : currentPage + 1;
-            const sorted = getAuthRanking(users);
+            const sorted = getAllRanking(users);
             const { embed, safePage, totalPages } = buildRankingEmbed(sorted, newPage);
             await interaction.update({ embeds: [embed], components: totalPages > 1 ? [buildRankingRow(safePage, totalPages)] : [] });
         }
 
         if (cid === 'set_menu_log') {
             const select = new ChannelSelectMenuBuilder().setCustomId('select_log_channel').setPlaceholder('ログ送信先チャンネルを選択').addChannelTypes(ChannelType.GuildText);
-            await interaction.update({
-                content: `📋 **ログ設定**\n\n現在のログチャンネル: ${servers[guildId].logChannel ? `<#${servers[guildId].logChannel}>` : '未設定'}\n\nチャンネルを選択してください。`,
-                components: [new ActionRowBuilder().addComponents(select), createLogConfigRow(servers[guildId].logConfig)]
-            });
+            await interaction.update({ content: `📋 **ログ設定**\n\n現在のログチャンネル: ${servers[guildId].logChannel ? `<#${servers[guildId].logChannel}>` : '未設定'}\n\nチャンネルを選択してください。`, components: [new ActionRowBuilder().addComponents(select), createLogConfigRow(servers[guildId].logConfig)] });
         }
         if (cid === 'set_back_main') await interaction.update(buildSetPanel(servers[guildId]));
-        if (cid === 'set_lv_toggle') {
-            servers[guildId].leveling = !servers[guildId].leveling;
-            saveData(SERVERS_FILE, servers);
-            await interaction.update(buildSetPanel(servers[guildId]));
-        }
+        if (cid === 'set_lv_toggle') { servers[guildId].leveling = !servers[guildId].leveling; saveData(SERVERS_FILE, servers); await interaction.update(buildSetPanel(servers[guildId])); }
         if (cid === 'set_menu_lock') {
             servers[guildId].locked = !servers[guildId].locked;
             const channels = interaction.guild.channels.cache.filter(c => c.type === ChannelType.GuildText);
@@ -602,26 +697,17 @@ client.on(Events.InteractionCreate, async (interaction) => {
             servers[guildId].logConfig[key] = !servers[guildId].logConfig[key];
             saveData(SERVERS_FILE, servers);
             const select = new ChannelSelectMenuBuilder().setCustomId('select_log_channel').setPlaceholder('ログ送信先チャンネルを選択').addChannelTypes(ChannelType.GuildText);
-            await interaction.update({
-                content: `📋 **ログ設定**\n\n現在のログチャンネル: ${servers[guildId].logChannel ? `<#${servers[guildId].logChannel}>` : '未設定'}`,
-                components: [new ActionRowBuilder().addComponents(select), createLogConfigRow(servers[guildId].logConfig)]
-            });
+            await interaction.update({ content: `📋 **ログ設定**\n\n現在のログチャンネル: ${servers[guildId].logChannel ? `<#${servers[guildId].logChannel}>` : '未設定'}`, components: [new ActionRowBuilder().addComponents(select), createLogConfigRow(servers[guildId].logConfig)] });
         }
         if (cid === 'set_menu_welcome') {
             const current = servers[guildId].welcome;
             const select = new ChannelSelectMenuBuilder().setCustomId('select_welcome_channel').setPlaceholder('送信先チャンネルを選択').addChannelTypes(ChannelType.GuildText);
-            await interaction.update({
-                content: `📥 **入室通知設定**\n\n現在: ${current?.channel ? `<#${current.channel}>` : '未設定'}\nメッセージ: ${current?.message || '未設定'}\n\nチャンネルを選択後、メッセージを入力します。`,
-                components: [new ActionRowBuilder().addComponents(select), new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('set_back_main').setLabel('戻る').setStyle(ButtonStyle.Secondary))]
-            });
+            await interaction.update({ content: `📥 **入室通知設定**\n\n現在: ${current?.channel ? `<#${current.channel}>` : '未設定'}\nメッセージ: ${current?.message || '未設定'}\n\nチャンネルを選択後、メッセージを入力します。`, components: [new ActionRowBuilder().addComponents(select), new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('set_back_main').setLabel('戻る').setStyle(ButtonStyle.Secondary))] });
         }
         if (cid === 'set_menu_bye') {
             const current = servers[guildId].bye;
             const select = new ChannelSelectMenuBuilder().setCustomId('select_bye_channel').setPlaceholder('送信先チャンネルを選択').addChannelTypes(ChannelType.GuildText);
-            await interaction.update({
-                content: `📤 **退室通知設定**\n\n現在: ${current?.channel ? `<#${current.channel}>` : '未設定'}\nメッセージ: ${current?.message || '未設定'}\n\nチャンネルを選択後、メッセージを入力します。`,
-                components: [new ActionRowBuilder().addComponents(select), new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('set_back_main').setLabel('戻る').setStyle(ButtonStyle.Secondary))]
-            });
+            await interaction.update({ content: `📤 **退室通知設定**\n\n現在: ${current?.channel ? `<#${current.channel}>` : '未設定'}\nメッセージ: ${current?.message || '未設定'}\n\nチャンネルを選択後、メッセージを入力します。`, components: [new ActionRowBuilder().addComponents(select), new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('set_back_main').setLabel('戻る').setStyle(ButtonStyle.Secondary))] });
         }
         if (cid === 'set_menu_ngword') await interaction.update(buildNgwordPanel(servers[guildId]));
         if (cid === 'ngword_add') {
@@ -661,10 +747,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
             const list = ignored.length > 0 ? ignored.map(c => `<#${c}>`).join('、') : 'なし';
             const selectAdd = new ChannelSelectMenuBuilder().setCustomId('select_kaso_exclude_add').setPlaceholder('除外するチャンネルを選択').addChannelTypes(ChannelType.GuildText);
             const selectDel = new ChannelSelectMenuBuilder().setCustomId('select_kaso_exclude_del').setPlaceholder('除外を解除するチャンネルを選択').addChannelTypes(ChannelType.GuildText);
-            await interaction.update({
-                content: `📊 **調査除外設定**\n\n除外チャンネル: ${list}\n※ticket-チャンネルは自動除外`,
-                components: [new ActionRowBuilder().addComponents(selectAdd), new ActionRowBuilder().addComponents(selectDel), new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('set_back_main').setLabel('戻る').setStyle(ButtonStyle.Secondary))]
-            });
+            await interaction.update({ content: `📊 **調査除外設定**\n\n除外チャンネル: ${list}\n※ticket-チャンネルは自動除外`, components: [new ActionRowBuilder().addComponents(selectAdd), new ActionRowBuilder().addComponents(selectDel), new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('set_back_main').setLabel('戻る').setStyle(ButtonStyle.Secondary))] });
         }
         if (cid.startsWith('ticket_open_')) {
             const mid = cid.split('_')[2];
@@ -678,7 +761,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
                 ]
             });
             const closeBtn = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('ticket_close').setLabel('チケットを閉じる').setStyle(ButtonStyle.Danger));
-            await channel.send({ content: `<@&${mid}> 問い合わせが届きました。`, components: [closeBtn] });
+            await channel.send({ content: `<@&${mid}> チケット作成ありがとうございます！ \n管理者が来るまでお待ちください`, components: [closeBtn] });
             await interaction.reply({ content: `チケットを作成しました: ${channel}`, ...EPH });
         }
         if (cid === 'ticket_close') {
@@ -806,7 +889,6 @@ client.on(Events.GuildMemberRemove, async (member) => {
     }
 });
 
-// サーバー参加・離脱時もステータス更新
 client.on(Events.GuildCreate, () => updateStatus());
 client.on(Events.GuildDelete, () => updateStatus());
 
