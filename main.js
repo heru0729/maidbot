@@ -4,7 +4,6 @@ const fs = require('fs');
 const path = require('path');
 const setupAuth = require('./auth.js');
 const handleAdminCommands = require('./admin.js');
-const { getPlayCommands, handlePlayCommand, handlePlayButton } = require('./play.js');
 
 const app = express();
 const client = new Client({
@@ -223,7 +222,7 @@ client.once(Events.ClientReady, async () => {
         new SlashCommandBuilder().setName('coinflip').setDescription('コインを投げます（表/裏）'),
         new SlashCommandBuilder().setName('dice').setDescription('サイコロを振ります').addIntegerOption(o => o.setName('sides').setDescription('面数（デフォルト6）').setMinValue(2).setMaxValue(100)),
         new SlashCommandBuilder().setName('choose').setDescription('選択肢からランダムに1つ選びます').addStringOption(o => o.setName('choices').setDescription('選択肢（カンマ区切り　例: ラーメン,カレー,寿司）').setRequired(true)),
-    ].map(cmd => cmd.toJSON()).concat(getPlayCommands());
+    ].map(cmd => cmd.toJSON());
 
     const rest = new REST({ version: '10' }).setToken(TOKEN);
     try {
@@ -241,16 +240,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         servers[guildId] = { logConfig: { edit: true, delete: true, join: true, leave: true }, ngwords: [], ngwordExemptRoles: [], ngwordTimeoutSeconds: 60, ngwordViolationLimit: 3, locked: false, kasoIgnoreChannels: [], leveling: true };
     }
 
-    // ==================== ゲームコマンド (play.js) ====================
-    const PLAY_COMMANDS = ['igo', 'shogi', 'chess', 'othello', 'aki'];
-    if (interaction.isChatInputCommand() && PLAY_COMMANDS.includes(interaction.commandName)) {
-        return handlePlayCommand(interaction);
-    }
-    const PLAY_BUTTONS = ['igo_', 'shogi_', 'chess_', 'othello_', 'aki_', 'invite_', 'online_'];
-    if (interaction.isButton() && PLAY_BUTTONS.some(p => interaction.customId.startsWith(p))) {
-        return handlePlayButton(interaction);
-    }
-
     // ==================== スラッシュコマンド ====================
     if (interaction.isChatInputCommand()) {
         const { commandName, options } = interaction;
@@ -261,8 +250,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
                 { name: '👤 ユーザー', value: '`/userinfo`', inline: true },
                 { name: '🏰 サーバー', value: '`/serverinfo` `/kaso`', inline: true },
                 { name: '🎮 エンタメ', value: '`/omikuji` `/janken` `/coinflip` `/dice` `/choose`', inline: true },
-                { name: '🎲 ゲーム', value: '`/igo` `/shogi` `/chess` `/othello` `/aki`', inline: true },
-
                 { name: '⏰ リマインド', value: '`/remind`', inline: true },
 
                 { name: '🎫 チケット', value: '`/ticket`', inline: true },
