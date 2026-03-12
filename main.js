@@ -32,7 +32,6 @@ const ngwordViolations = new Map();
 const pendingWelcomeChannel = new Map();
 const pendingByeChannel = new Map();
 const kasoCooldowns = new Map();
-const afkUsers = new Map(); // `${guildId}_${userId}` → { reason, since }
 const EPH = { flags: MessageFlags.Ephemeral };
 
 // ステータス更新関数
@@ -219,14 +218,8 @@ client.once(Events.ClientReady, async () => {
             return sub;
         }).addSubcommand(sub => sub.setName('delete').setDescription('パネルから役職を削除するボタンを追加')).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
         // 追加コマンド
-        new SlashCommandBuilder().setName('ping').setDescription('Botの応答速度を表示します'),
-        new SlashCommandBuilder().setName('avatar').setDescription('ユーザーのアバターを表示します').addUserOption(o => o.setName('user').setDescription('対象ユーザー')),
-        new SlashCommandBuilder().setName('calc').setDescription('計算をします').addStringOption(o => o.setName('expression').setDescription('計算式（例: 100*3+50）').setRequired(true)),
         new SlashCommandBuilder().setName('janken').setDescription('Botとじゃんけんをします').addStringOption(o => o.setName('hand').setDescription('グー / チョキ / パー').setRequired(true).addChoices({ name: 'グー ✊', value: 'グー' }, { name: 'チョキ ✌️', value: 'チョキ' }, { name: 'パー ✋', value: 'パー' })),
         new SlashCommandBuilder().setName('remind').setDescription('指定時間後にリマインドします').addIntegerOption(o => o.setName('minutes').setDescription('何分後に通知するか').setRequired(true)).addStringOption(o => o.setName('message').setDescription('リマインド内容').setRequired(true)),
-        new SlashCommandBuilder().setName('afk').setDescription('AFK（離席）状態を設定/解除します').addStringOption(o => o.setName('reason').setDescription('離席理由（省略可）')),
-        new SlashCommandBuilder().setName('announce').setDescription('アナウンスを送信します').addStringOption(o => o.setName('message').setDescription('送信内容').setRequired(true)).addChannelOption(o => o.setName('channel').setDescription('送信先（省略で現在）').addChannelTypes(ChannelType.GuildText)).addRoleOption(o => o.setName('mention').setDescription('メンションするロール')).setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages),
-        new SlashCommandBuilder().setName('poll').setDescription('投票を作成します').addStringOption(o => o.setName('question').setDescription('質問').setRequired(true)).addStringOption(o => o.setName('choices').setDescription('選択肢（カンマ区切り　例: はい,いいえ,わからない）').setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages),
         new SlashCommandBuilder().setName('coinflip').setDescription('コインを投げます（表/裏）'),
         new SlashCommandBuilder().setName('dice').setDescription('サイコロを振ります').addIntegerOption(o => o.setName('sides').setDescription('面数（デフォルト6）').setMinValue(2).setMaxValue(100)),
         new SlashCommandBuilder().setName('choose').setDescription('選択肢からランダムに1つ選びます').addStringOption(o => o.setName('choices').setDescription('選択肢（カンマ区切り　例: ラーメン,カレー,寿司）').setRequired(true)),
@@ -265,17 +258,17 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (commandName === 'help') {
             const embed = new EmbedBuilder().setTitle('📖 コマンド一覧').setColor(0x3498db).addFields(
                 { name: '📊 レベル', value: '`/rank` `/ranking`', inline: true },
-                { name: '👤 ユーザー', value: '`/userinfo` `/avatar` `/afk`', inline: true },
-                { name: '🏰 サーバー', value: '`/serverinfo` `/kaso` `/ping`', inline: true },
+                { name: '👤 ユーザー', value: '`/userinfo`', inline: true },
+                { name: '🏰 サーバー', value: '`/serverinfo` `/kaso`', inline: true },
                 { name: '🎮 エンタメ', value: '`/omikuji` `/janken` `/coinflip` `/dice` `/choose`', inline: true },
                 { name: '🎲 ゲーム', value: '`/igo` `/shogi` `/chess` `/othello` `/aki`', inline: true },
-                { name: '📊 投票・通知', value: '`/poll` `/announce`', inline: true },
+
                 { name: '⏰ リマインド', value: '`/remind`', inline: true },
-                { name: '🧮 計算', value: '`/calc`', inline: true },
+
                 { name: '🎫 チケット', value: '`/ticket`', inline: true },
                 { name: '🔐 認証', value: '`/authset`', inline: true },
                 { name: '🌐 グローバル', value: '`/gset` `/gdel`', inline: true },
-                { name: '🏷️ 役職', value: '`/rp create`', inline: true },
+                { name: '🏷️ 役職', value: '`/rp create` `/rp delete`', inline: true },
                 { name: '⚙️ 管理', value: '`/set` `/clear` `/log` `/chatlock`', inline: true },
                 { name: '❓ その他', value: '`/support` `/help`', inline: true }
             ).setFooter({ text: '/set で各種サーバー設定が可能です' });
@@ -458,37 +451,17 @@ client.on(Events.InteractionCreate, async (interaction) => {
             if (count === 0) return interaction.reply({ content: '最低1つの役職を指定してください。', ...EPH });
             await interaction.reply({ embeds: [embed], components: [row] });
         }
+        if (commandName === 'rp' && options.getSubcommand() === 'delete') {
+            const embed = new EmbedBuilder().setTitle('🗑️ 役職パネル削除').setDescription('下のボタンを押すと、このチャンネル内の最近の役職パネルを削除できます。').setColor(0xe74c3c);
+            const row = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('rp_delete_panel').setLabel('最新パネルを削除').setStyle(ButtonStyle.Danger)
+            );
+            await interaction.reply({ embeds: [embed], components: [row], ...EPH });
+        }
 
         // ==================== 追加コマンド ====================
-        if (commandName === 'ping') {
-            const sent = await interaction.reply({ content: '📡 計測中...', fetchReply: true });
-            const rtt = sent.createdTimestamp - interaction.createdTimestamp;
-            const embed = new EmbedBuilder().setTitle('🏓 Pong!').setColor(rtt < 100 ? 0x2ecc71 : rtt < 300 ? 0xf1c40f : 0xe74c3c)
-                .addFields({ name: '📡 往復レイテンシ', value: `${rtt}ms`, inline: true }, { name: '💓 WebSocket', value: `${client.ws.ping}ms`, inline: true });
-            await interaction.editReply({ content: '', embeds: [embed] });
-        }
 
-        if (commandName === 'avatar') {
-            const user = options.getUser('user') || interaction.user;
-            const url = user.displayAvatarURL({ size: 1024, extension: 'png' });
-            const embed = new EmbedBuilder().setTitle(`🖼️ ${user.username} のアバター`).setImage(url).setColor(0x3498db)
-                .addFields({ name: 'ダウンロード', value: `[PNG](${url}) | [WEBP](${user.displayAvatarURL({ size: 1024, extension: 'webp' })})` });
-            await interaction.reply({ embeds: [embed] });
-        }
 
-        if (commandName === 'calc') {
-            const expr = options.getString('expression');
-            try {
-                if (!/^[\d\s\+\-\*\/\.\(\)%\^]+$/.test(expr)) throw new Error('使用できない文字が含まれています');
-                const result = Function(`"use strict"; return (${expr.replace(/\^/g, '**')})`)();
-                if (!isFinite(result)) throw new Error('ゼロ除算または計算不能');
-                const embed = new EmbedBuilder().setTitle('🧮 計算結果').setColor(0x3498db)
-                    .addFields({ name: '式', value: `\`${expr}\``, inline: true }, { name: '結果', value: `\`${result}\``, inline: true });
-                await interaction.reply({ embeds: [embed] });
-            } catch (e) {
-                await interaction.reply({ content: `❌ 計算エラー: ${e.message}`, ...EPH });
-            }
-        }
 
         if (commandName === 'janken') {
             const hands = ['グー', 'チョキ', 'パー'];
@@ -516,39 +489,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
             }, minutes * 60 * 1000);
         }
 
-        if (commandName === 'afk') {
-            const reason = options.getString('reason') || '離席中';
-            const key = `${guildId}_${interaction.user.id}`;
-            if (afkUsers.has(key)) {
-                afkUsers.delete(key);
-                await interaction.reply({ content: '✅ AFK状態を解除しました。', ...EPH });
-            } else {
-                afkUsers.set(key, { reason, since: Date.now() });
-                await interaction.reply({ content: `😴 AFK状態に設定しました。\n理由: **${reason}**`, ...EPH });
-            }
-        }
 
-        if (commandName === 'announce') {
-            const message = options.getString('message');
-            const targetCh = options.getChannel('channel') || interaction.channel;
-            const mentionRole = options.getRole('mention');
-            const embed = new EmbedBuilder().setTitle('📢 アナウンス').setDescription(message).setColor(0xe74c3c)
-                .setFooter({ text: `送信者: ${interaction.user.tag}` }).setTimestamp();
-            await targetCh.send({ content: mentionRole ? `<@&${mentionRole.id}>` : '', embeds: [embed] });
-            await interaction.reply({ content: `✅ <#${targetCh.id}> にアナウンスを送信しました。`, ...EPH });
-        }
 
-        if (commandName === 'poll') {
-            const question = options.getString('question');
-            const choicesRaw = options.getString('choices').split(',').map(c => c.trim()).filter(Boolean).slice(0, 10);
-            if (choicesRaw.length < 2) return interaction.reply({ content: '❌ 選択肢を2つ以上カンマ区切りで入力してください。', ...EPH });
-            const numEmoji = ['1️⃣','2️⃣','3️⃣','4️⃣','5️⃣','6️⃣','7️⃣','8️⃣','9️⃣','🔟'];
-            const embed = new EmbedBuilder().setTitle(`📊 ${question}`)
-                .setDescription(choicesRaw.map((c, i) => `${numEmoji[i]} ${c}`).join('\n'))
-                .setColor(0x5865f2).setFooter({ text: `投票者: ${interaction.user.tag}` }).setTimestamp();
-            const msg = await interaction.reply({ embeds: [embed], fetchReply: true });
-            for (let i = 0; i < choicesRaw.length; i++) await msg.react(numEmoji[i]).catch(() => {});
-        }
 
         if (commandName === 'coinflip') {
             const result = Math.random() < 0.5 ? '表 🪙' : '裏 🔄';
@@ -802,7 +744,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
             await interaction.reply('チケットを閉鎖します...');
             setTimeout(() => interaction.channel.delete().catch(() => {}), 3000);
         }
-        if (cid.startsWith('rp_')) {
+        if (cid === 'rp_delete_panel') {
+            const msgs = await interaction.channel.messages.fetch({ limit: 50 });
+            const panel = msgs.find(m => m.author.id === client.user.id && m.components.length > 0 && m.components[0].components.some(c => c.customId?.startsWith('rp_')));
+            if (!panel) return interaction.reply({ content: '❌ 近くに役職パネルが見つかりませんでした。', ...EPH });
+            await panel.delete().catch(() => {});
+            await interaction.reply({ content: '✅ 役職パネルを削除しました。', ...EPH });
+        }
+        if (cid.startsWith('rp_') && cid !== 'rp_delete_panel') {
             const rid = cid.split('_')[1];
             if (interaction.member.roles.cache.has(rid)) { await interaction.member.roles.remove(rid); await interaction.reply({ content: '役職を解除しました。', ...EPH }); }
             else { await interaction.member.roles.add(rid); await interaction.reply({ content: '役職を付与しました。', ...EPH }); }
@@ -823,25 +772,6 @@ client.on(Events.MessageCreate, async (message) => {
     const gid = message.guildId;
 
     if (!message.channel.name?.startsWith('ticket-')) recordMessage(gid, message.channelId, message.author.id);
-
-    // AFK解除チェック（本人が発言）
-    const selfAfkKey = `${gid}_${message.author.id}`;
-    if (afkUsers.has(selfAfkKey)) {
-        const { since } = afkUsers.get(selfAfkKey);
-        afkUsers.delete(selfAfkKey);
-        const elapsed = Math.floor((Date.now() - since) / 1000);
-        message.reply(`✅ AFK解除しました。離席時間: **${Math.floor(elapsed / 60)}分${elapsed % 60}秒**`).then(m => setTimeout(() => m.delete().catch(() => {}), 5000));
-    }
-    // AFK中ユーザーへのメンション通知
-    for (const [uid] of message.mentions.users) {
-        if (uid === message.author.id) continue;
-        const key = `${gid}_${uid}`;
-        if (afkUsers.has(key)) {
-            const { reason, since } = afkUsers.get(key);
-            const elapsed = Math.floor((Date.now() - since) / 60000);
-            message.reply(`😴 <@${uid}> は現在AFK中です。\n理由: **${reason}**（${elapsed}分前から）`).then(m => setTimeout(() => m.delete().catch(() => {}), 8000));
-        }
-    }
 
     // NGワード判定
     if (servers[gid]?.ngwords?.length > 0) {
