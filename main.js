@@ -1,293 +1,127 @@
-const { Client, GatewayIntentBits, Partials, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, SlashCommandBuilder, REST, Routes, Events, ChannelType, PermissionFlagsBits, ModalBuilder, TextInputBuilder, TextInputStyle, MessageFlags, ChannelSelectMenuBuilder, RoleSelectMenuBuilder, ActivityType } = require('discord.js');
-const express = require('express');
-const fs = require('fs');
-const path = require('path');
-const setupAuth = require('./auth.js');
-const handleAdminCommands = require('./admin.js');
-const { getPlayCommands, handlePlayCommand, handlePlayButton } = require('./play.js');
-
-const app = express();
-const client = new Client({
-    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildMembers],
-    partials: [Partials.Channel, Partials.Message]
-});
-
-const TOKEN = process.env.TOKEN;
-const OWNER_IDS = process.env.OWNER_ID ? process.env.OWNER_ID.split(',').map(id => id.trim()) : [];
-const CLIENT_ID = process.env.CLIENT_ID;
-const CLIENT_SECRET = process.env.CLIENT_SECRET;
-const REDIRECT_URI = process.env.REDIRECT_URI;
-const SERVERS_FILE = path.join(__dirname, 'data', 'servers.json');
-const USERS_FILE = path.join(__dirname, 'data', 'users.json');
-
-function loadData(f) {
-    if (!fs.existsSync(path.dirname(f))) fs.mkdirSync(path.dirname(f), { recursive: true });
-    return fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')) : {};
-}
-function saveData(f, d) { fs.writeFileSync(f, JSON.stringify(d, null, 4)); }
-const getNextLevelXP = (lv) => (lv + 1) * 500;
-const xpCooldowns = new Map();
-const messageHistory = new Map();
-const ngwordViolations = new Map();
-const pendingWelcomeChannel = new Map();
-const pendingByeChannel = new Map();
-const kasoCooldowns = new Map();
-const EPH = { flags: MessageFlags.Ephemeral };
-
-// ステータス更新関数
-function updateStatus() {
-    const serverCount = client.guilds.cache.size;
-    const ping = client.ws.ping;
-    client.user.setActivity(`/help | ${serverCount} Servers | ${ping}ms`, { type: ActivityType.Watching });
-}
-
-function replacePlaceholders(t, m) {
-    if (!t) return "";
-    return t.replace(/{user}/g, `<@${m.id}>`).replace(/{server}/g, m.guild.name).replace(/{members}/g, m.guild.memberCount.toString());
-}
-
-async function sendLog(guild, embed) {
-    const s = loadData(SERVERS_FILE);
-    const config = s[guild.id];
-    if (config?.logChannel) {
-        const channel = guild.channels.cache.get(config.logChannel);
-        if (channel) await channel.send({ embeds: [embed] }).catch(console.error);
-    }
-}
-
-function normalizeText(text) {
-    return text
-        .replace(/[\u200B-\u200D\uFEFF\u00AD\u034F\u2060-\u2064\u2066-\u206F]/g, '')
-        .replace(/[Ａ-Ｚａ-ｚ０-９]/g, s => String.fromCharCode(s.charCodeAt(0) - 0xFEE0))
-        .replace(/　/g, ' ')
-        .replace(/[\u30A1-\u30F6]/g, s => String.fromCharCode(s.charCodeAt(0) - 0x60))
-        .replace(/[ｦ-ﾟ]/g, s => { const map = 'をぁぃぅぇぉゃゅょっーあいうえおかきくけこさしすせそたちつてとなにぬねのはひふへほまみむめもやゆよらりるれろわん゛゜'; const idx = s.charCodeAt(0) - 0xFF66; return idx >= 0 && idx < map.length ? map[idx] : s; })
-        .replace(/[\s\-_\.・。、!！?？~〜ー\/\\|*#@$%^&()（）\[\]【】「」『』{}]/g, '')
-        .replace(/(.)\1{2,}/g, '$1')
-        .toLowerCase();
-}
-
-function containsNgWord(text, ngwords) {
-    const normalized = normalizeText(text);
-    for (const word of ngwords) {
-        const nw = normalizeText(word);
-        if (nw && normalized.includes(nw)) return true;
-    }
-    return false;
-}
-
-function recordMessage(guildId, channelId, authorId) {
-    if (!messageHistory.has(guildId)) messageHistory.set(guildId, []);
-    const arr = messageHistory.get(guildId);
-    arr.push({ channelId, authorId, timestamp: Date.now() });
-    const oneHourAgo = Date.now() - 60 * 60 * 1000;
-    while (arr.length > 0 && arr[0].timestamp < oneHourAgo) arr.shift();
-}
-
-function getHourlyStats(guildId, ignoredChannels = []) {
-    const arr = messageHistory.get(guildId) || [];
-    const oneHourAgo = Date.now() - 60 * 60 * 1000;
-    const recent = arr.filter(m => m.timestamp >= oneHourAgo && !ignoredChannels.includes(m.channelId));
-    const total = recent.length;
-    const userCount = {};
-    for (const m of recent) userCount[m.authorId] = (userCount[m.authorId] || 0) + 1;
-    const topUsers = Object.entries(userCount).sort((a, b) => b[1] - a[1]).slice(0, 3);
-    const channelCount = {};
-    for (const m of recent) channelCount[m.channelId] = (channelCount[m.channelId] || 0) + 1;
-    const topChannels = Object.entries(channelCount).sort((a, b) => b[1] - a[1]).slice(0, 3);
-    let judgment, color;
-    if (total >= 50) { judgment = '🔥 活発'; color = 0x00ff00; }
-    else if (total >= 10) { judgment = '💬 普通'; color = 0xffff00; }
-    else { judgment = '💤 過疎'; color = 0xff4444; }
-    return { total, topUsers, topChannels, judgment, color };
-}
-
-// 全ユーザーランキングデータ取得（認証不要）
-function getAllRanking(users) {
-    return Object.entries(users)
-        .filter(([, v]) => typeof v.xp === 'number')
-        .sort((a, b) => b[1].xp - a[1].xp);
-}
-
-// ランキングEmbed生成
-function buildRankingEmbed(sorted, page) {
-    const PAGE_SIZE = 10;
-    const totalPages = Math.max(1, Math.ceil(sorted.length / PAGE_SIZE));
-    const safePage = Math.min(Math.max(1, page), totalPages);
-    const start = (safePage - 1) * PAGE_SIZE;
-    const current = sorted.slice(start, start + PAGE_SIZE);
-    const medals = ['🥇', '🥈', '🥉'];
-    const list = current.map((e, i) => {
-        const pos = start + i + 1;
-        const icon = pos <= 3 ? medals[pos - 1] : `**${pos}.**`;
-        const name = e[1].username || `<@${e[0]}>`;
-        return `${icon} ${name} — Lv.${e[1].lv ?? 0} (${e[1].xp} XP)`;
-    }).join('\n');
-    const embed = new EmbedBuilder()
-        .setTitle('🏆 レベルランキング')
-        .setDescription(list || 'データなし')
-        .setColor(0xf1c40f)
-        .setFooter({ text: `ページ ${safePage} / ${totalPages}　全 ${sorted.length} ユーザー` });
-    return { embed, safePage, totalPages };
-}
-
-function buildRankingRow(page, totalPages) {
-    return new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(`ranking_prev_${page}`).setLabel('◀ 前へ').setStyle(ButtonStyle.Secondary).setDisabled(page <= 1),
-        new ButtonBuilder().setCustomId(`ranking_next_${page}`).setLabel('次へ ▶').setStyle(ButtonStyle.Secondary).setDisabled(page >= totalPages)
-    );
-}
-
-function createMainSetRow(s) {
-    return new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('set_menu_log').setLabel('ログ詳細設定').setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId('set_menu_kaso').setLabel('過疎調査除外設定').setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId('set_lv_toggle').setLabel(`レベル機能: ${s.leveling !== false ? 'ON' : 'OFF'}`).setStyle(s.leveling !== false ? ButtonStyle.Success : ButtonStyle.Danger),
-        new ButtonBuilder().setCustomId('set_menu_lock').setLabel('一括ロック切替').setStyle(ButtonStyle.Danger)
-    );
-}
-function createMainSetRow2() {
-    return new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('set_menu_welcome').setLabel('入室通知設定').setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId('set_menu_bye').setLabel('退室通知設定').setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId('set_menu_ngword').setLabel('NGワード管理').setStyle(ButtonStyle.Danger)
-    );
-}
-function createLogConfigRow(c) {
-    return new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('log_toggle_edit').setLabel(`編集: ${c.edit ? 'ON' : 'OFF'}`).setStyle(c.edit ? ButtonStyle.Success : ButtonStyle.Danger),
-        new ButtonBuilder().setCustomId('log_toggle_delete').setLabel(`削除: ${c.delete ? 'ON' : 'OFF'}`).setStyle(c.delete ? ButtonStyle.Success : ButtonStyle.Danger),
-        new ButtonBuilder().setCustomId('log_toggle_join').setLabel(`入室: ${c.join ? 'ON' : 'OFF'}`).setStyle(c.join ? ButtonStyle.Success : ButtonStyle.Danger),
-        new ButtonBuilder().setCustomId('log_toggle_leave').setLabel(`退出: ${c.leave ? 'ON' : 'OFF'}`).setStyle(c.leave ? ButtonStyle.Success : ButtonStyle.Danger),
-        new ButtonBuilder().setCustomId('set_back_main').setLabel('戻る').setStyle(ButtonStyle.Secondary)
-    );
-}
-function buildNgwordPanel(s) {
-    const list = s.ngwords?.length > 0 ? s.ngwords.map(w => `\`${w}\``).join('、') : 'なし';
-    const exemptRoles = s.ngwordExemptRoles?.length > 0 ? s.ngwordExemptRoles.map(r => `<@&${r}>`).join('、') : 'なし';
-    const content = `🚫 **NGワード管理**\n\nNGワード: ${list}\n除外ロール: ${exemptRoles}\n連呼罰則: ${s.ngwordViolationLimit || 3}回でタイムアウト ${s.ngwordTimeoutSeconds || 60}秒`;
-    return {
-        content,
-        components: [
-            new ActionRowBuilder().addComponents(
-                new ButtonBuilder().setCustomId('ngword_add').setLabel('ワード追加').setStyle(ButtonStyle.Success),
-                new ButtonBuilder().setCustomId('ngword_del').setLabel('ワード削除').setStyle(ButtonStyle.Danger),
-                new ButtonBuilder().setCustomId('ngword_exempt_add').setLabel('除外ロール追加').setStyle(ButtonStyle.Primary),
-                new ButtonBuilder().setCustomId('ngword_exempt_del').setLabel('除外ロール削除').setStyle(ButtonStyle.Secondary)
-            ),
-            new ActionRowBuilder().addComponents(
-                new ButtonBuilder().setCustomId('ngword_timeout_set').setLabel('タイムアウト秒数').setStyle(ButtonStyle.Primary),
-                new ButtonBuilder().setCustomId('ngword_violation_set').setLabel('連呼回数').setStyle(ButtonStyle.Primary),
-                new ButtonBuilder().setCustomId('set_back_main').setLabel('戻る').setStyle(ButtonStyle.Secondary)
-            )
-        ]
-    };
-}
-function buildSetPanel(s) {
-    return { content: '⚙️ **サーバー管理設定パネル**\n下のボタンから各機能の設定を行ってください。', components: [createMainSetRow(s), createMainSetRow2()], flags: MessageFlags.Ephemeral };
-}
-
-setupAuth(app, loadData, saveData, USERS_FILE, CLIENT_ID, CLIENT_SECRET);
-app.listen(process.env.PORT || 3000, '0.0.0.0', () => console.log('Web Server Ready'));
-
-client.once(Events.ClientReady, async () => {
-    console.log(`${client.user.tag} としてログインしました。`);
-    updateStatus();
-    setInterval(updateStatus, 30000);
-
-    const commands = [
-        new SlashCommandBuilder().setName('help').setDescription('ボットのコマンド一覧を表示します'),
-        new SlashCommandBuilder().setName('set').setDescription('サーバー管理用設定パネルを開きます').setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-        new SlashCommandBuilder().setName('support').setDescription('サポートサーバーの招待リンクを表示します'),
-        new SlashCommandBuilder().setName('rank').setDescription('現在のレベルとXPを確認します').addUserOption(o => o.setName('user').setDescription('確認したいユーザー')),
-        new SlashCommandBuilder().setName('ranking').setDescription('レベルランキングを表示します'),
-        new SlashCommandBuilder().setName('serverinfo').setDescription('現在のサーバーの詳細情報を表示します'),
-        new SlashCommandBuilder().setName('userinfo').setDescription('ユーザーの詳細情報を表示します').addUserOption(o => o.setName('user').setDescription('対象ユーザー')),
-        new SlashCommandBuilder().setName('clear').setDescription('指定した件数のメッセージを削除します').addIntegerOption(o => o.setName('num').setDescription('件数 (1-100)').setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages),
-        new SlashCommandBuilder().setName('log').setDescription('ログの送信先チャンネルを設定します').addChannelOption(o => o.setName('channel').setDescription('送信先').setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-        new SlashCommandBuilder().setName('authset').setDescription('OAuth2認証用のパネルを設置します').addStringOption(o => o.setName('title').setDescription('埋め込みタイトル').setRequired(true)).addStringOption(o => o.setName('description').setDescription('埋め込み説明').setRequired(true)).addStringOption(o => o.setName('button').setDescription('ボタンのラベル').setRequired(true)).addRoleOption(o => o.setName('role').setDescription('認証後に付与するロール').setRequired(true)).addChannelOption(o => o.setName('channel').setDescription('設置先チャンネル（未指定なら現在）').addChannelTypes(ChannelType.GuildText)).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-        new SlashCommandBuilder().setName('ticket').setDescription('問い合わせチケットパネルを作成します').addStringOption(o => o.setName('title').setDescription('タイトル').setRequired(true)).addStringOption(o => o.setName('description').setDescription('説明').setRequired(true)).addStringOption(o => o.setName('button').setDescription('ボタン名').setRequired(true)).addRoleOption(o => o.setName('mention-role').setDescription('通知先ロール').setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-        new SlashCommandBuilder().setName('gset').setDescription('グローバルチャットの送信先チャンネルを設定します').addChannelOption(o => o.setName('channel').setDescription('チャンネル').setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-        new SlashCommandBuilder().setName('gdel').setDescription('グローバルチャットの設定を解除します').setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-        new SlashCommandBuilder().setName('chatlock').setDescription('チャンネルを一時的にロックします').addIntegerOption(o => o.setName('seconds').setDescription('秒数').setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-        new SlashCommandBuilder().setName('omikuji').setDescription('今日の運勢を占います'),
-        new SlashCommandBuilder().setName('kaso').setDescription('過去1時間のサーバー稼働調査を表示します（3分クールダウン）'),
-        new SlashCommandBuilder().setName('rp').setDescription('セルフ役職付与パネルを作成します').addSubcommand(sub => {
-            sub.setName('create').setDescription('パネル作成').addStringOption(o => o.setName('title').setDescription('タイトル').setRequired(true)).addStringOption(o => o.setName('description').setDescription('説明').setRequired(true));
-            for (let i = 1; i <= 10; i++) sub.addRoleOption(o => o.setName(`role${i}`).setDescription(`役職${i}`)).addStringOption(o => o.setName(`emoji${i}`).setDescription(`絵文字${i}`));
-            return sub;
-        }).addSubcommand(sub => sub.setName('delete').setDescription('パネルから役職を削除するボタンを追加')).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-        // 追加コマンド
-        new SlashCommandBuilder().setName('janken').setDescription('Botとじゃんけんをします').addStringOption(o => o.setName('hand').setDescription('グー / チョキ / パー').setRequired(true).addChoices({ name: 'グー ✊', value: 'グー' }, { name: 'チョキ ✌️', value: 'チョキ' }, { name: 'パー ✋', value: 'パー' })),
-        new SlashCommandBuilder().setName('remind').setDescription('指定時間後にリマインドします').addIntegerOption(o => o.setName('minutes').setDescription('何分後に通知するか').setRequired(true)).addStringOption(o => o.setName('message').setDescription('リマインド内容').setRequired(true)),
-        new SlashCommandBuilder().setName('coinflip').setDescription('コインを投げます（表/裏）'),
-        new SlashCommandBuilder().setName('dice').setDescription('サイコロを振ります').addIntegerOption(o => o.setName('sides').setDescription('面数（デフォルト6）').setMinValue(2).setMaxValue(100)),
-        new SlashCommandBuilder().setName('choose').setDescription('選択肢からランダムに1つ選びます').addStringOption(o => o.setName('choices').setDescription('選択肢（カンマ区切り　例: ラーメン,カレー,寿司）').setRequired(true)),
-    ].map(cmd => cmd.toJSON()).concat(getPlayCommands());
-
-    const rest = new REST({ version: '10' }).setToken(TOKEN);
-    try {
-        await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
-        console.log('スラッシュコマンドの再登録に成功しました。');
-    } catch (error) { console.error('コマンド登録エラー:', error); }
-});
-
-client.on(Events.InteractionCreate, async (interaction) => {
-    const servers = loadData(SERVERS_FILE);
-    const users = loadData(USERS_FILE);
-    const guildId = interaction.guildId;
-
-    if (guildId && !servers[guildId]) {
-        servers[guildId] = { logConfig: { edit: true, delete: true, join: true, leave: true }, ngwords: [], ngwordExemptRoles: [], ngwordTimeoutSeconds: 60, ngwordViolationLimit: 3, locked: false, kasoIgnoreChannels: [], leveling: true };
-    }
-
-    // ==================== ゲームコマンド (play.js) ====================
-    const PLAY_COMMANDS = ['igo', 'shogi', 'chess', 'othello', 'aki'];
-    if (interaction.isChatInputCommand() && PLAY_COMMANDS.includes(interaction.commandName)) {
-        return handlePlayCommand(interaction);
-    }
-    const PLAY_BUTTONS = ['igo_', 'shogi_', 'chess_', 'othello_', 'aki_', 'invite_', 'online_'];
-    if (interaction.isButton() && PLAY_BUTTONS.some(p => interaction.customId.startsWith(p))) {
-        return handlePlayButton(interaction);
-    }
-
-    // ==================== スラッシュコマンド ====================
-    if (interaction.isChatInputCommand()) {
-        const { commandName, options } = interaction;
-
-        if (commandName === 'help') {
-            const embed = new EmbedBuilder().setTitle('📖 コマンド一覧').setColor(0x3498db).addFields(
-                { name: '📊 レベル', value: '`/rank` `/ranking`', inline: true },
-                { name: '👤 ユーザー', value: '`/userinfo`', inline: true },
-                { name: '🏰 サーバー', value: '`/serverinfo` `/kaso`', inline: true },
-                { name: '🎮 エンタメ', value: '`/omikuji` `/janken` `/coinflip` `/dice` `/choose`', inline: true },
-                { name: '🎲 ゲーム', value: '`/igo` `/shogi` `/chess` `/othello` `/aki`', inline: true },
-
-                { name: '⏰ リマインド', value: '`/remind`', inline: true },
-
-                { name: '🎫 チケット', value: '`/ticket`', inline: true },
-                { name: '🔐 認証', value: '`/authset`', inline: true },
-                { name: '🌐 グローバル', value: '`/gset` `/gdel`', inline: true },
-                { name: '🏷️ 役職', value: '`/rp create` `/rp delete`', inline: true },
-                { name: '⚙️ 管理', value: '`/set` `/clear` `/log` `/chatlock`', inline: true },
-                { name: '❓ その他', value: '`/support` `/help`', inline: true }
-            ).setFooter({ text: '/set で各種サーバー設定が可能です' });
-            await interaction.reply({ embeds: [embed], ...EPH });
-        }
-
-        if (commandName === 'support') await interaction.reply({ content: 'サポートサーバーはこちら: https://discord.gg/ntdWV5EWT3', ...EPH });
-        if (commandName === 'set') await interaction.reply(buildSetPanel(servers[guildId]));
-
-        if (commandName === 'rank') {
-            const target = options.getUser('user') || interaction.user;
-            const raw = users[target.id] || {};
-            const xp = typeof raw.xp === 'number' ? raw.xp : 0;
-            const lv = typeof raw.lv === 'number' ? raw.lv : 0;
-            const next = getNextLevelXP(lv);
-            const sorted = getAllRanking(users);
-            const rank = sorted.findIndex(e => e[0] === target.id) + 1;
-            const filled = Math.round((xp / next) * 10);
-            const progressBar = '█'.repeat(filled) + '░'.repeat(10 - filled);
+ const { Client, GatewayIntentBits, Partials, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, SlashCommandBuilder, REST, Routes, Events, ChannelType, PermissionFlagsBits, ModalBuilder, TextInputBuilder, TextInputStyle, MessageFlags, ChannelSelectMenuBuilder, RoleSelectMenuBuilder, ActivityType } = require('discord.js');
+ const express = require('express');
+ const fs = require('fs');
+ const path = require('path');
+ const setupAuth = require('./auth.js');
+ const handleAdminCommands = require('./admin.js');
+-const { getPlayCommands, handlePlayCommand, handlePlayButton } = require('./play.js');
+ 
+ const app = express();
+ const client = new Client({
+     intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildMembers],
+     partials: [Partials.Channel, Partials.Message]
+ });
+ 
+ const TOKEN = process.env.TOKEN;
+ const OWNER_IDS = process.env.OWNER_ID ? process.env.OWNER_ID.split(',').map(id => id.trim()) : [];
+ const CLIENT_ID = process.env.CLIENT_ID;
+ const CLIENT_SECRET = process.env.CLIENT_SECRET;
+ const REDIRECT_URI = process.env.REDIRECT_URI;
+ const SERVERS_FILE = path.join(__dirname, 'data', 'servers.json');
+ const USERS_FILE = path.join(__dirname, 'data', 'users.json');
+ 
+ function loadData(f) {
+     if (!fs.existsSync(path.dirname(f))) fs.mkdirSync(path.dirname(f), { recursive: true });
+     return fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')) : {};
+ }
+ function saveData(f, d) { fs.writeFileSync(f, JSON.stringify(d, null, 4)); }
+ const getNextLevelXP = (lv) => (lv + 1) * 500;
+ const xpCooldowns = new Map();
+ const messageHistory = new Map();
+ const ngwordViolations = new Map();
+ const pendingWelcomeChannel = new Map();
+@@ -201,90 +200,78 @@ client.once(Events.ClientReady, async () => {
+         new SlashCommandBuilder().setName('support').setDescription('サポートサーバーの招待リンクを表示します'),
+         new SlashCommandBuilder().setName('rank').setDescription('現在のレベルとXPを確認します').addUserOption(o => o.setName('user').setDescription('確認したいユーザー')),
+         new SlashCommandBuilder().setName('ranking').setDescription('レベルランキングを表示します'),
+         new SlashCommandBuilder().setName('serverinfo').setDescription('現在のサーバーの詳細情報を表示します'),
+         new SlashCommandBuilder().setName('userinfo').setDescription('ユーザーの詳細情報を表示します').addUserOption(o => o.setName('user').setDescription('対象ユーザー')),
+         new SlashCommandBuilder().setName('clear').setDescription('指定した件数のメッセージを削除します').addIntegerOption(o => o.setName('num').setDescription('件数 (1-100)').setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages),
+         new SlashCommandBuilder().setName('log').setDescription('ログの送信先チャンネルを設定します').addChannelOption(o => o.setName('channel').setDescription('送信先').setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+         new SlashCommandBuilder().setName('authset').setDescription('OAuth2認証用のパネルを設置します').addStringOption(o => o.setName('title').setDescription('埋め込みタイトル').setRequired(true)).addStringOption(o => o.setName('description').setDescription('埋め込み説明').setRequired(true)).addStringOption(o => o.setName('button').setDescription('ボタンのラベル').setRequired(true)).addRoleOption(o => o.setName('role').setDescription('認証後に付与するロール').setRequired(true)).addChannelOption(o => o.setName('channel').setDescription('設置先チャンネル（未指定なら現在）').addChannelTypes(ChannelType.GuildText)).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+         new SlashCommandBuilder().setName('ticket').setDescription('問い合わせチケットパネルを作成します').addStringOption(o => o.setName('title').setDescription('タイトル').setRequired(true)).addStringOption(o => o.setName('description').setDescription('説明').setRequired(true)).addStringOption(o => o.setName('button').setDescription('ボタン名').setRequired(true)).addRoleOption(o => o.setName('mention-role').setDescription('通知先ロール').setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+         new SlashCommandBuilder().setName('gset').setDescription('グローバルチャットの送信先チャンネルを設定します').addChannelOption(o => o.setName('channel').setDescription('チャンネル').setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+         new SlashCommandBuilder().setName('gdel').setDescription('グローバルチャットの設定を解除します').setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+         new SlashCommandBuilder().setName('chatlock').setDescription('チャンネルを一時的にロックします').addIntegerOption(o => o.setName('seconds').setDescription('秒数').setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+         new SlashCommandBuilder().setName('omikuji').setDescription('今日の運勢を占います'),
+         new SlashCommandBuilder().setName('kaso').setDescription('過去1時間のサーバー稼働調査を表示します（3分クールダウン）'),
+         new SlashCommandBuilder().setName('rp').setDescription('セルフ役職付与パネルを作成します').addSubcommand(sub => {
+             sub.setName('create').setDescription('パネル作成').addStringOption(o => o.setName('title').setDescription('タイトル').setRequired(true)).addStringOption(o => o.setName('description').setDescription('説明').setRequired(true));
+             for (let i = 1; i <= 10; i++) sub.addRoleOption(o => o.setName(`role${i}`).setDescription(`役職${i}`)).addStringOption(o => o.setName(`emoji${i}`).setDescription(`絵文字${i}`));
+             return sub;
+         }).addSubcommand(sub => sub.setName('delete').setDescription('パネルから役職を削除するボタンを追加')).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+         // 追加コマンド
+         new SlashCommandBuilder().setName('janken').setDescription('Botとじゃんけんをします').addStringOption(o => o.setName('hand').setDescription('グー / チョキ / パー').setRequired(true).addChoices({ name: 'グー ✊', value: 'グー' }, { name: 'チョキ ✌️', value: 'チョキ' }, { name: 'パー ✋', value: 'パー' })),
+         new SlashCommandBuilder().setName('remind').setDescription('指定時間後にリマインドします').addIntegerOption(o => o.setName('minutes').setDescription('何分後に通知するか').setRequired(true)).addStringOption(o => o.setName('message').setDescription('リマインド内容').setRequired(true)),
+         new SlashCommandBuilder().setName('coinflip').setDescription('コインを投げます（表/裏）'),
+         new SlashCommandBuilder().setName('dice').setDescription('サイコロを振ります').addIntegerOption(o => o.setName('sides').setDescription('面数（デフォルト6）').setMinValue(2).setMaxValue(100)),
+         new SlashCommandBuilder().setName('choose').setDescription('選択肢からランダムに1つ選びます').addStringOption(o => o.setName('choices').setDescription('選択肢（カンマ区切り　例: ラーメン,カレー,寿司）').setRequired(true)),
+-    ].map(cmd => cmd.toJSON()).concat(getPlayCommands());
++    ].map(cmd => cmd.toJSON());
+ 
+     const rest = new REST({ version: '10' }).setToken(TOKEN);
+     try {
+         await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
+         console.log('スラッシュコマンドの再登録に成功しました。');
+     } catch (error) { console.error('コマンド登録エラー:', error); }
+ });
+ 
+ client.on(Events.InteractionCreate, async (interaction) => {
+     const servers = loadData(SERVERS_FILE);
+     const users = loadData(USERS_FILE);
+     const guildId = interaction.guildId;
+ 
+     if (guildId && !servers[guildId]) {
+         servers[guildId] = { logConfig: { edit: true, delete: true, join: true, leave: true }, ngwords: [], ngwordExemptRoles: [], ngwordTimeoutSeconds: 60, ngwordViolationLimit: 3, locked: false, kasoIgnoreChannels: [], leveling: true };
+     }
+ 
+-    // ==================== ゲームコマンド (play.js) ====================
+-    const PLAY_COMMANDS = ['igo', 'shogi', 'chess', 'othello', 'aki'];
+-    if (interaction.isChatInputCommand() && PLAY_COMMANDS.includes(interaction.commandName)) {
+-        return handlePlayCommand(interaction);
+-    }
+-    const PLAY_BUTTONS = ['igo_', 'shogi_', 'chess_', 'othello_', 'aki_', 'invite_', 'online_'];
+-    if (interaction.isButton() && PLAY_BUTTONS.some(p => interaction.customId.startsWith(p))) {
+-        return handlePlayButton(interaction);
+-    }
+-
+     // ==================== スラッシュコマンド ====================
+     if (interaction.isChatInputCommand()) {
+         const { commandName, options } = interaction;
+ 
+         if (commandName === 'help') {
+             const embed = new EmbedBuilder().setTitle('📖 コマンド一覧').setColor(0x3498db).addFields(
+                 { name: '📊 レベル', value: '`/rank` `/ranking`', inline: true },
+                 { name: '👤 ユーザー', value: '`/userinfo`', inline: true },
+                 { name: '🏰 サーバー', value: '`/serverinfo` `/kaso`', inline: true },
+                 { name: '🎮 エンタメ', value: '`/omikuji` `/janken` `/coinflip` `/dice` `/choose`', inline: true },
+-                { name: '🎲 ゲーム', value: '`/igo` `/shogi` `/chess` `/othello` `/aki`', inline: true },
+-
+                 { name: '⏰ リマインド', value: '`/remind`', inline: true },
+ 
+                 { name: '🎫 チケット', value: '`/ticket`', inline: true },
+                 { name: '🔐 認証', value: '`/authset`', inline: true },
+                 { name: '🌐 グローバル', value: '`/gset` `/gdel`', inline: true },
+                 { name: '🏷️ 役職', value: '`/rp create` `/rp delete`', inline: true },
+                 { name: '⚙️ 管理', value: '`/set` `/clear` `/log` `/chatlock`', inline: true },
+                 { name: '❓ その他', value: '`/support` `/help`', inline: true }
+             ).setFooter({ text: '/set で各種サーバー設定が可能です' });
+             await interaction.reply({ embeds: [embed], ...EPH });
+         }
+ 
+         if (commandName === 'support') await interaction.reply({ content: 'サポートサーバーはこちら: https://discord.gg/ntdWV5EWT3', ...EPH });
+         if (commandName === 'set') await interaction.reply(buildSetPanel(servers[guildId]));
+ 
+         if (commandName === 'rank') {
+             const target = options.getUser('user') || interaction.user;
+             const raw = users[target.id] || {};
+             const xp = typeof raw.xp === 'number' ? raw.xp : 0;
+             const lv = typeof raw.lv === 'number' ? raw.lv : 0;
+             const next = getNextLevelXP(lv);
+             const sorted = getAllRanking(users);
+             const rank = sorted.findIndex(e => e[0] === target.id) + 1;
+             const filled = Math.round((xp / next) * 10);
+             const progressBar = '█'.repeat(filled) + '░'.repeat(10 - filled);
             const embed = new EmbedBuilder()
                 .setTitle(`📊 ${target.username} のステータス`)
                 .setThumbnail(target.displayAvatarURL())
