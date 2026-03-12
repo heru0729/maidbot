@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const setupAuth = require('./auth.js');
 const handleAdminCommands = require('./admin.js');
+const { getPlayCommands, handlePlayCommand, handlePlayButton } = require('./play.js');
 
 const app = express();
 const client = new Client({
@@ -217,14 +218,19 @@ client.once(Events.ClientReady, async () => {
             for (let i = 1; i <= 10; i++) sub.addRoleOption(o => o.setName(`role${i}`).setDescription(`役職${i}`)).addStringOption(o => o.setName(`emoji${i}`).setDescription(`絵文字${i}`));
             return sub;
         }).addSubcommand(sub => sub.setName('delete').setDescription('パネルから役職を削除するボタンを追加')).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+        // 追加コマンド
+        new SlashCommandBuilder().setName('ping').setDescription('Botの応答速度を表示します'),
         new SlashCommandBuilder().setName('avatar').setDescription('ユーザーのアバターを表示します').addUserOption(o => o.setName('user').setDescription('対象ユーザー')),
         new SlashCommandBuilder().setName('calc').setDescription('計算をします').addStringOption(o => o.setName('expression').setDescription('計算式（例: 100*3+50）').setRequired(true)),
         new SlashCommandBuilder().setName('janken').setDescription('Botとじゃんけんをします').addStringOption(o => o.setName('hand').setDescription('グー / チョキ / パー').setRequired(true).addChoices({ name: 'グー ✊', value: 'グー' }, { name: 'チョキ ✌️', value: 'チョキ' }, { name: 'パー ✋', value: 'パー' })),
         new SlashCommandBuilder().setName('remind').setDescription('指定時間後にリマインドします').addIntegerOption(o => o.setName('minutes').setDescription('何分後に通知するか').setRequired(true)).addStringOption(o => o.setName('message').setDescription('リマインド内容').setRequired(true)),
+        new SlashCommandBuilder().setName('afk').setDescription('AFK（離席）状態を設定/解除します').addStringOption(o => o.setName('reason').setDescription('離席理由（省略可）')),
+        new SlashCommandBuilder().setName('announce').setDescription('アナウンスを送信します').addStringOption(o => o.setName('message').setDescription('送信内容').setRequired(true)).addChannelOption(o => o.setName('channel').setDescription('送信先（省略で現在）').addChannelTypes(ChannelType.GuildText)).addRoleOption(o => o.setName('mention').setDescription('メンションするロール')).setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages),
+        new SlashCommandBuilder().setName('poll').setDescription('投票を作成します').addStringOption(o => o.setName('question').setDescription('質問').setRequired(true)).addStringOption(o => o.setName('choices').setDescription('選択肢（カンマ区切り　例: はい,いいえ,わからない）').setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages),
         new SlashCommandBuilder().setName('coinflip').setDescription('コインを投げます（表/裏）'),
         new SlashCommandBuilder().setName('dice').setDescription('サイコロを振ります').addIntegerOption(o => o.setName('sides').setDescription('面数（デフォルト6）').setMinValue(2).setMaxValue(100)),
         new SlashCommandBuilder().setName('choose').setDescription('選択肢からランダムに1つ選びます').addStringOption(o => o.setName('choices').setDescription('選択肢（カンマ区切り　例: ラーメン,カレー,寿司）').setRequired(true)),
-    ].map(cmd => cmd.toJSON());
+    ].map(cmd => cmd.toJSON()).concat(getPlayCommands());
 
     const rest = new REST({ version: '10' }).setToken(TOKEN);
     try {
@@ -242,6 +248,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
         servers[guildId] = { logConfig: { edit: true, delete: true, join: true, leave: true }, ngwords: [], ngwordExemptRoles: [], ngwordTimeoutSeconds: 60, ngwordViolationLimit: 3, locked: false, kasoIgnoreChannels: [], leveling: true };
     }
 
+    // ==================== ゲームコマンド (play.js) ====================
+    const PLAY_COMMANDS = ['igo', 'shogi', 'chess', 'othello', 'aki'];
+    if (interaction.isChatInputCommand() && PLAY_COMMANDS.includes(interaction.commandName)) {
+        return handlePlayCommand(interaction);
+    }
+    const PLAY_BUTTONS = ['igo_', 'shogi_', 'chess_', 'othello_', 'aki_', 'invite_', 'online_'];
+    if (interaction.isButton() && PLAY_BUTTONS.some(p => interaction.customId.startsWith(p))) {
+        return handlePlayButton(interaction);
+    }
+
     // ==================== スラッシュコマンド ====================
     if (interaction.isChatInputCommand()) {
         const { commandName, options } = interaction;
@@ -249,9 +265,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (commandName === 'help') {
             const embed = new EmbedBuilder().setTitle('📖 コマンド一覧').setColor(0x3498db).addFields(
                 { name: '📊 レベル', value: '`/rank` `/ranking`', inline: true },
-                { name: '👤 ユーザー', value: '`/userinfo`', inline: true },
-                { name: '🏰 サーバー', value: '`/serverinfo` `/kaso`', inline: true },
+                { name: '👤 ユーザー', value: '`/userinfo` `/avatar` `/afk`', inline: true },
+                { name: '🏰 サーバー', value: '`/serverinfo` `/kaso` `/ping`', inline: true },
                 { name: '🎮 エンタメ', value: '`/omikuji` `/janken` `/coinflip` `/dice` `/choose`', inline: true },
+                { name: '🎲 ゲーム', value: '`/igo` `/shogi` `/chess` `/othello` `/aki`', inline: true },
+                { name: '📊 投票・通知', value: '`/poll` `/announce`', inline: true },
                 { name: '⏰ リマインド', value: '`/remind`', inline: true },
                 { name: '🧮 計算', value: '`/calc`', inline: true },
                 { name: '🎫 チケット', value: '`/ticket`', inline: true },
@@ -440,53 +458,120 @@ client.on(Events.InteractionCreate, async (interaction) => {
             if (count === 0) return interaction.reply({ content: '最低1つの役職を指定してください。', ...EPH });
             await interaction.reply({ embeds: [embed], components: [row] });
         }
-        
-if (commandName === 'calc') {
-    const expr = options.getString('expression');
-    try {
-        if (!/^[\d\s\+\-\*\/\.\(\)%\^]+$/.test(expr)) throw new Error('使用できない文字が含まれています');
-        const result = Function(`"use strict"; return (${expr.replace(/\^/g, '**')})`)();
-        if (!isFinite(result)) throw new Error('計算不能');
-        const embed = new EmbedBuilder().setTitle('🧮 計算結果').setColor(0x3498db).addFields({ name: '式', value: `\`${expr}\``, inline: true }, { name: '結果', value: `\`${result}\``, inline: true });
-        await interaction.reply({ embeds: [embed] });
-    } catch (e) { await interaction.reply({ content: `❌ 計算エラー: ${e.message}`, ephemeral: true }); }
-}
-if (commandName === 'janken') {
-    const hands = ['グー', 'チョキ', 'パー'], emojis = { 'グー': '✊', 'チョキ': '✌️', 'パー': '✋' }, userHand = options.getString('hand'), botHand = hands[Math.floor(Math.random() * 3)];
-    let result, color;
-    if (userHand === botHand) { result = '引き分け 🤝'; color = 0xFFFF00; }
-    else if ((userHand === 'グー' && botHand === 'チョキ') || (userHand === 'チョキ' && botHand === 'パー') || (userHand === 'パー' && botHand === 'グー')) { result = 'あなたの勝ち 🎉'; color = 0x00FF00; }
-    else { result = 'Botの勝ち 😈'; color = 0xFF0000; }
-    const embed = new EmbedBuilder().setTitle('✊✌️✋ じゃんけん！').setColor(color).addFields({ name: 'あなた', value: `${emojis[userHand]} ${userHand}`, inline: true }, { name: 'Bot', value: `${emojis[botHand]} ${botHand}`, inline: true }, { name: '結果', value: result, inline: false });
-    await interaction.reply({ embeds: [embed] });
-}
-if (commandName === 'remind') {
-    const min = options.getInteger('minutes'), msg = options.getString('message');
-    if (min < 1 || min > 1440) return interaction.reply({ content: '1分から1440分の間で指定してください。', ephemeral: true });
-    await interaction.reply({ content: `⏰ **${min}分後**にリマインドします！\n内容: \`${msg}\``, ephemeral: true });
-    setTimeout(async () => {
-        const embed = new EmbedBuilder().setTitle('⏰ リマインダー').setDescription(msg).setColor(0xf39c12).setTimestamp().setFooter({ text: `リマインダー` });
-        try { const dm = await interaction.user.createDM(); await dm.send({ content: `<@${interaction.user.id}>`, embeds: [embed] }); }
-        catch { interaction.channel?.send({ content: `<@${interaction.user.id}>`, embeds: [embed] }).catch(() => {}); }
-    }, min * 60 * 1000);
-}
-if (commandName === 'coinflip') {
-    await interaction.reply(`コインを投げました... **${Math.random() < 0.5 ? '表 🪙' : '裏 🔄'}** が出ました！`);
-}
-if (commandName === 'dice') {
-    const sides = options.getInteger('sides') || 6, result = Math.floor(Math.random() * sides) + 1;
-    const embed = new EmbedBuilder().setTitle('🎲 ダイスロール').setColor(0x9b59b6).addFields({ name: `d${sides}`, value: `**${result}**`, inline: true });
-    await interaction.reply({ embeds: [embed] });
-}
-if (commandName === 'choose') {
-    const choices = options.getString('choices').split(',').map(c => c.trim()).filter(Boolean);
-    if (choices.length < 2) return interaction.reply({ content: '❌ 選択肢を2つ以上入力してください。', ephemeral: true });
-    const chosen = choices[Math.floor(Math.random() * choices.length)], embed = new EmbedBuilder().setTitle('🎯 選択結果').setColor(0x1abc9c).setDescription(`**${chosen}**`).setFooter({ text: `${choices.length}個の選択肢から選びました` });
-    await interaction.reply({ embeds: [embed] });
-}
+
+        // ==================== 追加コマンド ====================
+        if (commandName === 'ping') {
+            const sent = await interaction.reply({ content: '📡 計測中...', fetchReply: true });
+            const rtt = sent.createdTimestamp - interaction.createdTimestamp;
+            const embed = new EmbedBuilder().setTitle('🏓 Pong!').setColor(rtt < 100 ? 0x2ecc71 : rtt < 300 ? 0xf1c40f : 0xe74c3c)
+                .addFields({ name: '📡 往復レイテンシ', value: `${rtt}ms`, inline: true }, { name: '💓 WebSocket', value: `${client.ws.ping}ms`, inline: true });
+            await interaction.editReply({ content: '', embeds: [embed] });
         }
 
+        if (commandName === 'avatar') {
+            const user = options.getUser('user') || interaction.user;
+            const url = user.displayAvatarURL({ size: 1024, extension: 'png' });
+            const embed = new EmbedBuilder().setTitle(`🖼️ ${user.username} のアバター`).setImage(url).setColor(0x3498db)
+                .addFields({ name: 'ダウンロード', value: `[PNG](${url}) | [WEBP](${user.displayAvatarURL({ size: 1024, extension: 'webp' })})` });
+            await interaction.reply({ embeds: [embed] });
+        }
 
+        if (commandName === 'calc') {
+            const expr = options.getString('expression');
+            try {
+                if (!/^[\d\s\+\-\*\/\.\(\)%\^]+$/.test(expr)) throw new Error('使用できない文字が含まれています');
+                const result = Function(`"use strict"; return (${expr.replace(/\^/g, '**')})`)();
+                if (!isFinite(result)) throw new Error('ゼロ除算または計算不能');
+                const embed = new EmbedBuilder().setTitle('🧮 計算結果').setColor(0x3498db)
+                    .addFields({ name: '式', value: `\`${expr}\``, inline: true }, { name: '結果', value: `\`${result}\``, inline: true });
+                await interaction.reply({ embeds: [embed] });
+            } catch (e) {
+                await interaction.reply({ content: `❌ 計算エラー: ${e.message}`, ...EPH });
+            }
+        }
+
+        if (commandName === 'janken') {
+            const hands = ['グー', 'チョキ', 'パー'];
+            const emojis = { 'グー': '✊', 'チョキ': '✌️', 'パー': '✋' };
+            const userHand = options.getString('hand');
+            const botHand = hands[Math.floor(Math.random() * 3)];
+            let result, color;
+            if (userHand === botHand) { result = '引き分け 🤝'; color = 0xFFFF00; }
+            else if ((userHand === 'グー' && botHand === 'チョキ') || (userHand === 'チョキ' && botHand === 'パー') || (userHand === 'パー' && botHand === 'グー')) { result = 'あなたの勝ち 🎉'; color = 0x00FF00; }
+            else { result = 'Botの勝ち 😈'; color = 0xFF0000; }
+            const embed = new EmbedBuilder().setTitle('✊✌️✋ じゃんけん！').setColor(color)
+                .addFields({ name: 'あなた', value: `${emojis[userHand]} ${userHand}`, inline: true }, { name: 'Bot', value: `${emojis[botHand]} ${botHand}`, inline: true }, { name: '結果', value: result, inline: false });
+            await interaction.reply({ embeds: [embed] });
+        }
+
+        if (commandName === 'remind') {
+            const minutes = options.getInteger('minutes');
+            const msg = options.getString('message');
+            if (minutes < 1 || minutes > 1440) return interaction.reply({ content: '❌ 1〜1440分の間で指定してください。', ...EPH });
+            await interaction.reply({ content: `⏰ **${minutes}分後**にリマインドします！\n内容: \`${msg}\``, ...EPH });
+            setTimeout(async () => {
+                const embed = new EmbedBuilder().setTitle('⏰ リマインダー').setDescription(msg).setColor(0xf39c12).setTimestamp().setFooter({ text: `${interaction.guild.name} でのリマインダー` });
+                try { const dm = await interaction.user.createDM(); await dm.send({ content: `<@${interaction.user.id}>`, embeds: [embed] }); }
+                catch { interaction.channel?.send({ content: `<@${interaction.user.id}>`, embeds: [embed] }).catch(() => {}); }
+            }, minutes * 60 * 1000);
+        }
+
+        if (commandName === 'afk') {
+            const reason = options.getString('reason') || '離席中';
+            const key = `${guildId}_${interaction.user.id}`;
+            if (afkUsers.has(key)) {
+                afkUsers.delete(key);
+                await interaction.reply({ content: '✅ AFK状態を解除しました。', ...EPH });
+            } else {
+                afkUsers.set(key, { reason, since: Date.now() });
+                await interaction.reply({ content: `😴 AFK状態に設定しました。\n理由: **${reason}**`, ...EPH });
+            }
+        }
+
+        if (commandName === 'announce') {
+            const message = options.getString('message');
+            const targetCh = options.getChannel('channel') || interaction.channel;
+            const mentionRole = options.getRole('mention');
+            const embed = new EmbedBuilder().setTitle('📢 アナウンス').setDescription(message).setColor(0xe74c3c)
+                .setFooter({ text: `送信者: ${interaction.user.tag}` }).setTimestamp();
+            await targetCh.send({ content: mentionRole ? `<@&${mentionRole.id}>` : '', embeds: [embed] });
+            await interaction.reply({ content: `✅ <#${targetCh.id}> にアナウンスを送信しました。`, ...EPH });
+        }
+
+        if (commandName === 'poll') {
+            const question = options.getString('question');
+            const choicesRaw = options.getString('choices').split(',').map(c => c.trim()).filter(Boolean).slice(0, 10);
+            if (choicesRaw.length < 2) return interaction.reply({ content: '❌ 選択肢を2つ以上カンマ区切りで入力してください。', ...EPH });
+            const numEmoji = ['1️⃣','2️⃣','3️⃣','4️⃣','5️⃣','6️⃣','7️⃣','8️⃣','9️⃣','🔟'];
+            const embed = new EmbedBuilder().setTitle(`📊 ${question}`)
+                .setDescription(choicesRaw.map((c, i) => `${numEmoji[i]} ${c}`).join('\n'))
+                .setColor(0x5865f2).setFooter({ text: `投票者: ${interaction.user.tag}` }).setTimestamp();
+            const msg = await interaction.reply({ embeds: [embed], fetchReply: true });
+            for (let i = 0; i < choicesRaw.length; i++) await msg.react(numEmoji[i]).catch(() => {});
+        }
+
+        if (commandName === 'coinflip') {
+            const result = Math.random() < 0.5 ? '表 🪙' : '裏 🔄';
+            await interaction.reply(`コインを投げました... **${result}** が出ました！`);
+        }
+
+        if (commandName === 'dice') {
+            const sides = options.getInteger('sides') || 6;
+            const result = Math.floor(Math.random() * sides) + 1;
+            const embed = new EmbedBuilder().setTitle('🎲 ダイスロール').setColor(0x9b59b6)
+                .addFields({ name: `d${sides}`, value: `**${result}**`, inline: true });
+            await interaction.reply({ embeds: [embed] });
+        }
+
+        if (commandName === 'choose') {
+            const choices = options.getString('choices').split(',').map(c => c.trim()).filter(Boolean);
+            if (choices.length < 2) return interaction.reply({ content: '❌ 選択肢を2つ以上カンマ区切りで入力してください。', ...EPH });
+            const chosen = choices[Math.floor(Math.random() * choices.length)];
+            const embed = new EmbedBuilder().setTitle('🎯 選択結果').setColor(0x1abc9c)
+                .setDescription(`**${chosen}**`).setFooter({ text: `${choices.length}個の選択肢から選びました` });
+            await interaction.reply({ embeds: [embed] });
+        }
+    }
 
     // ==================== セレクトメニュー ====================
     if (interaction.isChannelSelectMenu()) {
@@ -710,7 +795,7 @@ if (commandName === 'choose') {
                 ]
             });
             const closeBtn = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('ticket_close').setLabel('チケットを閉じる').setStyle(ButtonStyle.Danger));
-            await channel.send({ content: `<@&${mid}> チケット作成ありがとうございます！ \n管理者が来るまでお待ちください`, components: [closeBtn] });
+            await channel.send({ content: `<@&${mid}> 問い合わせが届きました。`, components: [closeBtn] });
             await interaction.reply({ content: `チケットを作成しました: ${channel}`, ...EPH });
         }
         if (cid === 'ticket_close') {
@@ -738,6 +823,25 @@ client.on(Events.MessageCreate, async (message) => {
     const gid = message.guildId;
 
     if (!message.channel.name?.startsWith('ticket-')) recordMessage(gid, message.channelId, message.author.id);
+
+    // AFK解除チェック（本人が発言）
+    const selfAfkKey = `${gid}_${message.author.id}`;
+    if (afkUsers.has(selfAfkKey)) {
+        const { since } = afkUsers.get(selfAfkKey);
+        afkUsers.delete(selfAfkKey);
+        const elapsed = Math.floor((Date.now() - since) / 1000);
+        message.reply(`✅ AFK解除しました。離席時間: **${Math.floor(elapsed / 60)}分${elapsed % 60}秒**`).then(m => setTimeout(() => m.delete().catch(() => {}), 5000));
+    }
+    // AFK中ユーザーへのメンション通知
+    for (const [uid] of message.mentions.users) {
+        if (uid === message.author.id) continue;
+        const key = `${gid}_${uid}`;
+        if (afkUsers.has(key)) {
+            const { reason, since } = afkUsers.get(key);
+            const elapsed = Math.floor((Date.now() - since) / 60000);
+            message.reply(`😴 <@${uid}> は現在AFK中です。\n理由: **${reason}**（${elapsed}分前から）`).then(m => setTimeout(() => m.delete().catch(() => {}), 8000));
+        }
+    }
 
     // NGワード判定
     if (servers[gid]?.ngwords?.length > 0) {
