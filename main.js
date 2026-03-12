@@ -7,7 +7,7 @@ const handleAdminCommands = require('./admin.js');
 
 const app = express();
 const client = new Client({
-    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildMembers],
+    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildModeration],
     partials: [Partials.Channel, Partials.Message]
 });
 
@@ -149,14 +149,21 @@ function createMainSetRow2() {
         new ButtonBuilder().setCustomId('set_menu_ngword').setLabel('NGワード管理').setStyle(ButtonStyle.Danger)
     );
 }
-function createLogConfigRow(c) {
-    return new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('log_toggle_edit').setLabel(`編集: ${c.edit ? 'ON' : 'OFF'}`).setStyle(c.edit ? ButtonStyle.Success : ButtonStyle.Danger),
-        new ButtonBuilder().setCustomId('log_toggle_delete').setLabel(`削除: ${c.delete ? 'ON' : 'OFF'}`).setStyle(c.delete ? ButtonStyle.Success : ButtonStyle.Danger),
-        new ButtonBuilder().setCustomId('log_toggle_join').setLabel(`入室: ${c.join ? 'ON' : 'OFF'}`).setStyle(c.join ? ButtonStyle.Success : ButtonStyle.Danger),
-        new ButtonBuilder().setCustomId('log_toggle_leave').setLabel(`退出: ${c.leave ? 'ON' : 'OFF'}`).setStyle(c.leave ? ButtonStyle.Success : ButtonStyle.Danger),
-        new ButtonBuilder().setCustomId('set_back_main').setLabel('戻る').setStyle(ButtonStyle.Secondary)
-    );
+function createLogConfigRows(c) {
+    return [
+        new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('log_toggle_edit').setLabel(`編集: ${c.edit ? 'ON' : 'OFF'}`).setStyle(c.edit ? ButtonStyle.Success : ButtonStyle.Danger),
+            new ButtonBuilder().setCustomId('log_toggle_delete').setLabel(`削除: ${c.delete ? 'ON' : 'OFF'}`).setStyle(c.delete ? ButtonStyle.Success : ButtonStyle.Danger),
+            new ButtonBuilder().setCustomId('log_toggle_join').setLabel(`入室: ${c.join ? 'ON' : 'OFF'}`).setStyle(c.join ? ButtonStyle.Success : ButtonStyle.Danger)
+        ),
+        new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('log_toggle_leave').setLabel(`退出: ${c.leave ? 'ON' : 'OFF'}`).setStyle(c.leave ? ButtonStyle.Success : ButtonStyle.Danger),
+            new ButtonBuilder().setCustomId('log_toggle_channel').setLabel(`CH作成: ${c.channel ? 'ON' : 'OFF'}`).setStyle(c.channel ? ButtonStyle.Success : ButtonStyle.Danger),
+            new ButtonBuilder().setCustomId('log_toggle_role').setLabel(`ロール: ${c.role ? 'ON' : 'OFF'}`).setStyle(c.role ? ButtonStyle.Success : ButtonStyle.Danger),
+            new ButtonBuilder().setCustomId('log_toggle_timeout').setLabel(`TО: ${c.timeout ? 'ON' : 'OFF'}`).setStyle(c.timeout ? ButtonStyle.Success : ButtonStyle.Danger),
+            new ButtonBuilder().setCustomId('set_back_main').setLabel('戻る').setStyle(ButtonStyle.Secondary)
+        ),
+    ];
 }
 function buildNgwordPanel(s) {
     const list = s.ngwords?.length > 0 ? s.ngwords.map(w => `\`${w}\``).join('、') : 'なし';
@@ -232,7 +239,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const guildId = interaction.guildId;
 
     if (guildId && !servers[guildId]) {
-        servers[guildId] = { logConfig: { edit: true, delete: true, join: true, leave: true }, ngwords: [], ngwordExemptRoles: [], ngwordTimeoutSeconds: 60, ngwordViolationLimit: 3, locked: false, kasoIgnoreChannels: [], leveling: true };
+        servers[guildId] = { logConfig: { edit: true, delete: true, join: true, leave: true, channel: true, role: true, timeout: true }, ngwords: [], ngwordExemptRoles: [], ngwordTimeoutSeconds: 60, ngwordViolationLimit: 3, locked: false, kasoIgnoreChannels: [], leveling: true };
     }
 
     // ==================== スラッシュコマンド ====================
@@ -611,7 +618,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         if (cid === 'set_menu_log') {
             const select = new ChannelSelectMenuBuilder().setCustomId('select_log_channel').setPlaceholder('ログ送信先チャンネルを選択').addChannelTypes(ChannelType.GuildText);
-            await interaction.update({ content: `📋 **ログ設定**\n\n現在のログチャンネル: ${servers[guildId].logChannel ? `<#${servers[guildId].logChannel}>` : '未設定'}\n\nチャンネルを選択してください。`, components: [new ActionRowBuilder().addComponents(select), createLogConfigRow(servers[guildId].logConfig)] });
+            const lc = servers[guildId].logConfig;
+            await interaction.update({ content: `📋 **ログ設定**\n\n現在のログチャンネル: ${servers[guildId].logChannel ? `<#${servers[guildId].logChannel}>` : '未設定'}\n\nチャンネルを選択してください。`, components: [new ActionRowBuilder().addComponents(select), ...createLogConfigRows(lc)] });
         }
         if (cid === 'set_back_main') await interaction.update(buildSetPanel(servers[guildId]));
         if (cid === 'set_lv_toggle') { servers[guildId].leveling = !servers[guildId].leveling; saveData(SERVERS_FILE, servers); await interaction.update(buildSetPanel(servers[guildId])); }
@@ -624,10 +632,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
         if (cid.startsWith('log_toggle_')) {
             const key = cid.replace('log_toggle_', '');
+            if (!servers[guildId].logConfig) servers[guildId].logConfig = {};
             servers[guildId].logConfig[key] = !servers[guildId].logConfig[key];
             saveData(SERVERS_FILE, servers);
             const select = new ChannelSelectMenuBuilder().setCustomId('select_log_channel').setPlaceholder('ログ送信先チャンネルを選択').addChannelTypes(ChannelType.GuildText);
-            await interaction.update({ content: `📋 **ログ設定**\n\n現在のログチャンネル: ${servers[guildId].logChannel ? `<#${servers[guildId].logChannel}>` : '未設定'}`, components: [new ActionRowBuilder().addComponents(select), createLogConfigRow(servers[guildId].logConfig)] });
+            await interaction.update({ content: `📋 **ログ設定**\n\n現在のログチャンネル: ${servers[guildId].logChannel ? `<#${servers[guildId].logChannel}>` : '未設定'}`, components: [new ActionRowBuilder().addComponents(select), ...createLogConfigRows(servers[guildId].logConfig)] });
         }
         if (cid === 'set_menu_welcome') {
             const current = servers[guildId].welcome;
@@ -829,5 +838,44 @@ client.on(Events.GuildMemberRemove, async (member) => {
 
 client.on(Events.GuildCreate, () => updateStatus());
 client.on(Events.GuildDelete, () => updateStatus());
+
+// チャンネル作成ログ
+client.on(Events.ChannelCreate, async (channel) => {
+    if (!channel.guild) return;
+    const s = loadData(SERVERS_FILE);
+    if (!s[channel.guild.id]?.logConfig?.channel) return;
+    const embed = new EmbedBuilder().setTitle('📁 チャンネル作成').setDescription(`**名前:** <#${channel.id}> (\`${channel.name}\`)\n**種類:** ${channel.type === ChannelType.GuildText ? 'テキスト' : channel.type === ChannelType.GuildVoice ? 'ボイス' : 'その他'}`).setColor(0x00bfff).setTimestamp();
+    await sendLog(channel.guild, embed);
+});
+
+// ロール付与/剥奪ログ
+client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
+    const s = loadData(SERVERS_FILE);
+    if (!s[newMember.guild.id]?.logConfig?.role) return;
+    const added = newMember.roles.cache.filter(r => !oldMember.roles.cache.has(r.id) && r.id !== newMember.guild.id);
+    const removed = oldMember.roles.cache.filter(r => !newMember.roles.cache.has(r.id) && r.id !== newMember.guild.id);
+    if (added.size === 0 && removed.size === 0) return;
+    const lines = [];
+    if (added.size > 0) lines.push(`**付与:** ${added.map(r => `<@&${r.id}>`).join(' ')}`);
+    if (removed.size > 0) lines.push(`**剥奪:** ${removed.map(r => `<@&${r.id}>`).join(' ')}`);
+    const embed = new EmbedBuilder().setTitle('🏷️ ロール変更').setDescription(`**対象:** <@${newMember.id}>\n${lines.join('\n')}`).setColor(added.size > 0 ? 0x57f287 : 0xed4245).setTimestamp();
+    await sendLog(newMember.guild, embed);
+});
+
+// タイムアウトログ
+client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
+    const s = loadData(SERVERS_FILE);
+    if (!s[newMember.guild.id]?.logConfig?.timeout) return;
+    const wasTimedOut = oldMember.communicationDisabledUntil;
+    const isTimedOut = newMember.communicationDisabledUntil;
+    if (!wasTimedOut && isTimedOut && new Date(isTimedOut) > new Date()) {
+        const until = Math.floor(new Date(isTimedOut).getTime() / 1000);
+        const embed = new EmbedBuilder().setTitle('🔇 タイムアウト').setDescription(`**対象:** <@${newMember.id}>\n**解除予定:** <t:${until}:R> (<t:${until}:F>)`).setColor(0xff6b35).setTimestamp();
+        await sendLog(newMember.guild, embed);
+    } else if (wasTimedOut && (!isTimedOut || new Date(isTimedOut) <= new Date())) {
+        const embed = new EmbedBuilder().setTitle('🔊 タイムアウト解除').setDescription(`**対象:** <@${newMember.id}>`).setColor(0x57f287).setTimestamp();
+        await sendLog(newMember.guild, embed);
+    }
+});
 
 client.login(TOKEN);
