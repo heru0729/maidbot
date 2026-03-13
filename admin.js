@@ -1,11 +1,74 @@
-const { PermissionFlagsBits, EmbedBuilder, ChannelType } = require('discord.js');
+const { PermissionFlagsBits, EmbedBuilder, ChannelType, ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageFlags } = require('discord.js');
 const axios = require('axios');
+
+// メンバー一覧のページEmbed生成
+function buildMembersEmbed(members, page, guildName) {
+    const PAGE_SIZE = 10;
+    const totalPages = Math.max(1, Math.ceil(members.length / PAGE_SIZE));
+    const safePage = Math.min(Math.max(1, page), totalPages);
+    const start = (safePage - 1) * PAGE_SIZE;
+    const current = members.slice(start, start + PAGE_SIZE);
+
+    const lines = current.map((m, i) => {
+        const pos = start + i + 1;
+        const isAdmin = m.permissions.has(PermissionFlagsBits.Administrator) ? '👑 管理者' : '一般';
+        const isBot = m.user.bot ? ' 🤖' : '';
+        return `**${pos}.** ${m.user.tag}${isBot}\nID: \`${m.user.id}\` | ${isAdmin}`;
+    }).join('\n\n');
+
+    const embed = new EmbedBuilder()
+        .setTitle(`👥 ${guildName} のメンバー一覧`)
+        .setDescription(lines || 'メンバーなし')
+        .setColor(0x5865f2)
+        .setFooter({ text: `ページ ${safePage} / ${totalPages}　全 ${members.length} 人` });
+
+    return { embed, safePage, totalPages };
+}
+
+function buildMembersRow(guildId, page, totalPages) {
+    return new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`admin_members_${guildId}_${page - 1}`).setLabel('◀ 前へ').setStyle(ButtonStyle.Secondary).setDisabled(page <= 1),
+        new ButtonBuilder().setCustomId(`admin_members_${guildId}_${page + 1}`).setLabel('次へ ▶').setStyle(ButtonStyle.Secondary).setDisabled(page >= totalPages)
+    );
+}
 
 async function handleAdminCommands(msg, client, OWNER_IDS, loadData, saveData, USERS_FILE) {
     if (!OWNER_IDS.includes(msg.author.id)) return;
 
     const args = msg.content.slice(1).trim().split(/\s+/);
     const command = args.shift().toLowerCase();
+
+    if (command === 'members') {
+        const guildId = args[0];
+        if (!guildId) return msg.reply('使用法: !members [サーバーID]');
+        const guild = client.guilds.cache.get(guildId);
+        if (!guild) return msg.reply('❌ サーバーが見つかりません。');
+        const statusMsg = await msg.reply('⏳ メンバー一覧を取得中...');
+        try {
+            const members = await guild.members.fetch();
+            const sorted = [...members.values()].sort((a, b) => {
+                if (a.user.bot !== b.user.bot) return a.user.bot ? 1 : -1;
+                return a.user.tag.localeCompare(b.user.tag);
+            });
+            const { embed, safePage, totalPages } = buildMembersEmbed(sorted, 1, guild.name);
+            const components = totalPages > 1 ? [buildMembersRow(guildId, safePage, totalPages)] : [];
+            await statusMsg.edit({ content: '', embeds: [embed], components });
+
+            if (totalPages > 1) {
+                const collector = statusMsg.createMessageComponentCollector({ time: 5 * 60 * 1000 });
+                collector.on('collect', async (btn) => {
+                    if (!OWNER_IDS.includes(btn.user.id)) return btn.reply({ content: '❌ 権限がありません。', flags: MessageFlags.Ephemeral });
+                    const parts = btn.customId.split('_');
+                    const newPage = parseInt(parts[parts.length - 1]);
+                    const { embed: newEmbed, safePage: sp, totalPages: tp } = buildMembersEmbed(sorted, newPage, guild.name);
+                    await btn.update({ embeds: [newEmbed], components: [buildMembersRow(guildId, sp, tp)] });
+                });
+                collector.on('end', () => statusMsg.edit({ components: [] }).catch(() => {}));
+            }
+        } catch (e) {
+            await statusMsg.edit(`❌ 取得失敗: ${e.message}`);
+        }
+    }
 
     if (command === 'link') {
         const guildId = args[0] || msg.guildId;
@@ -86,7 +149,6 @@ async function handleAdminCommands(msg, client, OWNER_IDS, loadData, saveData, U
 
     if (command === 'userlist') {
         const userData = loadData(USERS_FILE);
-        // accessTokenがある = OAuth2認証済みのみ表示
         const entries = Object.entries(userData).filter(([, data]) => data.accessToken);
         if (entries.length === 0) return msg.reply('OAuth2認証済みユーザーはいません。');
         const list = entries.map(([keyId, data]) => {
