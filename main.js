@@ -154,14 +154,17 @@ function createLogConfigRows(c) {
         new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId('log_toggle_edit').setLabel(`編集: ${c.edit ? 'ON' : 'OFF'}`).setStyle(c.edit ? ButtonStyle.Success : ButtonStyle.Danger),
             new ButtonBuilder().setCustomId('log_toggle_delete').setLabel(`削除: ${c.delete ? 'ON' : 'OFF'}`).setStyle(c.delete ? ButtonStyle.Success : ButtonStyle.Danger),
-            new ButtonBuilder().setCustomId('log_toggle_join').setLabel(`入室: ${c.join ? 'ON' : 'OFF'}`).setStyle(c.join ? ButtonStyle.Success : ButtonStyle.Danger)
+            new ButtonBuilder().setCustomId('log_toggle_join').setLabel(`入室: ${c.join ? 'ON' : 'OFF'}`).setStyle(c.join ? ButtonStyle.Success : ButtonStyle.Danger),
+            new ButtonBuilder().setCustomId('log_toggle_leave').setLabel(`退出: ${c.leave ? 'ON' : 'OFF'}`).setStyle(c.leave ? ButtonStyle.Success : ButtonStyle.Danger)
         ),
         new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId('log_toggle_leave').setLabel(`退出: ${c.leave ? 'ON' : 'OFF'}`).setStyle(c.leave ? ButtonStyle.Success : ButtonStyle.Danger),
+            new ButtonBuilder().setCustomId('log_toggle_message_send').setLabel(`送信: ${c.message_send ? 'ON' : 'OFF'}`).setStyle(c.message_send ? ButtonStyle.Success : ButtonStyle.Danger),
             new ButtonBuilder().setCustomId('log_toggle_channel').setLabel(`CH作成: ${c.channel ? 'ON' : 'OFF'}`).setStyle(c.channel ? ButtonStyle.Success : ButtonStyle.Danger),
             new ButtonBuilder().setCustomId('log_toggle_role').setLabel(`ロール: ${c.role ? 'ON' : 'OFF'}`).setStyle(c.role ? ButtonStyle.Success : ButtonStyle.Danger),
-            new ButtonBuilder().setCustomId('log_toggle_timeout').setLabel(`TО: ${c.timeout ? 'ON' : 'OFF'}`).setStyle(c.timeout ? ButtonStyle.Success : ButtonStyle.Danger),
-            new ButtonBuilder().setCustomId('set_back_main').setLabel('戻る').setStyle(ButtonStyle.Secondary)
+            new ButtonBuilder().setCustomId('log_toggle_timeout').setLabel(`TO: ${c.timeout ? 'ON' : 'OFF'}`).setStyle(c.timeout ? ButtonStyle.Success : ButtonStyle.Danger)
+        ),
+        new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('set_back_main').setLabel('← 戻る').setStyle(ButtonStyle.Secondary)
         ),
     ];
 }
@@ -239,7 +242,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const guildId = interaction.guildId;
 
     if (guildId && !servers[guildId]) {
-        servers[guildId] = { logConfig: { edit: true, delete: true, join: true, leave: true, channel: true, role: true, timeout: true }, ngwords: [], ngwordExemptRoles: [], ngwordTimeoutSeconds: 60, ngwordViolationLimit: 3, locked: false, kasoIgnoreChannels: [], leveling: true };
+        servers[guildId] = { logConfig: { edit: true, delete: true, join: true, leave: true, message_send: true, channel: true, role: true, timeout: true }, ngwords: [], ngwordExemptRoles: [], ngwordTimeoutSeconds: 60, ngwordViolationLimit: 3, locked: false, kasoIgnoreChannels: [], leveling: true };
     }
 
     // ==================== スラッシュコマンド ====================
@@ -735,6 +738,13 @@ client.on(Events.MessageCreate, async (message) => {
     const gid = message.guildId;
 
     if (!message.channel.name?.startsWith('ticket-')) recordMessage(gid, message.channelId, message.author.id);
+
+    // メッセージ送信ログ
+    if (servers[gid]?.logConfig?.message_send) {
+        const content = message.content || (message.attachments.size > 0 ? `[添付ファイル: ${message.attachments.map(a => a.name).join(', ')}]` : '[内容なし]');
+        const embed = new EmbedBuilder().setTitle('💬 メッセージ送信').setDescription(`**送信者:** <@${message.author.id}>\n**チャンネル:** <#${message.channelId}>\n\n**内容:**\n${content.slice(0, 1000)}`).setColor(0x57f287).setTimestamp();
+        await sendLog(message.guild, embed);
+    }
 
     // NGワード判定
     if (servers[gid]?.ngwords?.length > 0) {
