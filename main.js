@@ -36,7 +36,8 @@ const EPH = { flags: MessageFlags.Ephemeral };
 function updateStatus() {
     const serverCount = client.guilds.cache.size;
     const ping = client.ws.ping;
-    client.user.setActivity(`/help | ${serverCount} Servers | ${ping}ms`, { type: ActivityType.Watching });
+    const pingStr = ping < 0 ? '...' : `${ping}ms`;
+    client.user.setActivity(`/help | ${serverCount} Servers | ${pingStr}`, { type: ActivityType.Watching });
 }
 
 function replacePlaceholders(t, m) {
@@ -198,7 +199,7 @@ app.listen(process.env.PORT || 3000, '0.0.0.0', () => console.log('Web Server Re
 
 client.once(Events.ClientReady, async () => {
     console.log(`${client.user.tag} としてログインしました。`);
-    updateStatus();
+    setTimeout(updateStatus, 3000);
     setInterval(updateStatus, 30000);
 
     const commands = [
