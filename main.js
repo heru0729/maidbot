@@ -190,8 +190,14 @@ function buildNgwordPanel(s) {
         ]
     };
 }
+function createMainSetRow3(s) {
+    return new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('set_menu_mute').setLabel(`ミュートロール: ${s.muteRole ? '✅設定済' : '未設定'}`).setStyle(s.muteRole ? ButtonStyle.Success : ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId('set_menu_serverlock').setLabel('サーバーロック設定').setStyle(ButtonStyle.Danger)
+    );
+}
 function buildSetPanel(s) {
-    return { content: '⚙️ **サーバー管理設定パネル**\n下のボタンから各機能の設定を行ってください。', components: [createMainSetRow(s), createMainSetRow2()], flags: MessageFlags.Ephemeral };
+    return { content: '⚙️ **サーバー管理設定パネル**\n下のボタンから各機能の設定を行ってください。', components: [createMainSetRow(s), createMainSetRow2(), createMainSetRow3(s)], flags: MessageFlags.Ephemeral };
 }
 
 setupAuth(app, loadData, saveData, USERS_FILE, CLIENT_ID, CLIENT_SECRET);
@@ -224,6 +230,12 @@ client.once(Events.ClientReady, async () => {
             for (let i = 1; i <= 10; i++) sub.addRoleOption(o => o.setName(`role${i}`).setDescription(`役職${i}`)).addStringOption(o => o.setName(`emoji${i}`).setDescription(`絵文字${i}`));
             return sub;
         }).addSubcommand(sub => sub.setName('delete').setDescription('パネルを削除します')).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+        new SlashCommandBuilder().setName('kick').setDescription('ユーザーをサーバーからキックします').addUserOption(o => o.setName('user').setDescription('対象ユーザー').setRequired(true)).addStringOption(o => o.setName('reason').setDescription('理由')).setDefaultMemberPermissions(PermissionFlagsBits.KickMembers),
+        new SlashCommandBuilder().setName('ban').setDescription('ユーザーをサーバーからBANします').addUserOption(o => o.setName('user').setDescription('対象ユーザー').setRequired(true)).addStringOption(o => o.setName('reason').setDescription('理由')).setDefaultMemberPermissions(PermissionFlagsBits.BanMembers),
+        new SlashCommandBuilder().setName('embed').setDescription('Embedメッセージを送信します').addStringOption(o => o.setName('title').setDescription('タイトル').setRequired(true)).addStringOption(o => o.setName('description').setDescription('説明').setRequired(true)).addStringOption(o => o.setName('color').setDescription('カラーコード (例: #ff0000)')).addStringOption(o => o.setName('image').setDescription('画像URL')).addChannelOption(o => o.setName('channel').setDescription('送信先チャンネル（未指定なら現在）').addChannelTypes(ChannelType.GuildText)).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+        new SlashCommandBuilder().setName('mute').setDescription('ユーザーをミュートします').addUserOption(o => o.setName('user').setDescription('対象ユーザー').setRequired(true)).addStringOption(o => o.setName('reason').setDescription('理由')).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+        new SlashCommandBuilder().setName('unmute').setDescription('ユーザーのミュートを解除します').addUserOption(o => o.setName('user').setDescription('対象ユーザー').setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+        new SlashCommandBuilder().setName('serverlock').setDescription('サーバーロックを実行/解除します').addStringOption(o => o.setName('action').setDescription('実行/解除').setRequired(true).addChoices({ name: 'ロック', value: 'lock' }, { name: '解除', value: 'unlock' })).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
         new SlashCommandBuilder().setName('janken').setDescription('Botとじゃんけんをします').addStringOption(o => o.setName('hand').setDescription('グー / チョキ / パー').setRequired(true).addChoices({ name: 'グー ✊', value: 'グー' }, { name: 'チョキ ✌️', value: 'チョキ' }, { name: 'パー ✋', value: 'パー' })),
         new SlashCommandBuilder().setName('coinflip').setDescription('コインを投げます（表/裏）'),
         new SlashCommandBuilder().setName('dice').setDescription('サイコロを振ります').addIntegerOption(o => o.setName('sides').setDescription('面数（デフォルト6）').setMinValue(2).setMaxValue(100)),
@@ -243,7 +255,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const guildId = interaction.guildId;
 
     if (guildId && !servers[guildId]) {
-        servers[guildId] = { logConfig: { edit: true, delete: true, join: true, leave: true, message_send: true, channel: true, role: true, timeout: true }, ngwords: [], ngwordExemptRoles: [], ngwordTimeoutSeconds: 60, ngwordViolationLimit: 3, locked: false, kasoIgnoreChannels: [], leveling: true };
+        servers[guildId] = { logConfig: { edit: true, delete: true, join: true, leave: true, message_send: true, channel: true, role: true, timeout: true }, ngwords: [], ngwordExemptRoles: [], ngwordTimeoutSeconds: 60, ngwordViolationLimit: 3, locked: false, kasoIgnoreChannels: [], leveling: true, muteRole: null, serverLockExemptRoles: [], serverLockExemptChannels: [] };
     }
 
     // ==================== スラッシュコマンド ====================
@@ -260,7 +272,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
                 { name: '🔐 認証', value: '`/authset`', inline: true },
                 { name: '🌐 グローバル', value: '`/gset` `/gdel`', inline: true },
                 { name: '🏷️ 役職', value: '`/rp create` `/rp delete`', inline: true },
+                { name: '📢 告知', value: '`/embed`', inline: true },
                 { name: '⚙️ 管理', value: '`/set` `/clear` `/log` `/chatlock`', inline: true },
+                { name: '🔨 モデレート', value: '`/kick` `/ban` `/mute` `/unmute` `/serverlock`', inline: true },
                 { name: '❓ その他', value: '`/support` `/help`', inline: true }
             ).setFooter({ text: '/set で各種サーバー設定が可能です' });
             await interaction.reply({ embeds: [embed], ...EPH });
@@ -478,6 +492,102 @@ client.on(Events.InteractionCreate, async (interaction) => {
             const embed = new EmbedBuilder().setTitle('🎯 選択結果').setColor(0x1abc9c).setDescription(`**${chosen}**`).setFooter({ text: `${choices.length}個の選択肢から選びました` });
             await interaction.reply({ embeds: [embed] });
         }
+
+        if (commandName === 'kick') {
+            const target = options.getUser('user');
+            const reason = options.getString('reason') || '理由なし';
+            const member = await interaction.guild.members.fetch(target.id).catch(() => null);
+            if (!member) return interaction.reply({ content: '❌ サーバーにいないユーザーです。', ...EPH });
+            if (!member.kickable) return interaction.reply({ content: '❌ このユーザーをキックできません。（権限不足）', ...EPH });
+            await member.kick(reason);
+            const embed = new EmbedBuilder().setTitle('👢 キック').setColor(0xff6b35).addFields({ name: '対象', value: `${target.tag} (${target.id})`, inline: true }, { name: '理由', value: reason, inline: true }).setTimestamp();
+            await interaction.reply({ embeds: [embed] });
+        }
+
+        if (commandName === 'ban') {
+            const target = options.getUser('user');
+            const reason = options.getString('reason') || '理由なし';
+            const member = await interaction.guild.members.fetch(target.id).catch(() => null);
+            if (member && !member.bannable) return interaction.reply({ content: '❌ このユーザーをBANできません。（権限不足）', ...EPH });
+            await interaction.guild.members.ban(target.id, { reason });
+            const embed = new EmbedBuilder().setTitle('🔨 BAN').setColor(0xff0000).addFields({ name: '対象', value: `${target.tag} (${target.id})`, inline: true }, { name: '理由', value: reason, inline: true }).setTimestamp();
+            await interaction.reply({ embeds: [embed] });
+        }
+
+        if (commandName === 'embed') {
+            const targetChannel = options.getChannel('channel') || interaction.channel;
+            const colorStr = options.getString('color');
+            let color = 0x5865f2;
+            if (colorStr) {
+                const parsed = parseInt(colorStr.replace('#', ''), 16);
+                if (!isNaN(parsed)) color = parsed;
+            }
+            const embed = new EmbedBuilder().setTitle(options.getString('title')).setDescription(options.getString('description')).setColor(color).setTimestamp();
+            const imageUrl = options.getString('image');
+            if (imageUrl) embed.setImage(imageUrl);
+            await targetChannel.send({ embeds: [embed] });
+            await interaction.reply({ content: `✅ <#${targetChannel.id}> にEmbedを送信しました。`, ...EPH });
+        }
+
+        if (commandName === 'mute') {
+            const target = options.getUser('user');
+            const reason = options.getString('reason') || '理由なし';
+            const muteRoleId = servers[guildId]?.muteRole;
+            if (!muteRoleId) return interaction.reply({ content: '❌ ミュートロールが設定されていません。`/set` から設定してください。', ...EPH });
+            const member = await interaction.guild.members.fetch(target.id).catch(() => null);
+            if (!member) return interaction.reply({ content: '❌ サーバーにいないユーザーです。', ...EPH });
+            if (member.roles.cache.has(muteRoleId)) return interaction.reply({ content: '⚠️ 既にミュートされています。', ...EPH });
+            await member.roles.add(muteRoleId, reason);
+            const embed = new EmbedBuilder().setTitle('🔇 ミュート').setColor(0xff6b35).addFields({ name: '対象', value: `${target.tag} (${target.id})`, inline: true }, { name: '理由', value: reason, inline: true }).setTimestamp();
+            await interaction.reply({ embeds: [embed] });
+        }
+
+        if (commandName === 'unmute') {
+            const target = options.getUser('user');
+            const muteRoleId = servers[guildId]?.muteRole;
+            if (!muteRoleId) return interaction.reply({ content: '❌ ミュートロールが設定されていません。`/set` から設定してください。', ...EPH });
+            const member = await interaction.guild.members.fetch(target.id).catch(() => null);
+            if (!member) return interaction.reply({ content: '❌ サーバーにいないユーザーです。', ...EPH });
+            if (!member.roles.cache.has(muteRoleId)) return interaction.reply({ content: '⚠️ このユーザーはミュートされていません。', ...EPH });
+            await member.roles.remove(muteRoleId);
+            const embed = new EmbedBuilder().setTitle('🔊 ミュート解除').setColor(0x57f287).addFields({ name: '対象', value: `${target.tag} (${target.id})` }).setTimestamp();
+            await interaction.reply({ embeds: [embed] });
+        }
+
+        if (commandName === 'serverlock') {
+            const action = options.getString('action');
+            const conf = servers[guildId];
+            const exemptRoles = conf?.serverLockExemptRoles || [];
+            const exemptChannels = conf?.serverLockExemptChannels || [];
+            await interaction.deferReply({ ...EPH });
+            const isLock = action === 'lock';
+            const textChannels = interaction.guild.channels.cache.filter(c => c.type === ChannelType.GuildText && !exemptChannels.includes(c.id));
+            const allRoles = interaction.guild.roles.cache.filter(r =>
+                r.id !== interaction.guild.id &&
+                !r.managed &&
+                !exemptRoles.includes(r.id) &&
+                !r.permissions.has(PermissionFlagsBits.Administrator)
+            );
+            // 全対象ロールの権限を剥奪/復元
+            for (const [, role] of allRoles) {
+                await role.setPermissions(isLock ? 0n : role.permissions).catch(() => {});
+            }
+            // 全対象チャンネルの@everyoneのViewChannelを剥奪/復元
+            for (const [, ch] of textChannels) {
+                await ch.permissionOverwrites.edit(interaction.guild.roles.everyone, { ViewChannel: isLock ? false : null }).catch(() => {});
+            }
+            servers[guildId].serverLocked = isLock;
+            saveData(SERVERS_FILE, servers);
+            const embed = new EmbedBuilder()
+                .setTitle(isLock ? '🔒 サーバーロック実行' : '🔓 サーバーロック解除')
+                .setDescription(isLock ? '対象ロールの権限を剥奪し、全チャンネルの閲覧を制限しました。' : 'サーバーロックを解除しました。')
+                .setColor(isLock ? 0xff0000 : 0x57f287)
+                .addFields(
+                    { name: '除外ロール', value: exemptRoles.length > 0 ? exemptRoles.map(r => `<@&${r}>`).join(' ') : 'なし', inline: true },
+                    { name: '除外チャンネル', value: exemptChannels.length > 0 ? exemptChannels.map(c => `<#${c}>`).join(' ') : 'なし', inline: true }
+                ).setTimestamp();
+            await interaction.editReply({ embeds: [embed] });
+        }
     }
 
     // ==================== セレクトメニュー ====================
@@ -525,6 +635,27 @@ client.on(Events.InteractionCreate, async (interaction) => {
                 await interaction.update({ content: '⚠️ そのチャンネルは除外リストにありません。', components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('set_menu_kaso').setLabel('戻る').setStyle(ButtonStyle.Secondary))] });
             }
         }
+        const backToServerLock = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('set_menu_serverlock').setLabel('← 戻る').setStyle(ButtonStyle.Secondary));
+        if (cid === 'select_serverlock_ch_add') {
+            if (!servers[guildId].serverLockExemptChannels) servers[guildId].serverLockExemptChannels = [];
+            if (!servers[guildId].serverLockExemptChannels.includes(channelId)) {
+                servers[guildId].serverLockExemptChannels.push(channelId);
+                saveData(SERVERS_FILE, servers);
+                await interaction.update({ content: `✅ <#${channelId}> を除外チャンネルに追加しました。`, components: [backToServerLock] });
+            } else {
+                await interaction.update({ content: '⚠️ 既に除外されています。', components: [backToServerLock] });
+            }
+        }
+        if (cid === 'select_serverlock_ch_del') {
+            const before = servers[guildId].serverLockExemptChannels?.length || 0;
+            servers[guildId].serverLockExemptChannels = (servers[guildId].serverLockExemptChannels || []).filter(c => c !== channelId);
+            saveData(SERVERS_FILE, servers);
+            if ((servers[guildId].serverLockExemptChannels?.length || 0) < before) {
+                await interaction.update({ content: `✅ <#${channelId}> の除外を解除しました。`, components: [backToServerLock] });
+            } else {
+                await interaction.update({ content: '⚠️ そのチャンネルは除外リストにありません。', components: [backToServerLock] });
+            }
+        }
     }
 
     if (interaction.isRoleSelectMenu()) {
@@ -548,6 +679,27 @@ client.on(Events.InteractionCreate, async (interaction) => {
                 await interaction.update({ content: `✅ <@&${roleId}> を除外ロールから削除しました。`, components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('set_menu_ngword').setLabel('戻る').setStyle(ButtonStyle.Secondary))] });
             } else {
                 await interaction.update({ content: '⚠️ そのロールは登録されていません。', components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('set_menu_ngword').setLabel('戻る').setStyle(ButtonStyle.Secondary))] });
+            }
+        }
+        const backToSLRole = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('set_menu_serverlock').setLabel('← 戻る').setStyle(ButtonStyle.Secondary));
+        if (cid === 'select_serverlock_role_add') {
+            if (!servers[guildId].serverLockExemptRoles) servers[guildId].serverLockExemptRoles = [];
+            if (!servers[guildId].serverLockExemptRoles.includes(roleId)) {
+                servers[guildId].serverLockExemptRoles.push(roleId);
+                saveData(SERVERS_FILE, servers);
+                await interaction.update({ content: `✅ <@&${roleId}> を除外ロールに追加しました。`, components: [backToSLRole] });
+            } else {
+                await interaction.update({ content: '⚠️ 既に登録されています。', components: [backToSLRole] });
+            }
+        }
+        if (cid === 'select_serverlock_role_del') {
+            const before = servers[guildId].serverLockExemptRoles?.length || 0;
+            servers[guildId].serverLockExemptRoles = (servers[guildId].serverLockExemptRoles || []).filter(r => r !== roleId);
+            saveData(SERVERS_FILE, servers);
+            if ((servers[guildId].serverLockExemptRoles?.length || 0) < before) {
+                await interaction.update({ content: `✅ <@&${roleId}> を除外ロールから削除しました。`, components: [backToSLRole] });
+            } else {
+                await interaction.update({ content: '⚠️ そのロールは登録されていません。', components: [backToSLRole] });
             }
         }
     }
@@ -604,6 +756,18 @@ client.on(Events.InteractionCreate, async (interaction) => {
             servers[guildId].ngwordViolationLimit = count;
             saveData(SERVERS_FILE, servers);
             await interaction.reply({ content: `✅ 連呼罰則を ${count}回 に設定しました。`, ...EPH });
+        }
+        if (cid === 'modal_mute_role') {
+            const roleName = interaction.fields.getTextInputValue('mute_role_name').trim();
+            if (!roleName) return interaction.reply({ content: '❌ ロール名を入力してください。', ...EPH });
+            let role = interaction.guild.roles.cache.find(r => r.name === roleName);
+            if (!role) {
+                role = await interaction.guild.roles.create({ name: roleName, permissions: [], reason: 'ミュートロール自動作成' }).catch(() => null);
+                if (!role) return interaction.reply({ content: '❌ ロールの作成に失敗しました。', ...EPH });
+            }
+            servers[guildId].muteRole = role.id;
+            saveData(SERVERS_FILE, servers);
+            await interaction.reply({ content: `✅ ミュートロールを <@&${role.id}> に設定しました。`, ...EPH });
         }
     }
 
@@ -691,6 +855,31 @@ client.on(Events.InteractionCreate, async (interaction) => {
             const selectAdd = new ChannelSelectMenuBuilder().setCustomId('select_kaso_exclude_add').setPlaceholder('除外するチャンネルを選択').addChannelTypes(ChannelType.GuildText);
             const selectDel = new ChannelSelectMenuBuilder().setCustomId('select_kaso_exclude_del').setPlaceholder('除外を解除するチャンネルを選択').addChannelTypes(ChannelType.GuildText);
             await interaction.update({ content: `📊 **調査除外設定**\n\n除外チャンネル: ${list}\n※ticket-チャンネルは自動除外`, components: [new ActionRowBuilder().addComponents(selectAdd), new ActionRowBuilder().addComponents(selectDel), new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('set_back_main').setLabel('戻る').setStyle(ButtonStyle.Secondary))] });
+        }
+        if (cid === 'set_menu_mute') {
+            const modal = new ModalBuilder().setCustomId('modal_mute_role').setTitle('ミュートロール設定');
+            const input = new TextInputBuilder().setCustomId('mute_role_name').setLabel('ロール名（なければ自動作成）').setStyle(TextInputStyle.Short).setPlaceholder('例: Muted').setRequired(true);
+            const current = servers[guildId].muteRole ? interaction.guild.roles.cache.get(servers[guildId].muteRole)?.name : null;
+            if (current) input.setValue(current);
+            modal.addComponents(new ActionRowBuilder().addComponents(input));
+            await interaction.showModal(modal);
+        }
+        if (cid === 'set_menu_serverlock') {
+            const conf = servers[guildId];
+            const exemptRoles = conf.serverLockExemptRoles || [];
+            const exemptChannels = conf.serverLockExemptChannels || [];
+            const content = `🔒 **サーバーロック設定**\n\n除外ロール: ${exemptRoles.length > 0 ? exemptRoles.map(r => `<@&${r}>`).join(' ') : 'なし'}\n除外チャンネル: ${exemptChannels.length > 0 ? exemptChannels.map(c => `<#${c}>`).join(' ') : 'なし'}\n\n※ロック実行は \`/serverlock\` から`;
+            const selectRoleAdd = new RoleSelectMenuBuilder().setCustomId('select_serverlock_role_add').setPlaceholder('除外ロールを追加');
+            const selectRoleDel = new RoleSelectMenuBuilder().setCustomId('select_serverlock_role_del').setPlaceholder('除外ロールを削除');
+            const selectChAdd = new ChannelSelectMenuBuilder().setCustomId('select_serverlock_ch_add').setPlaceholder('除外チャンネルを追加').addChannelTypes(ChannelType.GuildText);
+            const selectChDel = new ChannelSelectMenuBuilder().setCustomId('select_serverlock_ch_del').setPlaceholder('除外チャンネルを削除').addChannelTypes(ChannelType.GuildText);
+            await interaction.update({ content, components: [
+                new ActionRowBuilder().addComponents(selectRoleAdd),
+                new ActionRowBuilder().addComponents(selectRoleDel),
+                new ActionRowBuilder().addComponents(selectChAdd),
+                new ActionRowBuilder().addComponents(selectChDel),
+                new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('set_back_main').setLabel('← 戻る').setStyle(ButtonStyle.Secondary))
+            ]});
         }
         if (cid.startsWith('ticket_open_')) {
             const mid = cid.split('_')[2];
