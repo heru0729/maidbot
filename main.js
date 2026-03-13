@@ -122,7 +122,7 @@ function buildRankingEmbed(sorted, page) {
     const list = current.map((e, i) => {
         const pos = start + i + 1;
         const icon = pos <= 3 ? medals[pos - 1] : `**${pos}.**`;
-        const name = e[1].username || `<@${e[0]}>`;
+        const name = e[1].username || `ID:${e[0]}`;
         return `${icon} ${name} — Lv.${e[1].lv ?? 0} (${e[1].xp} XP)`;
     }).join('\n');
     const embed = new EmbedBuilder()
