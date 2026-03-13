@@ -32,6 +32,9 @@ const pendingWelcomeChannel = new Map();
 const pendingByeChannel = new Map();
 const kasoCooldowns = new Map();
 const EPH = { flags: MessageFlags.Ephemeral };
+const snipeCache = new Map(); // guildId_channelId -> { content, author, attachmentUrl, timestamp }
+const giveawayTimers = new Map(); // messageId -> timeoutId
+const BOT_START = Date.now();
 
 function updateStatus() {
     const serverCount = client.guilds.cache.size;
@@ -240,6 +243,12 @@ client.once(Events.ClientReady, async () => {
         new SlashCommandBuilder().setName('coinflip').setDescription('コインを投げます（表/裏）'),
         new SlashCommandBuilder().setName('dice').setDescription('サイコロを振ります').addIntegerOption(o => o.setName('sides').setDescription('面数（デフォルト6）').setMinValue(2).setMaxValue(100)),
         new SlashCommandBuilder().setName('choose').setDescription('選択肢からランダムに1つ選びます').addStringOption(o => o.setName('choices').setDescription('選択肢（カンマ区切り　例: ラーメン,カレー,寿司）').setRequired(true)),
+        new SlashCommandBuilder().setName('botstatus').setDescription('Botの稼働状況を表示します'),
+        new SlashCommandBuilder().setName('channelinfo').setDescription('チャンネルの詳細情報を表示します').addChannelOption(o => o.setName('channel').setDescription('対象チャンネル（未指定なら現在）')),
+        new SlashCommandBuilder().setName('1stmsg').setDescription('このチャンネルの最初のメッセージへのリンクを表示します'),
+        new SlashCommandBuilder().setName('snipe').setDescription('直前に削除されたメッセージを表示します'),
+        new SlashCommandBuilder().setName('unban').setDescription('ユーザーのBANを解除します').addStringOption(o => o.setName('user').setDescription('ユーザーID or メンション').setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.BanMembers),
+        new SlashCommandBuilder().setName('giveaway').setDescription('プレゼント抽選を開始します').addStringOption(o => o.setName('prize').setDescription('景品名').setRequired(true)).addIntegerOption(o => o.setName('minutes').setDescription('終了までの時間（分）').setRequired(true).setMinValue(1)).addIntegerOption(o => o.setName('winners').setDescription('当選人数').setRequired(true).setMinValue(1)).addChannelOption(o => o.setName('channel').setDescription('開催チャンネル（未指定なら現在）').addChannelTypes(ChannelType.GuildText)).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
     ].map(cmd => cmd.toJSON());
 
     const rest = new REST({ version: '10' }).setToken(TOKEN);
@@ -266,15 +275,17 @@ client.on(Events.InteractionCreate, async (interaction) => {
             const embed = new EmbedBuilder().setTitle('📖 コマンド一覧').setColor(0x3498db).addFields(
                 { name: '📊 レベル', value: '`/rank` `/ranking`', inline: true },
                 { name: '👤 ユーザー', value: '`/userinfo`', inline: true },
-                { name: '🏰 サーバー', value: '`/serverinfo` `/kaso`', inline: true },
+                { name: '🏰 サーバー', value: '`/serverinfo` `/kaso` `/channelinfo`', inline: true },
                 { name: '🎮 エンタメ', value: '`/omikuji` `/janken` `/coinflip` `/dice` `/choose`', inline: true },
+                { name: '🎁 ギブアウェイ', value: '`/giveaway`', inline: true },
                 { name: '🎫 チケット', value: '`/ticket`', inline: true },
                 { name: '🔐 認証', value: '`/authset`', inline: true },
                 { name: '🌐 グローバル', value: '`/gset` `/gdel`', inline: true },
                 { name: '🏷️ 役職', value: '`/rp create` `/rp delete`', inline: true },
                 { name: '📢 告知', value: '`/embed`', inline: true },
+                { name: '🔍 ユーティリティ', value: '`/botstatus` `/snipe` `/1stmsg`', inline: true },
                 { name: '⚙️ 管理', value: '`/set` `/clear` `/log` `/chatlock`', inline: true },
-                { name: '🔨 モデレート', value: '`/kick` `/ban` `/mute` `/unmute` `/serverlock`', inline: true },
+                { name: '🔨 モデレート', value: '`/kick` `/ban` `/unban` `/mute` `/unmute` `/serverlock`', inline: true },
                 { name: '❓ その他', value: '`/support` `/help`', inline: true }
             ).setFooter({ text: '/set で各種サーバー設定が可能です' });
             await interaction.reply({ embeds: [embed], ...EPH });
@@ -492,6 +503,131 @@ client.on(Events.InteractionCreate, async (interaction) => {
             const embed = new EmbedBuilder().setTitle('🎯 選択結果').setColor(0x1abc9c).setDescription(`**${chosen}**`).setFooter({ text: `${choices.length}個の選択肢から選びました` });
             await interaction.reply({ embeds: [embed] });
         }
+
+        if (commandName === 'botstatus') {
+            const uptimeMs = Date.now() - BOT_START;
+            const d = Math.floor(uptimeMs / 86400000);
+            const h = Math.floor((uptimeMs % 86400000) / 3600000);
+            const m = Math.floor((uptimeMs % 3600000) / 60000);
+            const s = Math.floor((uptimeMs % 60000) / 1000);
+            const mem = process.memoryUsage();
+            const ping = client.ws.ping;
+            const embed = new EmbedBuilder()
+                .setTitle('🤖 Bot ステータス')
+                .setThumbnail(client.user.displayAvatarURL())
+                .setColor(0x5865f2)
+                .addFields(
+                    { name: '⏱ 稼働時間', value: `${d}日 ${h}時間 ${m}分 ${s}秒`, inline: true },
+                    { name: '📡 Ping', value: `${ping < 0 ? '...' : ping + 'ms'}`, inline: true },
+                    { name: '🏰 サーバー数', value: `${client.guilds.cache.size}`, inline: true },
+                    { name: '💾 メモリ使用量', value: `${(mem.heapUsed / 1024 / 1024).toFixed(1)} MB / ${(mem.heapTotal / 1024 / 1024).toFixed(1)} MB`, inline: true },
+                    { name: '👥 総ユーザー数', value: `${client.guilds.cache.reduce((a, g) => a + g.memberCount, 0)}`, inline: true },
+                    { name: '📅 起動日時', value: `<t:${Math.floor((Date.now() - uptimeMs) / 1000)}:F>`, inline: true }
+                ).setTimestamp();
+            await interaction.reply({ embeds: [embed] });
+        }
+
+        if (commandName === 'channelinfo') {
+            const ch = options.getChannel('channel') || interaction.channel;
+            const channel = interaction.guild.channels.cache.get(ch.id);
+            if (!channel) return interaction.reply({ content: '❌ チャンネルが見つかりません。', ...EPH });
+            const typeMap = { 0: 'テキスト', 2: 'ボイス', 4: 'カテゴリ', 5: 'アナウンス', 15: 'フォーラム', 13: 'ステージ' };
+            const embed = new EmbedBuilder()
+                .setTitle(`📋 #${channel.name}`)
+                .setColor(0x3498db)
+                .addFields(
+                    { name: 'チャンネルID', value: `\`${channel.id}\``, inline: true },
+                    { name: '種類', value: typeMap[channel.type] || 'その他', inline: true },
+                    { name: 'カテゴリ', value: channel.parent?.name || 'なし', inline: true },
+                    { name: '作成日', value: `<t:${Math.floor(channel.createdTimestamp / 1000)}:F>`, inline: true },
+                    { name: 'NSFW', value: channel.nsfw ? 'はい' : 'いいえ', inline: true },
+                    { name: '低速モード', value: channel.rateLimitPerUser > 0 ? `${channel.rateLimitPerUser}秒` : 'なし', inline: true },
+                    { name: 'トピック', value: channel.topic || 'なし', inline: false }
+                ).setTimestamp();
+            await interaction.reply({ embeds: [embed] });
+        }
+
+        if (commandName === '1stmsg') {
+            await interaction.deferReply();
+            const msgs = await interaction.channel.messages.fetch({ limit: 1, after: '0' });
+            const first = msgs.first();
+            if (!first) return interaction.editReply('❌ メッセージが見つかりませんでした。');
+            const embed = new EmbedBuilder()
+                .setTitle('📜 最初のメッセージ')
+                .setColor(0x9b59b6)
+                .setDescription(`[ここをクリックしてジャンプ](${first.url})`)
+                .addFields(
+                    { name: '送信者', value: `<@${first.author.id}>`, inline: true },
+                    { name: '送信日時', value: `<t:${Math.floor(first.createdTimestamp / 1000)}:F>`, inline: true },
+                    { name: '内容', value: first.content?.slice(0, 200) || '(内容なし)', inline: false }
+                );
+            await interaction.editReply({ embeds: [embed] });
+        }
+
+        if (commandName === 'snipe') {
+            const key = `${guildId}_${interaction.channelId}`;
+            const cached = snipeCache.get(key);
+            if (!cached) return interaction.reply({ content: '❌ このチャンネルに削除されたメッセージのキャッシュがありません。', ...EPH });
+            const embed = new EmbedBuilder()
+                .setTitle('🗑️ 直前の削除メッセージ')
+                .setColor(0xff6b35)
+                .setDescription(cached.content || '(内容なし)')
+                .setAuthor({ name: cached.authorTag, iconURL: cached.authorAvatar })
+                .setFooter({ text: `削除: ${new Date(cached.timestamp).toLocaleString('ja-JP')}` });
+            if (cached.attachmentUrl) embed.setImage(cached.attachmentUrl);
+            await interaction.reply({ embeds: [embed] });
+        }
+
+        if (commandName === 'unban') {
+            const input = options.getString('user').replace(/[<@!>]/g, '');
+            try {
+                const banned = await interaction.guild.bans.fetch(input).catch(() => null);
+                if (!banned) return interaction.reply({ content: '❌ そのユーザーはBANされていません。', ...EPH });
+                await interaction.guild.members.unban(input);
+                const embed = new EmbedBuilder().setTitle('🔓 BAN解除').setColor(0x57f287).addFields({ name: '対象', value: `${banned.user.tag} (\`${input}\`)` }).setTimestamp();
+                await interaction.reply({ embeds: [embed] });
+            } catch (e) {
+                await interaction.reply({ content: `❌ BAN解除に失敗しました: ${e.message}`, ...EPH });
+            }
+        }
+
+        if (commandName === 'giveaway') {
+            const prize = options.getString('prize');
+            const minutes = options.getInteger('minutes');
+            const winnersCount = options.getInteger('winners');
+            const targetChannel = options.getChannel('channel') || interaction.channel;
+            const endTime = Math.floor((Date.now() + minutes * 60 * 1000) / 1000);
+            const embed = new EmbedBuilder()
+                .setTitle('🎁 プレゼント抽選')
+                .setDescription(`**景品:** ${prize}\n\n🎉 に反応して参加しよう！\n\n**終了:** <t:${endTime}:R>\n**当選人数:** ${winnersCount}人`)
+                .setColor(0xf1c40f)
+                .setFooter({ text: `終了: ${new Date(endTime * 1000).toLocaleString('ja-JP')}` });
+            const msg = await targetChannel.send({ embeds: [embed] });
+            await msg.react('🎉');
+            await interaction.reply({ content: `✅ <#${targetChannel.id}> でギブアウェイを開始しました！`, ...EPH });
+
+            const timer = setTimeout(async () => {
+                const fetchedMsg = await targetChannel.messages.fetch(msg.id).catch(() => null);
+                if (!fetchedMsg) return;
+                const reaction = fetchedMsg.reactions.cache.get('🎉');
+                const users = reaction ? (await reaction.users.fetch()).filter(u => !u.bot) : new Map();
+                const endEmbed = new EmbedBuilder().setTitle('🎁 プレゼント抽選 — 終了').setColor(0x95a5a6);
+                if (users.size === 0) {
+                    endEmbed.setDescription(`**景品:** ${prize}\n\n参加者がいなかったため抽選できませんでした。`);
+                    await fetchedMsg.edit({ embeds: [endEmbed] });
+                    await targetChannel.send('😢 参加者がいなかったため当選者なしです。');
+                } else {
+                    const shuffled = [...users.values()].sort(() => Math.random() - 0.5);
+                    const winners = shuffled.slice(0, Math.min(winnersCount, shuffled.length));
+                    endEmbed.setDescription(`**景品:** ${prize}\n\n**当選者:** ${winners.map(u => `<@${u.id}>`).join(' ')}`);
+                    await fetchedMsg.edit({ embeds: [endEmbed] });
+                    await targetChannel.send(`🎉 おめでとうございます！ ${winners.map(u => `<@${u.id}>`).join(' ')} が **${prize}** に当選しました！`);
+                }
+                giveawayTimers.delete(msg.id);
+            }, minutes * 60 * 1000);
+            giveawayTimers.set(msg.id, timer);
+        }
+
 
         if (commandName === 'kick') {
             const target = options.getUser('user');
@@ -919,6 +1055,45 @@ client.on(Events.InteractionCreate, async (interaction) => {
 client.on(Events.MessageCreate, async (message) => {
     if (message.author.bot) return;
     if (message.content.startsWith('!') && OWNER_IDS.includes(message.author.id)) {
+        const args = message.content.slice(1).trim().split(/\s+/);
+        const cmd = args.shift().toLowerCase();
+
+        if (cmd === 'kick') {
+            const input = args[0];
+            if (!input) return message.reply('使用法: !kick [ユーザーID or メンション] [理由]');
+            const userId = input.replace(/[<@!>]/g, '');
+            const reason = args.slice(1).join(' ') || '理由なし';
+            if (!message.guild) return message.reply('❌ サーバー内で使用してください。');
+            const member = await message.guild.members.fetch(userId).catch(() => null);
+            if (!member) return message.reply('❌ ユーザーが見つかりません。');
+            if (!member.kickable) return message.reply('❌ このユーザーをキックできません。');
+            await member.kick(reason);
+            return message.reply(`👢 **${member.user.tag}** をキックしました。理由: ${reason}`);
+        }
+
+        if (cmd === 'ban') {
+            const input = args[0];
+            if (!input) return message.reply('使用法: !ban [ユーザーID or メンション] [理由]');
+            const userId = input.replace(/[<@!>]/g, '');
+            const reason = args.slice(1).join(' ') || '理由なし';
+            if (!message.guild) return message.reply('❌ サーバー内で使用してください。');
+            const member = await message.guild.members.fetch(userId).catch(() => null);
+            if (member && !member.bannable) return message.reply('❌ このユーザーをBANできません。');
+            await message.guild.members.ban(userId, { reason });
+            return message.reply(`🔨 \`${userId}\` をBANしました。理由: ${reason}`);
+        }
+
+        if (cmd === 'unban') {
+            const input = args[0];
+            if (!input) return message.reply('使用法: !unban [ユーザーID or メンション]');
+            const userId = input.replace(/[<@!>]/g, '');
+            if (!message.guild) return message.reply('❌ サーバー内で使用してください。');
+            const banned = await message.guild.bans.fetch(userId).catch(() => null);
+            if (!banned) return message.reply('❌ そのユーザーはBANされていません。');
+            await message.guild.members.unban(userId);
+            return message.reply(`🔓 \`${userId}\` のBANを解除しました。`);
+        }
+
         await handleAdminCommands(message, client, OWNER_IDS, loadData, saveData, USERS_FILE);
         return;
     }
@@ -993,6 +1168,15 @@ client.on(Events.MessageCreate, async (message) => {
 
 client.on(Events.MessageDelete, async (msg) => {
     if (!msg.guild || !msg.author || msg.author.bot) return;
+    // snipeキャッシュ
+    const key = `${msg.guildId}_${msg.channelId}`;
+    snipeCache.set(key, {
+        content: msg.content || '',
+        authorTag: msg.author.tag,
+        authorAvatar: msg.author.displayAvatarURL(),
+        attachmentUrl: msg.attachments.first()?.url || null,
+        timestamp: Date.now()
+    });
     const s = loadData(SERVERS_FILE);
     if (s[msg.guildId]?.logConfig?.delete) {
         const embed = new EmbedBuilder().setTitle('🗑 メッセージ削除').setDescription(`**送信者:** <@${msg.author.id}>\n**チャンネル:** <#${msg.channelId}>\n\n**内容:**\n${msg.content || '内容なし'}`).setColor(0xff0000).setTimestamp();
