@@ -55,7 +55,7 @@ async function handleAdminCommands(msg, client, OWNER_IDS, loadData, saveData, U
             await statusMsg.edit({ content: '', embeds: [embed], components });
 
             if (totalPages > 1) {
-                const collector = statusMsg.createMessageComponentCollector({ time: 5 * 60 * 1000 });
+                const collector = statusMsg.createMessageComponentCollector();
                 collector.on('collect', async (btn) => {
                     if (!OWNER_IDS.includes(btn.user.id)) return btn.reply({ content: '❌ 権限がありません。', flags: MessageFlags.Ephemeral });
                     const parts = btn.customId.split('_');
@@ -63,7 +63,6 @@ async function handleAdminCommands(msg, client, OWNER_IDS, loadData, saveData, U
                     const { embed: newEmbed, safePage: sp, totalPages: tp } = buildMembersEmbed(sorted, newPage, guild.name);
                     await btn.update({ embeds: [newEmbed], components: [buildMembersRow(guildId, sp, tp)] });
                 });
-                collector.on('end', () => statusMsg.edit({ components: [] }).catch(() => {}));
             }
         } catch (e) {
             await statusMsg.edit(`❌ 取得失敗: ${e.message}`);
