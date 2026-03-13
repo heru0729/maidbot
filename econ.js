@@ -18,8 +18,9 @@ function loadShop() {
 }
 function saveShop(d) { fs.writeFileSync(SHOP_FILE, JSON.stringify(d, null, 4)); }
 
-function getUser(econ, userId) {
+function getUser(econ, userId, user) {
     if (!econ[userId]) econ[userId] = { balance: 0, dailyLast: 0, workLast: 0, inventory: [] };
+    if (user) econ[userId].username = user.username;
     return econ[userId];
 }
 
@@ -52,7 +53,7 @@ async function handleEcon(interaction) {
     // ==================== /balance ====================
     if (commandName === 'balance') {
         const target = options.getUser('user') || user;
-        const u = getUser(econ, target.id);
+        const u = getUser(econ, target.id, target);
         const embed = new EmbedBuilder()
             .setTitle(`${CURRENCY} ${target.username} の所持金`)
             .setThumbnail(target.displayAvatarURL())
@@ -64,7 +65,7 @@ async function handleEcon(interaction) {
 
     // ==================== /daily ====================
     if (commandName === 'daily') {
-        const u = getUser(econ, user.id);
+        const u = getUser(econ, user.id, user);
         const now = Date.now();
         const cooldown = 24 * 60 * 60 * 1000;
         const remaining = cooldown - (now - u.dailyLast);
@@ -87,7 +88,7 @@ async function handleEcon(interaction) {
 
     // ==================== /work ====================
     if (commandName === 'work') {
-        const u = getUser(econ, user.id);
+        const u = getUser(econ, user.id, user);
         const now = Date.now();
         const cooldown = 60 * 60 * 1000;
         const remaining = cooldown - (now - u.workLast);
@@ -125,8 +126,8 @@ async function handleEcon(interaction) {
         const amount = options.getInteger('amount');
         if (target.id === user.id) return interaction.reply({ content: '❌ 自分自身には送金できません。', ...EPH });
         if (target.bot) return interaction.reply({ content: '❌ Botには送金できません。', ...EPH });
-        const sender = getUser(econ, user.id);
-        const receiver = getUser(econ, target.id);
+        const sender = getUser(econ, user.id, user);
+        const receiver = getUser(econ, target.id, target);
         if (sender.balance < amount) return interaction.reply({ content: `❌ 残高が不足しています。現在の残高: **${sender.balance.toLocaleString()}** ${CURRENCY}`, ...EPH });
         sender.balance -= amount;
         receiver.balance += amount;
@@ -166,7 +167,7 @@ async function handleEcon(interaction) {
         const shop = loadShop();
         const item = Object.values(shop).find(i => i.name.toLowerCase() === itemName.toLowerCase());
         if (!item) return interaction.reply({ content: `❌ **${itemName}** というアイテムは存在しません。\`/shop\` で一覧を確認してください。`, ...EPH });
-        const u = getUser(econ, user.id);
+        const u = getUser(econ, user.id, user);
         if (u.balance < item.price) return interaction.reply({ content: `❌ 残高が不足しています。必要: **${item.price.toLocaleString()}** ${CURRENCY}　現在: **${u.balance.toLocaleString()}** ${CURRENCY}`, ...EPH });
         u.balance -= item.price;
         if (!u.inventory) u.inventory = [];
@@ -188,7 +189,7 @@ async function handleEcon(interaction) {
     // ==================== /inventory ====================
     if (commandName === 'inventory') {
         const target = options.getUser('user') || user;
-        const u = getUser(econ, target.id);
+        const u = getUser(econ, target.id, target);
         const inv = u.inventory || [];
         const embed = new EmbedBuilder()
             .setTitle(`🎒 ${target.username} のインベントリ`)
@@ -211,14 +212,22 @@ async function handleEcon(interaction) {
             .sort((a, b) => b.balance - a.balance)
             .slice(0, 10);
         if (sorted.length === 0) return interaction.reply({ content: 'まだデータがありません。', ...EPH });
+        await interaction.deferReply();
         const medals = ['🥇', '🥈', '🥉'];
-        const lines = sorted.map((u, i) => `${medals[i] || `**${i + 1}.**`} <@${u.id}> — **${u.balance.toLocaleString()}** ${CURRENCY}`);
+        const lines = await Promise.all(sorted.map(async (u, i) => {
+            let name = econ[u.id]?.username;
+            if (!name) {
+                const member = await guild?.members.fetch(u.id).catch(() => null);
+                name = member?.user.username || `ID:${u.id}`;
+            }
+            return `${medals[i] || `**${i + 1}.**`} ${name} — **${u.balance.toLocaleString()}** ${CURRENCY}`;
+        }));
         const embed = new EmbedBuilder()
             .setTitle(`${CURRENCY} 所持金ランキング`)
             .setColor(0xf1c40f)
             .setDescription(lines.join('\n'))
             .setTimestamp();
-        return interaction.reply({ embeds: [embed], components: [delBtn()] });
+        return interaction.editReply({ embeds: [embed], components: [delBtn()] });
     }
 
     // ==================== /additem ====================
@@ -250,7 +259,7 @@ async function handleEcon(interaction) {
     if (commandName === 'give') {
         const target = options.getUser('user');
         const amount = options.getInteger('amount');
-        const u = getUser(econ, target.id);
+        const u = getUser(econ, target.id, target);
         u.balance = Math.max(0, u.balance + amount);
         saveEcon(econ);
         const sign = amount >= 0 ? '+' : '';
