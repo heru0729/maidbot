@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const setupAuth = require('./auth.js');
 const handleAdminCommands = require('./admin.js');
-const { econCommands, handleEcon } = require('./econ.js');
+const { econCommands, handleEcon, handleEconInteraction, handleEconModal, handleEconSelect } = require('./econ.js');
 
 const app = express();
 const client = new Client({
@@ -293,7 +293,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
                 { name: '🔍 ユーティリティ', value: '`/botstatus` `/snipe` `/top`', inline: true },
                 { name: '⚙️ 管理', value: '`/set` `/clear` `/log` `/chatlock` `/chset`', inline: true },
                 { name: '🔨 モデレート', value: '`/kick` `/ban` `/unban` `/mute` `/unmute` `/serverlock`', inline: true },
-                { name: '🪙 エコノミー', value: '`/balance` `/daily` `/work` `/transfer` `/shop` `/buy` `/inventory` `/econrank`', inline: false },
+                { name: '🪙 エコノミー', value: '`/balance` `/daily` `/work` `/send` `/shop` `/buy` `/sell` `/inventory` `/econrank` `/corp` `/store`', inline: false },
                 { name: '❓ その他', value: '`/support` `/help`', inline: true }
             ).setFooter({ text: '/set で各種サーバー設定が可能です' });
             await interaction.reply({ embeds: [embed], ...EPH });
@@ -327,8 +327,21 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (commandName === 'ranking') {
             const sorted = getAllRanking(users);
             if (sorted.length === 0) return interaction.reply({ content: 'まだランキングデータがありません。', ...EPH });
+            await interaction.deferReply();
+            // usernameがない場合はguildからfetch
+            for (const [id, data] of sorted) {
+                if (!data.username) {
+                    const member = await interaction.guild.members.fetch(id).catch(() => null);
+                    if (member) {
+                        data.username = member.user.username;
+                        users[id] = users[id] || {};
+                        users[id].username = member.user.username;
+                    }
+                }
+            }
+            saveData(USERS_FILE, users);
             const { embed, safePage, totalPages } = buildRankingEmbed(sorted, 1);
-            await interaction.reply({ embeds: [embed], components: totalPages > 1 ? [buildRankingRow(safePage, totalPages), delBtn()] : [delBtn()] });
+            await interaction.editReply({ embeds: [embed], components: totalPages > 1 ? [buildRankingRow(safePage, totalPages), delBtn()] : [delBtn()] });
         }
 
         if (commandName === 'serverinfo') {
@@ -781,7 +794,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
 
         // econコマンド
-        const econCommandNames = ['balance','daily','work','transfer','shop','buy','inventory','econrank','additem','removeitem','give'];
+        const econCommandNames = ['balance','daily','work','crime','send','rob','flip','slots','shop','buy','sell','inventory','econrank','corp','store'];
         if (econCommandNames.includes(commandName)) {
             await handleEcon(interaction);
         }
@@ -1209,6 +1222,27 @@ client.on(Events.InteractionCreate, async (interaction) => {
             if (interaction.member.roles.cache.has(rid)) { await interaction.member.roles.remove(rid); await interaction.reply({ content: '役職を解除しました。', ...EPH }); }
             else { await interaction.member.roles.add(rid); await interaction.reply({ content: '役職を付与しました。', ...EPH }); }
         }
+
+        // econ ボタン
+        const econBtnPrefixes = ['store_additem_', 'store_removeitem_', 'store_withdraw_'];
+        if (econBtnPrefixes.some(p => cid.startsWith(p))) {
+            await handleEconInteraction(interaction);
+        }
+    }
+
+    // econ セレクトメニュー
+    if (interaction.isStringSelectMenu()) {
+        const cid = interaction.customId;
+        if (cid === 'store_select_corp' || cid.startsWith('store_buy_')) {
+            await handleEconInteraction(interaction);
+        } else if (cid.startsWith('store_delitem_select_')) {
+            await handleEconSelect(interaction);
+        }
+    }
+
+    // econ モーダル
+    if (interaction.isModalSubmit() && interaction.customId.startsWith('modal_store_')) {
+        await handleEconModal(interaction);
     }
 });
 
