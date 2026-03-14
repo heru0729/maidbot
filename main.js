@@ -213,6 +213,29 @@ client.once(Events.ClientReady, async () => {
     setTimeout(updateStatus, 3000);
     setInterval(updateStatus, 30000);
 
+    // ローン利子処理（1時間ごとにチェック、日次で5%加算）
+    setInterval(() => {
+        const fs = require('fs'), path = require('path');
+        const econPath = path.join(__dirname, 'data', 'econ.json');
+        if (!fs.existsSync(econPath)) return;
+        const econ = JSON.parse(fs.readFileSync(econPath, 'utf8'));
+        const now = Date.now();
+        let changed = false;
+        for (const [id, u] of Object.entries(econ)) {
+            if (!u.loan || u.loan <= 0) continue;
+            const lastCharge = u.lastInterestCharge || u.loanDate || now;
+            const daysPassed = Math.floor((now - lastCharge) / 86400000);
+            if (daysPassed >= 1) {
+                const interest = Math.ceil(u.loan * 0.05 * daysPassed);
+                u.loan += interest;
+                u.lastInterestCharge = now;
+                changed = true;
+                console.log(`[利子] ユーザー ${id}: +${interest} (合計 ${u.loan})`);
+            }
+        }
+        if (changed) fs.writeFileSync(econPath, JSON.stringify(econ, null, 4));
+    }, 3600000);
+
     const commands = [
         new SlashCommandBuilder().setName('help').setDescription('ボットのコマンド一覧を表示します'),
         new SlashCommandBuilder().setName('set').setDescription('サーバー管理用設定パネルを開きます').setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
@@ -293,7 +316,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
                 { name: '🔍 ユーティリティ', value: '`/botstatus` `/snipe` `/top`', inline: true },
                 { name: '⚙️ 管理', value: '`/set` `/clear` `/log` `/chatlock` `/chset`', inline: true },
                 { name: '🔨 モデレート', value: '`/kick` `/ban` `/unban` `/mute` `/unmute` `/serverlock`', inline: true },
-                { name: '🪙 エコノミー', value: '`/balance` `/earn` `/send` `/rob` `/flip` `/slots` `/shop` `/buy` `/sell` `/inventory` `/econrank` `/corp` `/store`', inline: false },
+                { name: '🪙 エコノミー', value: '`/balance` `/earn` `/send` `/bank` `/shop` `/buy` `/sell` `/inventory` `/econrank` `/corp` `/store` `/stock` `/buystock` `/sellstock`', inline: false },
                 { name: '❓ その他', value: '`/support` `/help`', inline: true }
             ).setFooter({ text: '/set で各種サーバー設定が可能です' });
             await interaction.reply({ embeds: [embed], ...EPH });
@@ -794,7 +817,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
 
         // econコマンド
-        const econCommandNames = ['balance','earn','send','rob','flip','slots','shop','buy','sell','inventory','econrank','corp','store'];
+        const econCommandNames = ['balance','earn','send','rob','flip','slots','bank','shop','buy','sell','inventory','econrank','corp','store','stock','buystock','sellstock'];
         if (econCommandNames.includes(commandName)) {
             await handleEcon(interaction);
         }
@@ -1224,7 +1247,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
 
         // econ ボタン
-        const econBtnPrefixes = ['earn_daily', 'earn_work', 'earn_crime', 'earn_rob', 'earn_flip', 'earn_slots', 'earn_bj', 'bj_hit_', 'bj_stand_', 'bj_double_', 'store_additem_', 'store_removeitem_', 'store_withdraw_'];
+        const econBtnPrefixes = ['earn_daily', 'earn_work', 'earn_crime', 'earn_hunt', 'earn_fish', 'earn_rob', 'earn_flip', 'earn_slots', 'earn_bj', 'bj_hit_', 'bj_stand_', 'bj_double_', 'bank_loan', 'bank_repay', 'stock_buy_', 'stock_sell_', 'store_issuestock_', 'store_additem_', 'store_removeitem_', 'store_withdraw_'];
         if (econBtnPrefixes.some(p => cid.startsWith(p))) {
             await handleEconInteraction(interaction);
         }
@@ -1241,7 +1264,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     // econ モーダル
-    if (interaction.isModalSubmit() && (interaction.customId.startsWith('modal_store_') || interaction.customId.startsWith('modal_earn_'))) {
+    if (interaction.isModalSubmit() && (interaction.customId.startsWith('modal_store_') || interaction.customId.startsWith('modal_earn_') || interaction.customId.startsWith('modal_bank_') || interaction.customId.startsWith('modal_stock_'))) {
         await handleEconModal(interaction);
     }
 });
@@ -1287,6 +1310,27 @@ client.on(Events.MessageCreate, async (message) => {
             if (!banned) return message.reply('❌ そのユーザーはBANされていません。');
             await message.guild.members.unban(userId);
             return message.reply(`🔓 \`${userId}\` のBANを解除しました。`);
+        }
+
+        if (cmd === 'give') {
+            const input = args[0];
+            const amount = parseInt(args[1]);
+            if (!input || isNaN(amount)) return message.reply('使用法: !give [ユーザーID or メンション] [金額]');
+            const userId = input.replace(/[<@!>]/g, '');
+            const { load: loadEcon, save: saveEcon } = (() => {
+                const fs = require('fs'), path = require('path');
+                const f = path.join(__dirname, 'data', 'econ.json');
+                return {
+                    load: () => fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')) : {},
+                    save: (d) => fs.writeFileSync(f, JSON.stringify(d, null, 4))
+                };
+            })();
+            const econ = loadEcon();
+            if (!econ[userId]) econ[userId] = { balance: 0, dailyLast: 0, workLast: 0, crimeLast: 0, inventory: [] };
+            econ[userId].balance = Math.max(0, econ[userId].balance + amount);
+            saveEcon(econ);
+            const sign = amount >= 0 ? '+' : '';
+            return message.reply(`✅ \`${userId}\` の残高を **${sign}${amount.toLocaleString()}** 🪙 変更しました。現在: **${econ[userId].balance.toLocaleString()}** 🪙`);
         }
 
         await handleAdminCommands(message, client, OWNER_IDS, loadData, saveData, USERS_FILE);
