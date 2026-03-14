@@ -250,6 +250,7 @@ client.once(Events.ClientReady, async () => {
         new SlashCommandBuilder().setName('snipe').setDescription('直前に削除されたメッセージを表示します'),
         new SlashCommandBuilder().setName('unban').setDescription('ユーザーのBANを解除します').addStringOption(o => o.setName('user').setDescription('ユーザーID or メンション').setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.BanMembers),
         new SlashCommandBuilder().setName('giveaway').setDescription('プレゼント抽選を開始します').addStringOption(o => o.setName('prize').setDescription('景品名').setRequired(true)).addStringOption(o => o.setName('title').setDescription('タイトル（未指定なら「プレゼント抽選」）')).addIntegerOption(o => o.setName('minutes').setDescription('終了までの時間（分）').setRequired(true).setMinValue(1)).addIntegerOption(o => o.setName('winners').setDescription('当選人数').setRequired(true).setMinValue(1)).addChannelOption(o => o.setName('channel').setDescription('開催チャンネル（未指定なら現在）').addChannelTypes(ChannelType.GuildText)).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+        new SlashCommandBuilder().setName('chset').setDescription('チャンネルの設定を変更します').addChannelOption(o => o.setName('channel').setDescription('対象チャンネル（未指定なら現在）').addChannelTypes(ChannelType.GuildText)).setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels),
         ...econCommands,
     ].map(cmd => cmd.toJSON());
 
@@ -286,7 +287,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
                 { name: '🏷️ 役職', value: '`/rp create` `/rp delete`', inline: true },
                 { name: '📢 告知', value: '`/embed`', inline: true },
                 { name: '🔍 ユーティリティ', value: '`/botstatus` `/snipe` `/top`', inline: true },
-                { name: '⚙️ 管理', value: '`/set` `/clear` `/log` `/chatlock`', inline: true },
+                { name: '⚙️ 管理', value: '`/set` `/clear` `/log` `/chatlock` `/chset`', inline: true },
                 { name: '🔨 モデレート', value: '`/kick` `/ban` `/unban` `/mute` `/unmute` `/serverlock`', inline: true },
                 { name: '🪙 エコノミー', value: '`/balance` `/daily` `/work` `/transfer` `/shop` `/buy` `/inventory` `/econrank`', inline: false },
                 { name: '❓ その他', value: '`/support` `/help`', inline: true }
@@ -741,6 +742,40 @@ client.on(Events.InteractionCreate, async (interaction) => {
             await interaction.editReply({ embeds: [embed] });
         }
 
+        // ==================== /chset ====================
+        if (commandName === 'chset') {
+            const target = options.getChannel('channel') || interaction.channel;
+            const ch = interaction.guild.channels.cache.get(target.id);
+            if (!ch) return interaction.reply({ content: '❌ チャンネルが見つかりません。', ...EPH });
+            const buildChsetPanel = (ch) => {
+                const embed = new EmbedBuilder()
+                    .setTitle(`⚙️ チャンネル設定: #${ch.name}`)
+                    .setColor(0x3498db)
+                    .addFields(
+                        { name: 'チャンネルID', value: `\`${ch.id}\``, inline: true },
+                        { name: 'カテゴリ', value: ch.parent?.name || 'なし', inline: true },
+                        { name: '\u200b', value: '\u200b', inline: true },
+                        { name: 'トピック', value: ch.topic || '未設定', inline: false },
+                        { name: '低速モード', value: ch.rateLimitPerUser > 0 ? `${ch.rateLimitPerUser}秒` : 'オフ', inline: true },
+                        { name: 'NSFW', value: ch.nsfw ? '✅ オン' : '❌ オフ', inline: true },
+                        { name: 'ロックダウン', value: '\u200b', inline: true }
+                    );
+                const row1 = new ActionRowBuilder().addComponents(
+                    new ButtonBuilder().setCustomId(`chset_name_${ch.id}`).setLabel('チャンネル名を変更').setStyle(ButtonStyle.Primary),
+                    new ButtonBuilder().setCustomId(`chset_topic_${ch.id}`).setLabel('トピックを変更').setStyle(ButtonStyle.Primary),
+                    new ButtonBuilder().setCustomId(`chset_slowmode_${ch.id}`).setLabel('低速モード').setStyle(ButtonStyle.Secondary)
+                );
+                const row2 = new ActionRowBuilder().addComponents(
+                    new ButtonBuilder().setCustomId(`chset_nsfw_${ch.id}`).setLabel(`NSFW: ${ch.nsfw ? 'ON → OFF' : 'OFF → ON'}`).setStyle(ch.nsfw ? ButtonStyle.Danger : ButtonStyle.Secondary),
+                    new ButtonBuilder().setCustomId(`chset_lock_${ch.id}`).setLabel('ロックダウン').setStyle(ButtonStyle.Danger),
+                    new ButtonBuilder().setCustomId(`chset_unlock_${ch.id}`).setLabel('ロック解除').setStyle(ButtonStyle.Success),
+                    new ButtonBuilder().setCustomId('chset_close').setLabel('✕ 閉じる').setStyle(ButtonStyle.Secondary)
+                );
+                return { embeds: [embed], components: [row1, row2], ...EPH };
+            };
+            await interaction.reply(buildChsetPanel(ch));
+        }
+
         // econコマンド
         const econCommandNames = ['balance','daily','work','transfer','shop','buy','inventory','econrank','additem','removeitem','give'];
         if (econCommandNames.includes(commandName)) {
@@ -927,6 +962,34 @@ client.on(Events.InteractionCreate, async (interaction) => {
             saveData(SERVERS_FILE, servers);
             await interaction.reply({ content: `✅ ミュートロールを <@&${role.id}> に設定しました。`, ...EPH });
         }
+
+        if (cid.startsWith('modal_chset_name_')) {
+            const chId = cid.replace('modal_chset_name_', '');
+            const ch = interaction.guild.channels.cache.get(chId);
+            if (!ch) return interaction.reply({ content: '❌ チャンネルが見つかりません。', ...EPH });
+            const newName = interaction.fields.getTextInputValue('chset_name_input').trim();
+            await ch.setName(newName).catch(() => null);
+            await interaction.reply({ content: `✅ チャンネル名を **${newName}** に変更しました。`, ...EPH });
+        }
+
+        if (cid.startsWith('modal_chset_topic_')) {
+            const chId = cid.replace('modal_chset_topic_', '');
+            const ch = interaction.guild.channels.cache.get(chId);
+            if (!ch) return interaction.reply({ content: '❌ チャンネルが見つかりません。', ...EPH });
+            const newTopic = interaction.fields.getTextInputValue('chset_topic_input').trim();
+            await ch.setTopic(newTopic || null).catch(() => null);
+            await interaction.reply({ content: `✅ トピックを設定しました。`, ...EPH });
+        }
+
+        if (cid.startsWith('modal_chset_slowmode_')) {
+            const chId = cid.replace('modal_chset_slowmode_', '');
+            const ch = interaction.guild.channels.cache.get(chId);
+            if (!ch) return interaction.reply({ content: '❌ チャンネルが見つかりません。', ...EPH });
+            const sec = parseInt(interaction.fields.getTextInputValue('chset_slowmode_input')) || 0;
+            const clamped = Math.min(21600, Math.max(0, sec));
+            await ch.setRateLimitPerUser(clamped).catch(() => null);
+            await interaction.reply({ content: clamped === 0 ? `✅ 低速モードをオフにしました。` : `✅ 低速モードを **${clamped}秒** に設定しました。`, ...EPH });
+        }
     }
 
     // ==================== ボタン ====================
@@ -935,6 +998,73 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         if (cid === 'delete_reply') {
             await interaction.message.delete().catch(() => {});
+            return;
+        }
+
+        // chset ボタン
+        if (cid.startsWith('chset_')) {
+            const parts = cid.split('_');
+            const action = parts[1];
+            const channelId = parts[2];
+            if (action === 'close') { await interaction.message.delete().catch(() => {}); return; }
+            const ch = channelId ? interaction.guild.channels.cache.get(channelId) : null;
+            if (!ch) return interaction.reply({ content: '❌ チャンネルが見つかりません。', ...EPH });
+
+            if (action === 'nsfw') {
+                await ch.setNSFW(!ch.nsfw);
+                await interaction.update({
+                    embeds: [new EmbedBuilder().setTitle(`⚙️ チャンネル設定: #${ch.name}`).setColor(0x3498db).addFields(
+                        { name: 'トピック', value: ch.topic || '未設定', inline: false },
+                        { name: '低速モード', value: ch.rateLimitPerUser > 0 ? `${ch.rateLimitPerUser}秒` : 'オフ', inline: true },
+                        { name: 'NSFW', value: ch.nsfw ? '✅ オン' : '❌ オフ', inline: true }
+                    )],
+                    components: [
+                        new ActionRowBuilder().addComponents(
+                            new ButtonBuilder().setCustomId(`chset_name_${ch.id}`).setLabel('チャンネル名を変更').setStyle(ButtonStyle.Primary),
+                            new ButtonBuilder().setCustomId(`chset_topic_${ch.id}`).setLabel('トピックを変更').setStyle(ButtonStyle.Primary),
+                            new ButtonBuilder().setCustomId(`chset_slowmode_${ch.id}`).setLabel('低速モード').setStyle(ButtonStyle.Secondary)
+                        ),
+                        new ActionRowBuilder().addComponents(
+                            new ButtonBuilder().setCustomId(`chset_nsfw_${ch.id}`).setLabel(`NSFW: ${ch.nsfw ? 'ON → OFF' : 'OFF → ON'}`).setStyle(ch.nsfw ? ButtonStyle.Danger : ButtonStyle.Secondary),
+                            new ButtonBuilder().setCustomId(`chset_lock_${ch.id}`).setLabel('ロックダウン').setStyle(ButtonStyle.Danger),
+                            new ButtonBuilder().setCustomId(`chset_unlock_${ch.id}`).setLabel('ロック解除').setStyle(ButtonStyle.Success),
+                            new ButtonBuilder().setCustomId('chset_close').setLabel('✕ 閉じる').setStyle(ButtonStyle.Secondary)
+                        )
+                    ]
+                });
+                return;
+            }
+
+            if (action === 'lock') {
+                await ch.permissionOverwrites.edit(interaction.guild.roles.everyone, { SendMessages: false });
+                return interaction.reply({ content: `🔒 <#${ch.id}> をロックダウンしました。`, ...EPH });
+            }
+            if (action === 'unlock') {
+                await ch.permissionOverwrites.edit(interaction.guild.roles.everyone, { SendMessages: null });
+                return interaction.reply({ content: `🔓 <#${ch.id}> のロックを解除しました。`, ...EPH });
+            }
+
+            if (action === 'name') {
+                const modal = new ModalBuilder().setCustomId(`modal_chset_name_${ch.id}`).setTitle('チャンネル名を変更');
+                modal.addComponents(new ActionRowBuilder().addComponents(
+                    new TextInputBuilder().setCustomId('chset_name_input').setLabel('新しいチャンネル名').setStyle(TextInputStyle.Short).setValue(ch.name).setRequired(true).setMaxLength(100)
+                ));
+                return interaction.showModal(modal);
+            }
+            if (action === 'topic') {
+                const modal = new ModalBuilder().setCustomId(`modal_chset_topic_${ch.id}`).setTitle('トピックを変更');
+                modal.addComponents(new ActionRowBuilder().addComponents(
+                    new TextInputBuilder().setCustomId('chset_topic_input').setLabel('新しいトピック').setStyle(TextInputStyle.Paragraph).setValue(ch.topic || '').setRequired(false).setMaxLength(1024)
+                ));
+                return interaction.showModal(modal);
+            }
+            if (action === 'slowmode') {
+                const modal = new ModalBuilder().setCustomId(`modal_chset_slowmode_${ch.id}`).setTitle('低速モード設定');
+                modal.addComponents(new ActionRowBuilder().addComponents(
+                    new TextInputBuilder().setCustomId('chset_slowmode_input').setLabel('秒数（0でオフ、最大21600）').setStyle(TextInputStyle.Short).setValue(String(ch.rateLimitPerUser || 0)).setRequired(true).setMaxLength(5)
+                ));
+                return interaction.showModal(modal);
+            }
             return;
         }
 
