@@ -25,11 +25,40 @@ const delBtn = () => new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('delete_reply').setLabel('🗑️ 削除').setStyle(ButtonStyle.Secondary)
 );
 
+function cdStr(remaining) {
+    if (remaining <= 0) return '✅ 準備完了';
+    const h = Math.floor(remaining / 3600000);
+    const m = Math.floor((remaining % 3600000) / 60000);
+    const s = Math.floor((remaining % 60000) / 1000);
+    if (h > 0) return `⏳ あと${h}時間${m}分`;
+    if (m > 0) return `⏳ あと${m}分${s}秒`;
+    return `⏳ あと${s}秒`;
+}
+
+function buildEarnPanel(u, now) {
+    const dailyRem = 86400000 - (now - (u.dailyLast || 0));
+    const workRem  = 3600000  - (now - (u.workLast  || 0));
+    const crimeRem = 7200000  - (now - (u.crimeLast || 0));
+    const streak = u.dailyStreak || 0;
+    const embed = new EmbedBuilder()
+        .setTitle('💰 お金を稼ぐ')
+        .setColor(0xf1c40f)
+        .addFields(
+            { name: '🎁 デイリー', value: `200〜400+ボーナス ${CURRENCY}\n連続${streak}日目 🔥\n${cdStr(dailyRem)}`, inline: true },
+            { name: '💼 労働', value: `50〜300 ${CURRENCY}\nCD: 1時間\n${cdStr(workRem)}`, inline: true },
+            { name: '🦹 犯罪', value: `成功: 100〜2000 ${CURRENCY}\n失敗: 没収あり\nCD: 2時間\n${cdStr(crimeRem)}`, inline: true }
+        );
+    const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('earn_daily').setLabel('🎁 デイリー').setStyle(ButtonStyle.Success).setDisabled(dailyRem > 0),
+        new ButtonBuilder().setCustomId('earn_work').setLabel('💼 労働').setStyle(ButtonStyle.Primary).setDisabled(workRem > 0),
+        new ButtonBuilder().setCustomId('earn_crime').setLabel('🦹 犯罪').setStyle(ButtonStyle.Danger).setDisabled(crimeRem > 0)
+    );
+    return { embeds: [embed], components: [row] };
+}
+
 const econCommands = [
     new SlashCommandBuilder().setName('balance').setDescription('所持金を確認します').addUserOption(o => o.setName('user').setDescription('対象ユーザー（未指定なら自分）')),
-    new SlashCommandBuilder().setName('daily').setDescription('毎日コインをもらいます（24時間クールダウン）'),
-    new SlashCommandBuilder().setName('work').setDescription('働いてコインを稼ぎます（1時間クールダウン）'),
-    new SlashCommandBuilder().setName('crime').setDescription('犯罪を犯してコインを稼ぎます。失敗すると没収（2時間CD）'),
+    new SlashCommandBuilder().setName('earn').setDescription('お金を稼ぎます（デイリー・労働・犯罪）'),
     new SlashCommandBuilder().setName('send').setDescription('他のユーザーに送金します').addUserOption(o => o.setName('user').setDescription('送金先ユーザー').setRequired(true)).addIntegerOption(o => o.setName('amount').setDescription('金額').setRequired(true).setMinValue(1)),
     new SlashCommandBuilder().setName('shop').setDescription('ショップのアイテム一覧を表示します'),
     new SlashCommandBuilder().setName('buy').setDescription('アイテムを購入します').addStringOption(o => o.setName('item').setDescription('アイテム名').setRequired(true)),
@@ -63,92 +92,11 @@ async function handleEcon(interaction) {
         return interaction.reply({ embeds: [embed], components: [delBtn()] });
     }
 
-    if (commandName === 'daily') {
+    if (commandName === 'earn') {
         const u = getUser(econ, user.id, user);
         const now = Date.now();
-        const remaining = 86400000 - (now - (u.dailyLast || 0));
-        if (remaining > 0) {
-            const h = Math.floor(remaining / 3600000), m = Math.floor((remaining % 3600000) / 60000);
-            return interaction.reply({ content: `⏳ デイリーはまだ受け取れません。あと **${h}時間${m}分**`, ...EPH });
-        }
-        const streak = (u.dailyStreak || 0) + 1;
-        const base = Math.floor(Math.random() * 201) + 200;
-        const bonus = Math.min(streak, 7) * 50;
-        const amount = base + bonus;
-        u.balance += amount;
-        u.dailyLast = now;
-        u.dailyStreak = streak;
-        save(ECON_FILE, econ);
-        const embed = new EmbedBuilder().setTitle('🎁 デイリーボーナス')
-            .setDescription(`**+${amount}** ${CURRENCY} を受け取りました！\n残高: **${u.balance.toLocaleString()}** ${CURRENCY}`)
-            .addFields(
-                { name: '内訳', value: `ベース: ${base} + 連続ボーナス: ${bonus}`, inline: true },
-                { name: '連続ログイン', value: `${streak}日目 🔥`, inline: true }
-            ).setColor(0x57f287).setTimestamp();
-        return interaction.reply({ embeds: [embed], components: [delBtn()] });
-    }
-
-    if (commandName === 'work') {
-        const u = getUser(econ, user.id, user);
-        const now = Date.now();
-        const remaining = 3600000 - (now - (u.workLast || 0));
-        if (remaining > 0) {
-            const m = Math.floor(remaining / 60000), s = Math.floor((remaining % 60000) / 1000);
-            return interaction.reply({ content: `⏳ まだ働けません。あと **${m}分${s}秒**`, ...EPH });
-        }
-        const jobs = [
-            { name: 'プログラマー', desc: 'コードを書きまくった', min: 80, max: 180 },
-            { name: 'シェフ', desc: '料理を作って客に振る舞った', min: 60, max: 150 },
-            { name: 'ゲーム実況者', desc: '配信が大盛況だった', min: 50, max: 200 },
-            { name: '宅配ドライバー', desc: '荷物を時間通りに届けた', min: 70, max: 140 },
-            { name: 'デザイナー', desc: 'クライアントに絶賛された', min: 90, max: 170 },
-            { name: '作家', desc: '原稿を書き上げた', min: 60, max: 160 },
-            { name: '教師', desc: '生徒に感謝された', min: 55, max: 130 },
-            { name: '音楽家', desc: 'ライブが満員だった', min: 80, max: 220 },
-            { name: '漁師', desc: '大漁だった', min: 70, max: 160 },
-            { name: '株トレーダー', desc: 'うまくポジションを取った', min: 30, max: 300 },
-        ];
-        const job = jobs[Math.floor(Math.random() * jobs.length)];
-        const amount = Math.floor(Math.random() * (job.max - job.min + 1)) + job.min;
-        u.balance += amount;
-        u.workLast = now;
-        save(ECON_FILE, econ);
-        const embed = new EmbedBuilder().setTitle(`💼 ${job.name} として働いた`)
-            .setDescription(`${job.desc}！\n**+${amount}** ${CURRENCY} を獲得！\n残高: **${u.balance.toLocaleString()}** ${CURRENCY}`)
-            .setColor(0x3498db).setTimestamp();
-        return interaction.reply({ embeds: [embed], components: [delBtn()] });
-    }
-
-    if (commandName === 'crime') {
-        const u = getUser(econ, user.id, user);
-        const now = Date.now();
-        const remaining = 7200000 - (now - (u.crimeLast || 0));
-        if (remaining > 0) {
-            const h = Math.floor(remaining / 3600000), m = Math.floor((remaining % 3600000) / 60000);
-            return interaction.reply({ content: `⏳ まだ犯罪はできません。あと **${h}時間${m}分**`, ...EPH });
-        }
-        u.crimeLast = now;
-        const crimes = [
-            { name: '車上荒らし', success: 0.6, gain: [200, 500], fine: [100, 300] },
-            { name: '銀行強盗', success: 0.3, gain: [800, 2000], fine: [400, 800] },
-            { name: 'スリ', success: 0.7, gain: [100, 300], fine: [50, 200] },
-            { name: '詐欺', success: 0.5, gain: [300, 700], fine: [200, 500] },
-            { name: '密輸', success: 0.4, gain: [500, 1200], fine: [300, 600] },
-        ];
-        const crime = crimes[Math.floor(Math.random() * crimes.length)];
-        const success = Math.random() < crime.success;
-        let embed;
-        if (success) {
-            const amount = Math.floor(Math.random() * (crime.gain[1] - crime.gain[0] + 1)) + crime.gain[0];
-            u.balance += amount;
-            embed = new EmbedBuilder().setTitle(`🦹 ${crime.name} 成功！`).setDescription(`うまくいった！\n**+${amount}** ${CURRENCY} を獲得！\n残高: **${u.balance.toLocaleString()}** ${CURRENCY}`).setColor(0x57f287);
-        } else {
-            const fine = Math.floor(Math.random() * (crime.fine[1] - crime.fine[0] + 1)) + crime.fine[0];
-            u.balance = Math.max(0, u.balance - fine);
-            embed = new EmbedBuilder().setTitle(`🚔 ${crime.name} 失敗！`).setDescription(`捕まった！**${fine}** ${CURRENCY} を没収された。\n残高: **${u.balance.toLocaleString()}** ${CURRENCY}`).setColor(0xff4757);
-        }
-        save(ECON_FILE, econ);
-        return interaction.reply({ embeds: [embed], components: [delBtn()] });
+        await interaction.reply(buildEarnPanel(u, now));
+        return;
     }
 
     if (commandName === 'send') {
@@ -405,6 +353,83 @@ async function handleEconInteraction(interaction) {
     const { user, guild } = interaction;
     const econ = load(ECON_FILE);
     const corpData = load(CORP_FILE);
+
+    // ==================== earnボタン ====================
+    if (cid === 'earn_daily' || cid === 'earn_work' || cid === 'earn_crime') {
+        const u = getUser(econ, user.id, user);
+        const now = Date.now();
+        let resultEmbed;
+
+        if (cid === 'earn_daily') {
+            const remaining = 86400000 - (now - (u.dailyLast || 0));
+            if (remaining > 0) return interaction.reply({ content: `⏳ デイリーはまだ受け取れません。${cdStr(remaining)}`, ...EPH });
+            const streak = (u.dailyStreak || 0) + 1;
+            const base = Math.floor(Math.random() * 201) + 200;
+            const bonus = Math.min(streak, 7) * 50;
+            const amount = base + bonus;
+            u.balance += amount; u.dailyLast = now; u.dailyStreak = streak;
+            resultEmbed = new EmbedBuilder().setTitle('🎁 デイリーボーナス')
+                .setDescription(`**+${amount}** ${CURRENCY} を受け取りました！\n残高: **${u.balance.toLocaleString()}** ${CURRENCY}`)
+                .addFields(
+                    { name: '内訳', value: `ベース: ${base} + 連続ボーナス: ${bonus}`, inline: true },
+                    { name: '連続ログイン', value: `${streak}日目 🔥`, inline: true }
+                ).setColor(0x57f287).setTimestamp();
+        }
+
+        if (cid === 'earn_work') {
+            const remaining = 3600000 - (now - (u.workLast || 0));
+            if (remaining > 0) return interaction.reply({ content: `⏳ まだ働けません。${cdStr(remaining)}`, ...EPH });
+            const jobs = [
+                { name: 'プログラマー', desc: 'コードを書きまくった', min: 80, max: 180 },
+                { name: 'シェフ', desc: '料理を作って客に振る舞った', min: 60, max: 150 },
+                { name: 'ゲーム実況者', desc: '配信が大盛況だった', min: 50, max: 200 },
+                { name: '宅配ドライバー', desc: '荷物を時間通りに届けた', min: 70, max: 140 },
+                { name: 'デザイナー', desc: 'クライアントに絶賛された', min: 90, max: 170 },
+                { name: '作家', desc: '原稿を書き上げた', min: 60, max: 160 },
+                { name: '教師', desc: '生徒に感謝された', min: 55, max: 130 },
+                { name: '音楽家', desc: 'ライブが満員だった', min: 80, max: 220 },
+                { name: '漁師', desc: '大漁だった', min: 70, max: 160 },
+                { name: '株トレーダー', desc: 'うまくポジションを取った', min: 30, max: 300 },
+            ];
+            const job = jobs[Math.floor(Math.random() * jobs.length)];
+            const amount = Math.floor(Math.random() * (job.max - job.min + 1)) + job.min;
+            u.balance += amount; u.workLast = now;
+            resultEmbed = new EmbedBuilder().setTitle(`💼 ${job.name} として働いた`)
+                .setDescription(`${job.desc}！\n**+${amount}** ${CURRENCY} を獲得！\n残高: **${u.balance.toLocaleString()}** ${CURRENCY}`)
+                .setColor(0x3498db).setTimestamp();
+        }
+
+        if (cid === 'earn_crime') {
+            const remaining = 7200000 - (now - (u.crimeLast || 0));
+            if (remaining > 0) return interaction.reply({ content: `⏳ まだ犯罪はできません。${cdStr(remaining)}`, ...EPH });
+            u.crimeLast = now;
+            const crimes = [
+                { name: '車上荒らし', success: 0.6, gain: [200, 500], fine: [100, 300] },
+                { name: '銀行強盗', success: 0.3, gain: [800, 2000], fine: [400, 800] },
+                { name: 'スリ', success: 0.7, gain: [100, 300], fine: [50, 200] },
+                { name: '詐欺', success: 0.5, gain: [300, 700], fine: [200, 500] },
+                { name: '密輸', success: 0.4, gain: [500, 1200], fine: [300, 600] },
+            ];
+            const crime = crimes[Math.floor(Math.random() * crimes.length)];
+            const success = Math.random() < crime.success;
+            if (success) {
+                const amount = Math.floor(Math.random() * (crime.gain[1] - crime.gain[0] + 1)) + crime.gain[0];
+                u.balance += amount;
+                resultEmbed = new EmbedBuilder().setTitle(`🦹 ${crime.name} 成功！`).setDescription(`うまくいった！\n**+${amount}** ${CURRENCY} を獲得！\n残高: **${u.balance.toLocaleString()}** ${CURRENCY}`).setColor(0x57f287);
+            } else {
+                const fine = Math.floor(Math.random() * (crime.fine[1] - crime.fine[0] + 1)) + crime.fine[0];
+                u.balance = Math.max(0, u.balance - fine);
+                resultEmbed = new EmbedBuilder().setTitle(`🚔 ${crime.name} 失敗！`).setDescription(`捕まった！**${fine}** ${CURRENCY} を没収された。\n残高: **${u.balance.toLocaleString()}** ${CURRENCY}`).setColor(0xff4757);
+            }
+        }
+
+        save(ECON_FILE, econ);
+        // パネルを更新してから結果をephemeralで送信
+        const updatedPanel = buildEarnPanel(u, now);
+        await interaction.update(updatedPanel);
+        await interaction.followUp({ embeds: [resultEmbed], ...EPH });
+        return;
+    }
 
     if (interaction.isStringSelectMenu() && cid === 'store_select_corp') {
         const corpId = interaction.values[0];
