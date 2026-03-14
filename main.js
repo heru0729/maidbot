@@ -249,16 +249,20 @@ client.once(Events.ClientReady, async () => {
         new SlashCommandBuilder().setName('top').setDescription('このチャンネルの最初のメッセージへのリンクを表示します'),
         new SlashCommandBuilder().setName('snipe').setDescription('直前に削除されたメッセージを表示します'),
         new SlashCommandBuilder().setName('unban').setDescription('ユーザーのBANを解除します').addStringOption(o => o.setName('user').setDescription('ユーザーID or メンション').setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.BanMembers),
-        new SlashCommandBuilder().setName('giveaway').setDescription('プレゼント抽選を開始します').addStringOption(o => o.setName('prize').setDescription('景品名').setRequired(true)).addStringOption(o => o.setName('title').setDescription('タイトル（未指定なら「プレゼント抽選」）')).addIntegerOption(o => o.setName('minutes').setDescription('終了までの時間（分）').setRequired(true).setMinValue(1)).addIntegerOption(o => o.setName('winners').setDescription('当選人数').setRequired(true).setMinValue(1)).addChannelOption(o => o.setName('channel').setDescription('開催チャンネル（未指定なら現在）').addChannelTypes(ChannelType.GuildText)).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+        new SlashCommandBuilder().setName('giveaway').setDescription('プレゼント抽選を開始します').addStringOption(o => o.setName('prize').setDescription('景品名').setRequired(true)).addIntegerOption(o => o.setName('minutes').setDescription('終了までの時間（分）').setRequired(true).setMinValue(1)).addIntegerOption(o => o.setName('winners').setDescription('当選人数').setRequired(true).setMinValue(1)).addStringOption(o => o.setName('title').setDescription('タイトル（未指定なら「プレゼント抽選」）')).addChannelOption(o => o.setName('channel').setDescription('開催チャンネル（未指定なら現在）').addChannelTypes(ChannelType.GuildText)).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
         new SlashCommandBuilder().setName('chset').setDescription('チャンネルの設定を変更します').addChannelOption(o => o.setName('channel').setDescription('対象チャンネル（未指定なら現在）').addChannelTypes(ChannelType.GuildText)).setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels),
         ...econCommands,
     ].map(cmd => cmd.toJSON());
 
     const rest = new REST({ version: '10' }).setToken(TOKEN);
     try {
+        console.log(`コマンド登録開始: ${commands.length}個`);
         await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
-        console.log('スラッシュコマンドの再登録に成功しました。');
-    } catch (error) { console.error('コマンド登録エラー:', error); }
+        console.log(`スラッシュコマンドの再登録に成功しました（${commands.length}個）。`);
+    } catch (error) {
+        console.error('コマンド登録エラー:', error?.message || error);
+        if (error?.rawError) console.error('詳細:', JSON.stringify(error.rawError, null, 2));
+    }
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
