@@ -293,7 +293,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
                 { name: '🔍 ユーティリティ', value: '`/botstatus` `/snipe` `/top`', inline: true },
                 { name: '⚙️ 管理', value: '`/set` `/clear` `/log` `/chatlock` `/chset`', inline: true },
                 { name: '🔨 モデレート', value: '`/kick` `/ban` `/unban` `/mute` `/unmute` `/serverlock`', inline: true },
-                { name: '🪙 エコノミー', value: '`/balance` `/daily` `/work` `/send` `/shop` `/buy` `/sell` `/inventory` `/econrank` `/corp` `/store`', inline: false },
+                { name: '🪙 エコノミー', value: '`/balance` `/earn` `/send` `/rob` `/flip` `/slots` `/shop` `/buy` `/sell` `/inventory` `/econrank` `/corp` `/store`', inline: false },
                 { name: '❓ その他', value: '`/support` `/help`', inline: true }
             ).setFooter({ text: '/set で各種サーバー設定が可能です' });
             await interaction.reply({ embeds: [embed], ...EPH });
@@ -794,7 +794,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
 
         // econコマンド
-        const econCommandNames = ['balance','daily','work','crime','send','rob','flip','slots','shop','buy','sell','inventory','econrank','corp','store'];
+        const econCommandNames = ['balance','earn','send','rob','flip','slots','shop','buy','sell','inventory','econrank','corp','store'];
         if (econCommandNames.includes(commandName)) {
             await handleEcon(interaction);
         }
@@ -1224,7 +1224,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
 
         // econ ボタン
-        const econBtnPrefixes = ['store_additem_', 'store_removeitem_', 'store_withdraw_'];
+        const econBtnPrefixes = ['earn_daily', 'earn_work', 'earn_crime', 'store_additem_', 'store_removeitem_', 'store_withdraw_'];
         if (econBtnPrefixes.some(p => cid.startsWith(p))) {
             await handleEconInteraction(interaction);
         }
