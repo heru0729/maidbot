@@ -21,6 +21,61 @@ function getUser(econ, userId, user) {
     return econ[userId];
 }
 
+// ==================== ブラックジャック ====================
+const bjGames = new Map(); // gameKey -> game state
+
+function buildDeck() {
+    const suits = ['♠', '♥', '♦', '♣'];
+    const ranks = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
+    const deck = [];
+    for (const s of suits) for (const r of ranks) deck.push(`${r}${s}`);
+    for (let i = deck.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [deck[i], deck[j]] = [deck[j], deck[i]]; }
+    return deck;
+}
+function drawCard(deck) { return deck.pop(); }
+function cardValue(card) {
+    const r = card.slice(0, -1);
+    if (r === 'A') return 11;
+    if (['J', 'Q', 'K'].includes(r)) return 10;
+    return parseInt(r);
+}
+function calcBJ(cards) {
+    let total = cards.reduce((s, c) => s + cardValue(c), 0);
+    let aces = cards.filter(c => c.startsWith('A')).length;
+    while (total > 21 && aces > 0) { total -= 10; aces--; }
+    return total;
+}
+function buildBJEmbed(game, status, balance) {
+    const playerTotal = calcBJ(game.playerCards);
+    const dealerTotal = calcBJ(game.dealerCards);
+    const statusMap = {
+        playing: { title: '🃏 ブラックジャック', color: 0x3498db, desc: '' },
+        win:     { title: '🎉 勝利！', color: 0x57f287, desc: `**+${game.bet.toLocaleString()}** 🪙 獲得！\n残高: **${balance?.toLocaleString()}** 🪙` },
+        lose:    { title: '😢 負け...', color: 0xff4757, desc: `**-${game.bet.toLocaleString()}** 🪙\n残高: **${balance?.toLocaleString()}** 🪙` },
+        push:    { title: '🤝 引き分け', color: 0x95a5a6, desc: `賭け金は返還されました。\n残高: **${balance?.toLocaleString()}** 🪙` },
+        bust:    { title: '💥 バスト！', color: 0xff4757, desc: `**-${game.bet.toLocaleString()}** 🪙\n残高: **${balance?.toLocaleString()}** 🪙` },
+        bj:      { title: '🃏 ブラックジャック！', color: 0xf1c40f, desc: `**+${Math.floor(game.bet * 1.5).toLocaleString()}** 🪙 獲得！\n残高: **${balance?.toLocaleString()}** 🪙` },
+    };
+    const s = statusMap[status];
+    const dealerShow = status === 'playing'
+        ? `${game.dealerCards[0]} ??` : game.dealerCards.join(' ');
+    const dealerScore = status === 'playing' ? '?' : dealerTotal;
+    return new EmbedBuilder().setTitle(s.title).setColor(s.color)
+        .addFields(
+            { name: `ディーラー (${dealerScore})`, value: dealerShow, inline: false },
+            { name: `あなた (${playerTotal})`, value: game.playerCards.join(' '), inline: false }
+        )
+        .setDescription(s.desc || `賭け金: **${game.bet.toLocaleString()}** 🪙`)
+        .setFooter({ text: 'ヒット=カードを引く / スタンド=終了 / ダブル=2倍賭けで1枚引いて終了' });
+}
+function buildBJRows(gameKey) {
+    return [new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`bj_hit_${gameKey}`).setLabel('ヒット').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId(`bj_stand_${gameKey}`).setLabel('スタンド').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(`bj_double_${gameKey}`).setLabel('ダブルダウン').setStyle(ButtonStyle.Danger)
+    )];
+}
+
 const delBtn = () => new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId('delete_reply').setLabel('🗑️ 削除').setStyle(ButtonStyle.Secondary)
 );
@@ -46,28 +101,35 @@ function buildEarnPanel(u, now) {
         .addFields(
             { name: '🎁 デイリー', value: `200〜400+ボーナス ${CURRENCY}\n連続${streak}日目 🔥\n${cdStr(dailyRem)}`, inline: true },
             { name: '💼 労働', value: `50〜300 ${CURRENCY}\nCD: 1時間\n${cdStr(workRem)}`, inline: true },
-            { name: '🦹 犯罪', value: `成功: 100〜2000 ${CURRENCY}\n失敗: 没収あり\nCD: 2時間\n${cdStr(crimeRem)}`, inline: true }
+            { name: '🦹 犯罪', value: `成功: 100〜2000 ${CURRENCY}\n失敗: 没収あり\nCD: 2時間\n${cdStr(crimeRem)}`, inline: true },
+            { name: '🔫 強盗', value: `他ユーザーの10〜30%奪取\n失敗: 罰金あり`, inline: true },
+            { name: '🪙 コインフリップ', value: `賭け金額を2倍か没収\n50%の確率`, inline: true },
+            { name: '🎰 スロット', value: `最大10倍\n💎揃い: 10x / ⭐揃い: 5x`, inline: true },
+            { name: '🃏 ブラックジャック', value: `21に近い方が勝ち\nBJ: 1.5倍獲得`, inline: true }
         );
-    const row = new ActionRowBuilder().addComponents(
+    const row1 = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('earn_daily').setLabel('🎁 デイリー').setStyle(ButtonStyle.Success).setDisabled(dailyRem > 0),
         new ButtonBuilder().setCustomId('earn_work').setLabel('💼 労働').setStyle(ButtonStyle.Primary).setDisabled(workRem > 0),
         new ButtonBuilder().setCustomId('earn_crime').setLabel('🦹 犯罪').setStyle(ButtonStyle.Danger).setDisabled(crimeRem > 0)
     );
-    return { embeds: [embed], components: [row] };
+    const row2 = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('earn_rob').setLabel('🔫 強盗').setStyle(ButtonStyle.Danger),
+        new ButtonBuilder().setCustomId('earn_flip').setLabel('🪙 コインフリップ').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId('earn_slots').setLabel('🎰 スロット').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId('earn_bj').setLabel('🃏 BJ').setStyle(ButtonStyle.Primary)
+    );
+    return { embeds: [embed], components: [row1, row2] };
 }
 
 const econCommands = [
     new SlashCommandBuilder().setName('balance').setDescription('所持金を確認します').addUserOption(o => o.setName('user').setDescription('対象ユーザー（未指定なら自分）')),
-    new SlashCommandBuilder().setName('earn').setDescription('お金を稼ぎます（デイリー・労働・犯罪）'),
+    new SlashCommandBuilder().setName('earn').setDescription('お金を稼ぐパネルを開きます'),
     new SlashCommandBuilder().setName('send').setDescription('他のユーザーに送金します').addUserOption(o => o.setName('user').setDescription('送金先ユーザー').setRequired(true)).addIntegerOption(o => o.setName('amount').setDescription('金額').setRequired(true).setMinValue(1)),
     new SlashCommandBuilder().setName('shop').setDescription('ショップのアイテム一覧を表示します'),
     new SlashCommandBuilder().setName('buy').setDescription('アイテムを購入します').addStringOption(o => o.setName('item').setDescription('アイテム名').setRequired(true)),
     new SlashCommandBuilder().setName('sell').setDescription('インベントリのアイテムを売却します').addStringOption(o => o.setName('item').setDescription('アイテム名').setRequired(true)).addIntegerOption(o => o.setName('amount').setDescription('売却数（未指定で1個）').setMinValue(1)),
     new SlashCommandBuilder().setName('inventory').setDescription('所持アイテムを確認します').addUserOption(o => o.setName('user').setDescription('対象ユーザー（未指定なら自分）')),
     new SlashCommandBuilder().setName('econrank').setDescription('所持金ランキングを表示します'),
-    new SlashCommandBuilder().setName('rob').setDescription('他のユーザーから強奪を試みます').addUserOption(o => o.setName('user').setDescription('ターゲット').setRequired(true)),
-    new SlashCommandBuilder().setName('flip').setDescription('コインフリップで賭けをします').addIntegerOption(o => o.setName('amount').setDescription('賭け金額').setRequired(true).setMinValue(1)).addStringOption(o => o.setName('side').setDescription('表か裏').setRequired(true).addChoices({ name: '表', value: 'heads' }, { name: '裏', value: 'tails' })),
-    new SlashCommandBuilder().setName('slots').setDescription('スロットマシンで賭けをします').addIntegerOption(o => o.setName('amount').setDescription('賭け金額').setRequired(true).setMinValue(1)),
     new SlashCommandBuilder().setName('corp').setDescription('会社を設立します（1人2社まで・設立費用10,000枚）').addStringOption(o => o.setName('name').setDescription('会社名').setRequired(true)).addStringOption(o => o.setName('description').setDescription('会社の説明').setRequired(true)),
     new SlashCommandBuilder().setName('store').setDescription('会社のストアを管理・表示します').addStringOption(o => o.setName('corp').setDescription('会社名（未指定で一覧）')),
 ];
@@ -117,70 +179,6 @@ async function handleEcon(interaction) {
                 { name: '金額', value: `**${amount.toLocaleString()}** ${CURRENCY}`, inline: false },
                 { name: '残高', value: `${sender.balance.toLocaleString()} ${CURRENCY}`, inline: true }
             ).setTimestamp();
-        return interaction.reply({ embeds: [embed], components: [delBtn()] });
-    }
-
-    if (commandName === 'rob') {
-        const target = options.getUser('user');
-        if (target.id === user.id) return interaction.reply({ content: '❌ 自分は強盗できません。', ...EPH });
-        if (target.bot) return interaction.reply({ content: '❌ Botは強盗できません。', ...EPH });
-        const robber = getUser(econ, user.id, user);
-        const victim = getUser(econ, target.id, target);
-        if (victim.balance < 100) return interaction.reply({ content: `❌ ${target.username} の残高が少なすぎます。`, ...EPH });
-        const success = Math.random() < 0.4;
-        let embed;
-        if (success) {
-            const stolen = Math.floor(victim.balance * (0.1 + Math.random() * 0.2));
-            robber.balance += stolen;
-            victim.balance -= stolen;
-            embed = new EmbedBuilder().setTitle('🔫 強盗成功！').setDescription(`**${target.username}** から **${stolen.toLocaleString()}** ${CURRENCY} を奪った！\n残高: **${robber.balance.toLocaleString()}** ${CURRENCY}`).setColor(0x57f287);
-        } else {
-            const fine = Math.floor(robber.balance * 0.1 + 200);
-            robber.balance = Math.max(0, robber.balance - fine);
-            embed = new EmbedBuilder().setTitle('🚔 強盗失敗！').setDescription(`捕まった！罰金 **${fine.toLocaleString()}** ${CURRENCY}\n残高: **${robber.balance.toLocaleString()}** ${CURRENCY}`).setColor(0xff4757);
-        }
-        save(ECON_FILE, econ);
-        return interaction.reply({ embeds: [embed], components: [delBtn()] });
-    }
-
-    if (commandName === 'flip') {
-        const amount = options.getInteger('amount');
-        const side = options.getString('side');
-        const u = getUser(econ, user.id, user);
-        if (u.balance < amount) return interaction.reply({ content: `❌ 残高不足。現在: **${u.balance.toLocaleString()}** ${CURRENCY}`, ...EPH });
-        const result = Math.random() < 0.5 ? 'heads' : 'tails';
-        const win = result === side;
-        if (win) u.balance += amount; else u.balance -= amount;
-        save(ECON_FILE, econ);
-        const embed = new EmbedBuilder()
-            .setTitle(win ? '🎉 勝利！' : '😢 敗北...')
-            .setColor(win ? 0x57f287 : 0xff4757)
-            .addFields(
-                { name: '選択', value: side === 'heads' ? '表 🪙' : '裏 🔄', inline: true },
-                { name: '結果', value: result === 'heads' ? '表 🪙' : '裏 🔄', inline: true },
-                { name: win ? `+${amount.toLocaleString()} 獲得` : `-${amount.toLocaleString()} 没収`, value: `残高: **${u.balance.toLocaleString()}** ${CURRENCY}`, inline: false }
-            );
-        return interaction.reply({ embeds: [embed], components: [delBtn()] });
-    }
-
-    if (commandName === 'slots') {
-        const amount = options.getInteger('amount');
-        const u = getUser(econ, user.id, user);
-        if (u.balance < amount) return interaction.reply({ content: `❌ 残高不足。現在: **${u.balance.toLocaleString()}** ${CURRENCY}`, ...EPH });
-        const symbols = ['🍒', '🍋', '🍊', '🍇', '⭐', '💎'];
-        const roll = () => symbols[Math.floor(Math.random() * symbols.length)];
-        const s = [roll(), roll(), roll()];
-        let multiplier = 0;
-        if (s[0] === s[1] && s[1] === s[2]) multiplier = s[0] === '💎' ? 10 : s[0] === '⭐' ? 5 : 3;
-        else if (s[0] === s[1] || s[1] === s[2] || s[0] === s[2]) multiplier = 1.5;
-        const win = multiplier > 0;
-        const payout = win ? Math.floor(amount * multiplier) : 0;
-        u.balance += payout - amount;
-        save(ECON_FILE, econ);
-        const embed = new EmbedBuilder().setTitle('🎰 スロット')
-            .setDescription(`**[ ${s.join(' | ')} ]**\n\n${win ? `🎉 **${multiplier}x** 当たり！ **+${payout.toLocaleString()}** ${CURRENCY}` : `💸 ハズレ... **-${amount.toLocaleString()}** ${CURRENCY}`}`)
-            .setColor(win ? 0xf1c40f : 0x95a5a6)
-            .addFields({ name: '残高', value: `**${u.balance.toLocaleString()}** ${CURRENCY}`, inline: true });
         return interaction.reply({ embeds: [embed], components: [delBtn()] });
     }
 
@@ -431,6 +429,115 @@ async function handleEconInteraction(interaction) {
         return;
     }
 
+    // 強盗 → モーダルでID/メンション入力
+    if (cid === 'earn_rob') {
+        const modal = new ModalBuilder().setCustomId('modal_earn_rob').setTitle('🔫 強盗');
+        modal.addComponents(
+            new ActionRowBuilder().addComponents(
+                new TextInputBuilder().setCustomId('rob_target_id').setLabel('ターゲットのユーザーID or メンション').setStyle(TextInputStyle.Short).setPlaceholder('例: 123456789 または @username').setRequired(true)
+            )
+        );
+        return interaction.showModal(modal);
+    }
+
+    // コインフリップ → モーダルで金額・表裏入力
+    if (cid === 'earn_flip') {
+        const modal = new ModalBuilder().setCustomId('modal_earn_flip').setTitle('🪙 コインフリップ');
+        modal.addComponents(
+            new ActionRowBuilder().addComponents(
+                new TextInputBuilder().setCustomId('flip_amount').setLabel('賭け金額').setStyle(TextInputStyle.Short).setPlaceholder('例: 500').setRequired(true)
+            ),
+            new ActionRowBuilder().addComponents(
+                new TextInputBuilder().setCustomId('flip_side').setLabel('表か裏 (omote / ura)').setStyle(TextInputStyle.Short).setPlaceholder('omote または ura').setRequired(true)
+            )
+        );
+        return interaction.showModal(modal);
+    }
+
+    // スロット → モーダルで金額入力
+    if (cid === 'earn_slots') {
+        const modal = new ModalBuilder().setCustomId('modal_earn_slots').setTitle('🎰 スロット');
+        modal.addComponents(
+            new ActionRowBuilder().addComponents(
+                new TextInputBuilder().setCustomId('slots_amount').setLabel('賭け金額').setStyle(TextInputStyle.Short).setPlaceholder('例: 200').setRequired(true)
+            )
+        );
+        return interaction.showModal(modal);
+    }
+
+    // ブラックジャック → モーダルで金額入力
+    if (cid === 'earn_bj') {
+        const modal = new ModalBuilder().setCustomId('modal_earn_bj').setTitle('🃏 ブラックジャック');
+        modal.addComponents(
+            new ActionRowBuilder().addComponents(
+                new TextInputBuilder().setCustomId('bj_amount').setLabel('賭け金額').setStyle(TextInputStyle.Short).setPlaceholder('例: 1000').setRequired(true)
+            )
+        );
+        return interaction.showModal(modal);
+    }
+
+    // BJ: ヒット
+    if (cid.startsWith('bj_hit_')) {
+        const gameKey = cid.replace('bj_hit_', '');
+        const game = bjGames.get(gameKey);
+        if (!game || game.userId !== user.id) return interaction.reply({ content: '❌ このゲームはあなたのものではありません。', ...EPH });
+        game.playerCards.push(drawCard(game.deck));
+        const playerTotal = calcBJ(game.playerCards);
+        if (playerTotal > 21) {
+            // バスト
+            const econ = load(ECON_FILE);
+            const u = getUser(econ, user.id, user);
+            u.balance -= game.bet;
+            save(ECON_FILE, econ);
+            bjGames.delete(gameKey);
+            return interaction.update({ embeds: [buildBJEmbed(game, 'bust', u.balance)], components: [] });
+        }
+        return interaction.update({ embeds: [buildBJEmbed(game, 'playing')], components: buildBJRows(gameKey) });
+    }
+
+    // BJ: スタンド
+    if (cid.startsWith('bj_stand_')) {
+        const gameKey = cid.replace('bj_stand_', '');
+        const game = bjGames.get(gameKey);
+        if (!game || game.userId !== user.id) return interaction.reply({ content: '❌ このゲームはあなたのものではありません。', ...EPH });
+        // ディーラーのターン: 17以上になるまでドロー
+        while (calcBJ(game.dealerCards) < 17) game.dealerCards.push(drawCard(game.deck));
+        const playerTotal = calcBJ(game.playerCards);
+        const dealerTotal = calcBJ(game.dealerCards);
+        const econ = load(ECON_FILE);
+        const u = getUser(econ, user.id, user);
+        let result;
+        if (dealerTotal > 21 || playerTotal > dealerTotal) { u.balance += game.bet; result = 'win'; }
+        else if (playerTotal === dealerTotal) { result = 'push'; }
+        else { u.balance -= game.bet; result = 'lose'; }
+        save(ECON_FILE, econ);
+        bjGames.delete(gameKey);
+        return interaction.update({ embeds: [buildBJEmbed(game, result, u.balance)], components: [] });
+    }
+
+    // BJ: ダブルダウン
+    if (cid.startsWith('bj_double_')) {
+        const gameKey = cid.replace('bj_double_', '');
+        const game = bjGames.get(gameKey);
+        if (!game || game.userId !== user.id) return interaction.reply({ content: '❌ このゲームはあなたのものではありません。', ...EPH });
+        const econ = load(ECON_FILE);
+        const u = getUser(econ, user.id, user);
+        if (u.balance < game.bet * 2) return interaction.reply({ content: `❌ ダブルダウンには **${(game.bet * 2).toLocaleString()}** 🪙 必要です。`, ...EPH });
+        game.bet *= 2;
+        game.playerCards.push(drawCard(game.deck));
+        const playerTotal = calcBJ(game.playerCards);
+        while (calcBJ(game.dealerCards) < 17) game.dealerCards.push(drawCard(game.deck));
+        const dealerTotal = calcBJ(game.dealerCards);
+        let result;
+        if (playerTotal > 21) { u.balance -= game.bet; result = 'bust'; }
+        else if (dealerTotal > 21 || playerTotal > dealerTotal) { u.balance += game.bet; result = 'win'; }
+        else if (playerTotal === dealerTotal) { result = 'push'; }
+        else { u.balance -= game.bet; result = 'lose'; }
+        save(ECON_FILE, econ);
+        bjGames.delete(gameKey);
+        return interaction.update({ embeds: [buildBJEmbed(game, result, u.balance)], components: [] });
+    }
+
     if (interaction.isStringSelectMenu() && cid === 'store_select_corp') {
         const corpId = interaction.values[0];
         const c = corpData[corpId];
@@ -498,7 +605,107 @@ async function handleEconInteraction(interaction) {
 
 async function handleEconModal(interaction) {
     const cid = interaction.customId;
-    const { user } = interaction;
+    const { user, guild } = interaction;
+    const econ = load(ECON_FILE);
+
+    // ==================== 強盗モーダル ====================
+    if (cid === 'modal_earn_rob') {
+        const input = interaction.fields.getTextInputValue('rob_target_id').trim().replace(/[<@!>]/g, '');
+        const robber = getUser(econ, user.id, user);
+        let targetUser = null;
+        if (guild) targetUser = await guild.members.fetch(input).catch(() => null);
+        if (!targetUser) return interaction.reply({ content: '❌ ユーザーが見つかりません。', ...EPH });
+        const target = targetUser.user;
+        if (target.id === user.id) return interaction.reply({ content: '❌ 自分は強盗できません。', ...EPH });
+        if (target.bot) return interaction.reply({ content: '❌ Botは強盗できません。', ...EPH });
+        const victim = getUser(econ, target.id, target);
+        if (victim.balance < 100) return interaction.reply({ content: `❌ **${target.username}** の残高が少なすぎます。`, ...EPH });
+        const success = Math.random() < 0.4;
+        let embed;
+        if (success) {
+            const stolen = Math.floor(victim.balance * (0.1 + Math.random() * 0.2));
+            robber.balance += stolen; victim.balance -= stolen;
+            embed = new EmbedBuilder().setTitle('🔫 強盗成功！').setDescription(`**${target.username}** から **${stolen.toLocaleString()}** 🪙 を奪った！\n残高: **${robber.balance.toLocaleString()}** 🪙`).setColor(0x57f287);
+        } else {
+            const fine = Math.floor(robber.balance * 0.1 + 200);
+            robber.balance = Math.max(0, robber.balance - fine);
+            embed = new EmbedBuilder().setTitle('🚔 強盗失敗！').setDescription(`捕まった！罰金 **${fine.toLocaleString()}** 🪙\n残高: **${robber.balance.toLocaleString()}** 🪙`).setColor(0xff4757);
+        }
+        save(ECON_FILE, econ);
+        return interaction.reply({ embeds: [embed], components: [delBtn()] });
+    }
+
+    // ==================== コインフリップモーダル ====================
+    if (cid === 'modal_earn_flip') {
+        const amount = parseInt(interaction.fields.getTextInputValue('flip_amount')) || 0;
+        const sideInput = interaction.fields.getTextInputValue('flip_side').trim().toLowerCase();
+        const side = sideInput === 'omote' || sideInput === '表' ? 'heads' : sideInput === 'ura' || sideInput === '裏' ? 'tails' : null;
+        if (!side) return interaction.reply({ content: '❌ 表は `omote`、裏は `ura` で入力してください。', ...EPH });
+        if (amount <= 0) return interaction.reply({ content: '❌ 有効な金額を入力してください。', ...EPH });
+        const u = getUser(econ, user.id, user);
+        if (u.balance < amount) return interaction.reply({ content: `❌ 残高不足。現在: **${u.balance.toLocaleString()}** 🪙`, ...EPH });
+        const result = Math.random() < 0.5 ? 'heads' : 'tails';
+        const win = result === side;
+        if (win) u.balance += amount; else u.balance -= amount;
+        save(ECON_FILE, econ);
+        const embed = new EmbedBuilder()
+            .setTitle(win ? '🎉 勝利！' : '😢 敗北...')
+            .setColor(win ? 0x57f287 : 0xff4757)
+            .addFields(
+                { name: '選択', value: side === 'heads' ? '表 🪙' : '裏 🔄', inline: true },
+                { name: '結果', value: result === 'heads' ? '表 🪙' : '裏 🔄', inline: true },
+                { name: win ? `+${amount.toLocaleString()} 獲得` : `-${amount.toLocaleString()} 没収`, value: `残高: **${u.balance.toLocaleString()}** 🪙`, inline: false }
+            );
+        return interaction.reply({ embeds: [embed], components: [delBtn()] });
+    }
+
+    // ==================== スロットモーダル ====================
+    if (cid === 'modal_earn_slots') {
+        const amount = parseInt(interaction.fields.getTextInputValue('slots_amount')) || 0;
+        if (amount <= 0) return interaction.reply({ content: '❌ 有効な金額を入力してください。', ...EPH });
+        const u = getUser(econ, user.id, user);
+        if (u.balance < amount) return interaction.reply({ content: `❌ 残高不足。現在: **${u.balance.toLocaleString()}** 🪙`, ...EPH });
+        const symbols = ['🍒', '🍋', '🍊', '🍇', '⭐', '💎'];
+        const roll = () => symbols[Math.floor(Math.random() * symbols.length)];
+        const s = [roll(), roll(), roll()];
+        let multiplier = 0;
+        if (s[0] === s[1] && s[1] === s[2]) multiplier = s[0] === '💎' ? 10 : s[0] === '⭐' ? 5 : 3;
+        else if (s[0] === s[1] || s[1] === s[2] || s[0] === s[2]) multiplier = 1.5;
+        const win = multiplier > 0;
+        const payout = win ? Math.floor(amount * multiplier) : 0;
+        u.balance += payout - amount;
+        save(ECON_FILE, econ);
+        const embed = new EmbedBuilder().setTitle('🎰 スロット')
+            .setDescription(`**[ ${s.join(' | ')} ]**\n\n${win ? `🎉 **${multiplier}x** 当たり！ **+${payout.toLocaleString()}** 🪙` : `💸 ハズレ... **-${amount.toLocaleString()}** 🪙`}`)
+            .setColor(win ? 0xf1c40f : 0x95a5a6)
+            .addFields({ name: '残高', value: `**${u.balance.toLocaleString()}** 🪙`, inline: true });
+        return interaction.reply({ embeds: [embed], components: [delBtn()] });
+    }
+
+    // ==================== BJモーダル ====================
+    if (cid === 'modal_earn_bj') {
+        const bet = parseInt(interaction.fields.getTextInputValue('bj_amount')) || 0;
+        if (bet <= 0) return interaction.reply({ content: '❌ 有効な金額を入力してください。', ...EPH });
+        const u = getUser(econ, user.id, user);
+        if (u.balance < bet) return interaction.reply({ content: `❌ 残高不足。現在: **${u.balance.toLocaleString()}** 🪙`, ...EPH });
+        const deck = buildDeck();
+        const playerCards = [drawCard(deck), drawCard(deck)];
+        const dealerCards = [drawCard(deck), drawCard(deck)];
+        const gameKey = `${user.id}_${Date.now()}`;
+        bjGames.set(gameKey, { userId: user.id, bet, deck, playerCards, dealerCards });
+        // BJ判定
+        if (calcBJ(playerCards) === 21) {
+            u.balance += Math.floor(bet * 1.5);
+            save(ECON_FILE, econ);
+            bjGames.delete(gameKey);
+            const game = bjGames.get(gameKey) || { userId: user.id, bet, deck, playerCards, dealerCards };
+            return interaction.reply({ embeds: [buildBJEmbed({ userId: user.id, bet, playerCards, dealerCards }, 'bj', u.balance)], components: [] });
+        }
+        const game = bjGames.get(gameKey);
+        return interaction.reply({ embeds: [buildBJEmbed(game, 'playing')], components: buildBJRows(gameKey) });
+    }
+
+    // ==================== ストア商品追加モーダル ====================
     const corpData = load(CORP_FILE);
     if (cid.startsWith('modal_store_additem_')) {
         const corpId = cid.replace('modal_store_additem_', '');
