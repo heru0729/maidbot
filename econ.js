@@ -21,6 +21,24 @@ function getUser(econ, userId, user) {
     return econ[userId];
 }
 
+// ==================== 株式チャート ====================
+function buildStockChart(history) {
+    if (!history || history.length < 2) return null;
+    const h = history.slice(-10);
+    const max = Math.max(...h), min = Math.min(...h);
+    const rows = 5;
+    const chart = Array.from({ length: rows }, () => Array(h.length).fill(' '));
+    h.forEach((v, x) => {
+        const row = max === min ? 0 : Math.floor((max - v) / (max - min) * (rows - 1));
+        chart[row][x] = '█';
+    });
+    const lines = chart.map((row, i) => {
+        const label = (max - (max - min) * i / (rows - 1)).toFixed(0).padStart(6);
+        return `${label} |${row.join('')}`;
+    });
+    return lines.join('\n') + `\n${'─'.repeat(7 + h.length)}`;
+}
+
 // ==================== ブラックジャック ====================
 const bjGames = new Map(); // gameKey -> game state
 
@@ -94,6 +112,8 @@ function buildEarnPanel(u, now) {
     const dailyRem = 86400000 - (now - (u.dailyLast || 0));
     const workRem  = 3600000  - (now - (u.workLast  || 0));
     const crimeRem = 7200000  - (now - (u.crimeLast || 0));
+    const huntRem  = 1800000  - (now - (u.huntLast  || 0));
+    const fishRem  = 2700000  - (now - (u.fishLast  || 0));
     const streak = u.dailyStreak || 0;
     const embed = new EmbedBuilder()
         .setTitle('💰 お金を稼ぐ')
@@ -102,6 +122,8 @@ function buildEarnPanel(u, now) {
             { name: '🎁 デイリー', value: `200〜400+ボーナス ${CURRENCY}\n連続${streak}日目 🔥\n${cdStr(dailyRem)}`, inline: true },
             { name: '💼 労働', value: `50〜300 ${CURRENCY}\nCD: 1時間\n${cdStr(workRem)}`, inline: true },
             { name: '🦹 犯罪', value: `成功: 100〜2000 ${CURRENCY}\n失敗: 没収あり\nCD: 2時間\n${cdStr(crimeRem)}`, inline: true },
+            { name: '🏹 狩猟', value: `獲物を狩る\nアイテムドロップあり\nCD: 30分\n${cdStr(huntRem)}`, inline: true },
+            { name: '🎣 釣り', value: `魚を釣る\nレア魚は高値\nCD: 45分\n${cdStr(fishRem)}`, inline: true },
             { name: '🔫 強盗', value: `他ユーザーの10〜30%奪取\n失敗: 罰金あり`, inline: true },
             { name: '🪙 コインフリップ', value: `賭け金額を2倍か没収\n50%の確率`, inline: true },
             { name: '🎰 スロット', value: `最大10倍\n💎揃い: 10x / ⭐揃い: 5x`, inline: true },
@@ -113,12 +135,16 @@ function buildEarnPanel(u, now) {
         new ButtonBuilder().setCustomId('earn_crime').setLabel('🦹 犯罪').setStyle(ButtonStyle.Danger).setDisabled(crimeRem > 0)
     );
     const row2 = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('earn_rob').setLabel('🔫 強盗').setStyle(ButtonStyle.Danger),
+        new ButtonBuilder().setCustomId('earn_hunt').setLabel('🏹 狩猟').setStyle(ButtonStyle.Success).setDisabled(huntRem > 0),
+        new ButtonBuilder().setCustomId('earn_fish').setLabel('🎣 釣り').setStyle(ButtonStyle.Primary).setDisabled(fishRem > 0),
+        new ButtonBuilder().setCustomId('earn_rob').setLabel('🔫 強盗').setStyle(ButtonStyle.Danger)
+    );
+    const row3 = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('earn_flip').setLabel('🪙 コインフリップ').setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId('earn_slots').setLabel('🎰 スロット').setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId('earn_bj').setLabel('🃏 BJ').setStyle(ButtonStyle.Primary)
     );
-    return { embeds: [embed], components: [row1, row2] };
+    return { embeds: [embed], components: [row1, row2, row3] };
 }
 
 const econCommands = [
@@ -130,8 +156,12 @@ const econCommands = [
     new SlashCommandBuilder().setName('sell').setDescription('インベントリのアイテムを売却します').addStringOption(o => o.setName('item').setDescription('アイテム名').setRequired(true)).addIntegerOption(o => o.setName('amount').setDescription('売却数（未指定で1個）').setMinValue(1)),
     new SlashCommandBuilder().setName('inventory').setDescription('所持アイテムを確認します').addUserOption(o => o.setName('user').setDescription('対象ユーザー（未指定なら自分）')),
     new SlashCommandBuilder().setName('econrank').setDescription('所持金ランキングを表示します'),
+    new SlashCommandBuilder().setName('bank').setDescription('銀行メニュー（残高確認・ローン・返済）'),
     new SlashCommandBuilder().setName('corp').setDescription('会社を設立します（1人2社まで・設立費用10,000枚）').addStringOption(o => o.setName('name').setDescription('会社名').setRequired(true)).addStringOption(o => o.setName('description').setDescription('会社の説明').setRequired(true)),
     new SlashCommandBuilder().setName('store').setDescription('会社のストアを管理・表示します').addStringOption(o => o.setName('corp').setDescription('会社名（未指定で一覧）')),
+    new SlashCommandBuilder().setName('stock').setDescription('株式市場（会社の株売買・チャート）').addStringOption(o => o.setName('corp').setDescription('会社名（未指定で市場一覧）')),
+    new SlashCommandBuilder().setName('buystock').setDescription('株を購入します').addStringOption(o => o.setName('corp').setDescription('会社名').setRequired(true)).addIntegerOption(o => o.setName('amount').setDescription('購入株数').setRequired(true).setMinValue(1)),
+    new SlashCommandBuilder().setName('sellstock').setDescription('株を売却します').addStringOption(o => o.setName('corp').setDescription('会社名').setRequired(true)).addIntegerOption(o => o.setName('amount').setDescription('売却株数').setRequired(true).setMinValue(1)),
 ];
 
 async function handleEcon(interaction) {
@@ -288,6 +318,121 @@ async function handleEcon(interaction) {
         return interaction.reply({ embeds: [embed], components: [delBtn()] });
     }
 
+    // ==================== /bank ====================
+    if (commandName === 'bank') {
+        const u = getUser(econ, user.id, user);
+        const loan = u.loan || 0;
+        const embed = new EmbedBuilder()
+            .setTitle('🏦 銀行')
+            .setColor(0x2ecc71)
+            .addFields(
+                { name: '残高', value: `**${u.balance.toLocaleString()}** ${CURRENCY}`, inline: true },
+                { name: '借入残高', value: `**${loan.toLocaleString()}** ${CURRENCY}`, inline: true },
+                { name: 'ローン上限', value: `**${(5000).toLocaleString()}** ${CURRENCY}`, inline: true }
+            )
+            .setDescription('ローンを借りると毎日5%の利子が加算されます。')
+            .setFooter({ text: '返済は「返済」ボタンから' });
+        const row = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('bank_loan').setLabel('💸 借りる').setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId('bank_repay').setLabel('💰 返済する').setStyle(ButtonStyle.Success).setDisabled(loan <= 0)
+        );
+        return interaction.reply({ embeds: [embed], components: [row] });
+    }
+
+    // ==================== /stock ====================
+    if (commandName === 'stock') {
+        const corpData = load(CORP_FILE);
+        const corpName = options.getString('corp');
+        if (corpName) {
+            const c = Object.values(corpData).find(c => c.name.toLowerCase() === corpName.toLowerCase());
+            if (!c) return interaction.reply({ content: `❌ **${corpName}** という会社は存在しません。`, ...EPH });
+            if (!c.stock) return interaction.reply({ content: `❌ **${c.name}** はまだ株式を発行していません。オーナーが \`/store\` から発行できます。`, ...EPH });
+            const price = c.stock.price;
+            const history = c.stock.history || [];
+            const chartStr = buildStockChart(history);
+            const userShares = (u.stocks || {})[c.id] || 0;
+            const embed = new EmbedBuilder()
+                .setTitle(`📈 ${c.name} 株式情報`)
+                .setColor(price > (history[history.length - 2] || price) ? 0x57f287 : 0xff4757)
+                .addFields(
+                    { name: '現在株価', value: `**${price.toLocaleString()}** ${CURRENCY}`, inline: true },
+                    { name: '発行株数', value: `**${c.stock.totalShares.toLocaleString()}** 株`, inline: true },
+                    { name: '保有株数', value: `**${userShares}** 株`, inline: true },
+                    { name: '時価総額', value: `**${(price * c.stock.totalShares).toLocaleString()}** ${CURRENCY}`, inline: true }
+                )
+                .setDescription(chartStr ? `\`\`\`\n${chartStr}\n\`\`\`` : '価格履歴なし');
+            const row = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId(`stock_buy_${c.id}`).setLabel('📈 買う').setStyle(ButtonStyle.Success),
+                new ButtonBuilder().setCustomId(`stock_sell_${c.id}`).setLabel('📉 売る').setStyle(ButtonStyle.Danger).setDisabled(userShares <= 0)
+            );
+            return interaction.reply({ embeds: [embed], components: [row, delBtn()] });
+        }
+        // 市場一覧
+        const all = Object.values(corpData).filter(c => c.stock);
+        if (all.length === 0) return interaction.reply({ content: '📊 現在株式を発行している会社はありません。', ...EPH });
+        const embed = new EmbedBuilder().setTitle('📊 株式市場').setColor(0x3498db)
+            .setDescription(all.map((c, i) => {
+                const prev = c.stock.history?.slice(-2)[0] || c.stock.price;
+                const diff = c.stock.price - prev;
+                const arrow = diff > 0 ? '📈' : diff < 0 ? '📉' : '➡️';
+                return `**${i + 1}. ${c.name}** ${arrow}\n株価: **${c.stock.price.toLocaleString()}** ${CURRENCY}　発行: ${c.stock.totalShares}株`;
+            }).join('\n\n'))
+            .setFooter({ text: '/stock [会社名] で詳細・売買' });
+        return interaction.reply({ embeds: [embed], components: [delBtn()] });
+    }
+
+    // ==================== /buystock ====================
+    if (commandName === 'buystock') {
+        const corpName = options.getString('corp');
+        const amount = options.getInteger('amount');
+        const corpData = load(CORP_FILE);
+        const c = Object.values(corpData).find(c => c.name.toLowerCase() === corpName.toLowerCase());
+        if (!c) return interaction.reply({ content: `❌ **${corpName}** という会社は存在しません。`, ...EPH });
+        if (!c.stock) return interaction.reply({ content: `❌ **${c.name}** はまだ株式を発行していません。`, ...EPH });
+        const u = getUser(econ, user.id, user);
+        const total = c.stock.price * amount;
+        if (u.balance < total) return interaction.reply({ content: `❌ 残高不足。必要: **${total.toLocaleString()}** ${CURRENCY}　現在: **${u.balance.toLocaleString()}** ${CURRENCY}`, ...EPH });
+        if (c.stock.availableShares < amount) return interaction.reply({ content: `❌ 購入可能株数が不足しています。現在: **${c.stock.availableShares}** 株`, ...EPH });
+        u.balance -= total;
+        if (!u.stocks) u.stocks = {};
+        u.stocks[c.id] = (u.stocks[c.id] || 0) + amount;
+        c.stock.availableShares -= amount;
+        c.balance = (c.balance || 0) + total;
+        // 価格変動（需要で上昇）
+        c.stock.price = Math.ceil(c.stock.price * (1 + 0.01 * Math.min(amount, 10)));
+        if (!c.stock.history) c.stock.history = [];
+        c.stock.history.push(c.stock.price);
+        if (c.stock.history.length > 20) c.stock.history.shift();
+        save(ECON_FILE, econ);
+        save(CORP_FILE, corpData);
+        return interaction.reply({ content: `✅ **${c.name}** の株を **${amount}** 株 (**${total.toLocaleString()}** ${CURRENCY}) で購入しました！\n現在株価: **${c.stock.price.toLocaleString()}** ${CURRENCY}`, components: [delBtn()] });
+    }
+
+    // ==================== /sellstock ====================
+    if (commandName === 'sellstock') {
+        const corpName = options.getString('corp');
+        const amount = options.getInteger('amount');
+        const corpData = load(CORP_FILE);
+        const c = Object.values(corpData).find(c => c.name.toLowerCase() === corpName.toLowerCase());
+        if (!c) return interaction.reply({ content: `❌ **${corpName}** という会社は存在しません。`, ...EPH });
+        if (!c.stock) return interaction.reply({ content: `❌ **${c.name}** は株式を発行していません。`, ...EPH });
+        const u = getUser(econ, user.id, user);
+        const held = (u.stocks || {})[c.id] || 0;
+        if (held < amount) return interaction.reply({ content: `❌ 保有株数が不足しています。現在: **${held}** 株`, ...EPH });
+        const total = c.stock.price * amount;
+        u.balance += total;
+        u.stocks[c.id] -= amount;
+        c.stock.availableShares += amount;
+        // 価格変動（売りで下落）
+        c.stock.price = Math.max(1, Math.floor(c.stock.price * (1 - 0.008 * Math.min(amount, 10))));
+        if (!c.stock.history) c.stock.history = [];
+        c.stock.history.push(c.stock.price);
+        if (c.stock.history.length > 20) c.stock.history.shift();
+        save(ECON_FILE, econ);
+        save(CORP_FILE, corpData);
+        return interaction.reply({ content: `✅ **${c.name}** の株を **${amount}** 株 (**${total.toLocaleString()}** ${CURRENCY}) で売却しました！\n現在株価: **${c.stock.price.toLocaleString()}** ${CURRENCY}`, components: [delBtn()] });
+    }
+
     if (commandName === 'store') {
         const corpData = load(CORP_FILE);
         const corpName = options.getString('corp');
@@ -335,15 +480,18 @@ async function showStoreManage(interaction, c, corpData, user) {
         .addFields(
             { name: '会社残高', value: `**${(c.balance || 0).toLocaleString()}** 🪙`, inline: true },
             { name: '商品数', value: `${c.items.length}件`, inline: true },
-            { name: '従業員数', value: `${(c.employees || []).length}人`, inline: true }
+            { name: '株式', value: c.stock ? `株価: **${c.stock.price.toLocaleString()}** 🪙` : '未発行', inline: true }
         );
-    const row = new ActionRowBuilder().addComponents(
+    const row1 = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId(`store_additem_${c.id}`).setLabel('商品追加').setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId(`store_removeitem_${c.id}`).setLabel('商品削除').setStyle(ButtonStyle.Danger),
-        new ButtonBuilder().setCustomId(`store_withdraw_${c.id}`).setLabel('売上回収').setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId(`store_withdraw_${c.id}`).setLabel('売上回収').setStyle(ButtonStyle.Success)
+    );
+    const row2 = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`store_issuestock_${c.id}`).setLabel('📊 株式発行').setStyle(ButtonStyle.Secondary).setDisabled(!!c.stock),
         new ButtonBuilder().setCustomId('delete_reply').setLabel('✕ 閉じる').setStyle(ButtonStyle.Secondary)
     );
-    return interaction.reply({ embeds: [embed], components: [row], ...EPH });
+    return interaction.reply({ embeds: [embed], components: [row1, row2], ...EPH });
 }
 
 async function handleEconInteraction(interaction) {
@@ -421,12 +569,109 @@ async function handleEconInteraction(interaction) {
             }
         }
 
-        save(ECON_FILE, econ);
+        if (cid === 'earn_hunt') {
+            const remaining = 1800000 - (now - (u.huntLast || 0));
+            if (remaining > 0) return interaction.reply({ content: `⏳ まだ狩りに行けません。${cdStr(remaining)}`, ...EPH });
+            u.huntLast = now;
+            const hunts = [
+                { name: 'ウサギ',   item: '🐰 ウサギの毛皮', sell: 80,   rare: false },
+                { name: 'シカ',     item: '🦌 シカの角',     sell: 250,  rare: false },
+                { name: 'クマ',     item: '🐻 クマの毛皮',   sell: 500,  rare: true  },
+                { name: 'キツネ',   item: '🦊 キツネの毛皮', sell: 150,  rare: false },
+                { name: 'イノシシ', item: '🐗 イノシシの牙', sell: 200,  rare: false },
+                { name: 'オオカミ', item: '🐺 オオカミの毛皮',sell: 400, rare: true  },
+            ];
+            const weights = hunts.map(h => h.rare ? 1 : 3);
+            const wtotal = weights.reduce((a, b) => a + b, 0);
+            let wr = Math.random() * wtotal, hunt = hunts[0];
+            for (let i = 0; i < hunts.length; i++) { wr -= weights[i]; if (wr <= 0) { hunt = hunts[i]; break; } }
+            if (!u.inventory) u.inventory = [];
+            u.inventory.push({ name: hunt.item, boughtAt: now, sellPrice: hunt.sell });
+            resultEmbed = new EmbedBuilder()
+                .setTitle(`🏹 ${hunt.name}を仕留めた！`)
+                .setDescription(`**${hunt.item}** を手に入れた！\n売却価格: **${hunt.sell.toLocaleString()}** ${CURRENCY}\n\`/sell\` で売却できます。`)
+                .setColor(hunt.rare ? 0xf1c40f : 0x57f287).setTimestamp();
+        }
+
+        if (cid === 'earn_fish') {
+            const remaining = 2700000 - (now - (u.fishLast || 0));
+            if (remaining > 0) return interaction.reply({ content: `⏳ まだ釣りに行けません。${cdStr(remaining)}`, ...EPH });
+            u.fishLast = now;
+            const fishes = [
+                { name: 'コイ',     item: '🐟 コイ',        sell: 60,   rare: false,  legendary: false },
+                { name: 'サーモン', item: '🐠 サーモン',     sell: 150,  rare: false,  legendary: false },
+                { name: 'マグロ',   item: '🐡 マグロ',       sell: 400,  rare: true,   legendary: false },
+                { name: 'フグ',     item: '🐡 フグ',         sell: 300,  rare: true,   legendary: false },
+                { name: 'タコ',     item: '🐙 タコ',         sell: 200,  rare: false,  legendary: false },
+                { name: 'ゴミ',     item: '🗑️ ゴミ',        sell: 5,    rare: false,  legendary: false },
+                { name: '伝説の魚', item: '✨ 伝説の魚',     sell: 2000, rare: true,   legendary: true  },
+            ];
+            const weights = fishes.map(f => f.legendary ? 0.2 : f.rare ? 1 : 4);
+            const wtotal = weights.reduce((a, b) => a + b, 0);
+            let wr = Math.random() * wtotal, fish = fishes[0];
+            for (let i = 0; i < fishes.length; i++) { wr -= weights[i]; if (wr <= 0) { fish = fishes[i]; break; } }
+            if (!u.inventory) u.inventory = [];
+            u.inventory.push({ name: fish.item, boughtAt: now, sellPrice: fish.sell });
+            resultEmbed = new EmbedBuilder()
+                .setTitle(fish.legendary ? '🌟 伝説の魚を釣り上げた！！' : `🎣 ${fish.name} を釣った！`)
+                .setDescription(`**${fish.item}** を手に入れた！\n売却価格: **${fish.sell.toLocaleString()}** ${CURRENCY}\n\`/sell\` で売却できます。`)
+                .setColor(fish.legendary ? 0xf1c40f : fish.rare ? 0x3498db : 0x95a5a6).setTimestamp();
+        }
+
+        if (!resultEmbed) return;
         // パネルを更新してから結果をephemeralで送信
         const updatedPanel = buildEarnPanel(u, now);
         await interaction.update(updatedPanel);
         await interaction.followUp({ embeds: [resultEmbed], ...EPH });
         return;
+    }
+
+    // 銀行ボタン
+    if (cid === 'bank_loan') {
+        const modal = new ModalBuilder().setCustomId('modal_bank_loan').setTitle('💸 ローンを借りる');
+        modal.addComponents(
+            new ActionRowBuilder().addComponents(
+                new TextInputBuilder().setCustomId('loan_amount').setLabel('借入額（上限5,000）').setStyle(TextInputStyle.Short).setPlaceholder('例: 1000').setRequired(true)
+            )
+        );
+        return interaction.showModal(modal);
+    }
+    if (cid === 'bank_repay') {
+        const modal = new ModalBuilder().setCustomId('modal_bank_repay').setTitle('💰 ローン返済');
+        modal.addComponents(
+            new ActionRowBuilder().addComponents(
+                new TextInputBuilder().setCustomId('repay_amount').setLabel('返済額（全額返済は「all」）').setStyle(TextInputStyle.Short).setPlaceholder('例: 500 または all').setRequired(true)
+            )
+        );
+        return interaction.showModal(modal);
+    }
+
+    // 株ボタン
+    if (cid.startsWith('stock_buy_') || cid.startsWith('stock_sell_')) {
+        const isBuy = cid.startsWith('stock_buy_');
+        const corpId = cid.replace(isBuy ? 'stock_buy_' : 'stock_sell_', '');
+        const modal = new ModalBuilder().setCustomId(`modal_stock_${isBuy ? 'buy' : 'sell'}_${corpId}`).setTitle(isBuy ? '📈 株を購入' : '📉 株を売却');
+        modal.addComponents(
+            new ActionRowBuilder().addComponents(
+                new TextInputBuilder().setCustomId('stock_amount').setLabel('株数').setStyle(TextInputStyle.Short).setPlaceholder('例: 10').setRequired(true)
+            )
+        );
+        return interaction.showModal(modal);
+    }
+
+    // ストア: 株式発行ボタン
+    if (cid.startsWith('store_issuestock_')) {
+        const corpId = cid.replace('store_issuestock_', '');
+        const modal = new ModalBuilder().setCustomId(`modal_store_issuestock_${corpId}`).setTitle('📊 株式発行');
+        modal.addComponents(
+            new ActionRowBuilder().addComponents(
+                new TextInputBuilder().setCustomId('stock_initial_price').setLabel('初期株価').setStyle(TextInputStyle.Short).setPlaceholder('例: 500').setRequired(true)
+            ),
+            new ActionRowBuilder().addComponents(
+                new TextInputBuilder().setCustomId('stock_total_shares').setLabel('発行株数').setStyle(TextInputStyle.Short).setPlaceholder('例: 100').setRequired(true)
+            )
+        );
+        return interaction.showModal(modal);
     }
 
     // 強盗 → モーダルでID/メンション入力
@@ -703,6 +948,102 @@ async function handleEconModal(interaction) {
         }
         const game = bjGames.get(gameKey);
         return interaction.reply({ embeds: [buildBJEmbed(game, 'playing')], components: buildBJRows(gameKey) });
+    }
+
+    // ==================== 銀行ローンモーダル ====================
+    if (cid === 'modal_bank_loan') {
+        const amount = parseInt(interaction.fields.getTextInputValue('loan_amount')) || 0;
+        if (amount <= 0 || amount > 5000) return interaction.reply({ content: '❌ 1〜5,000の範囲で入力してください。', ...EPH });
+        const u = getUser(econ, user.id, user);
+        const current = u.loan || 0;
+        if (current + amount > 5000) return interaction.reply({ content: `❌ 借入上限を超えます。現在の借入: **${current.toLocaleString()}** ${CURRENCY}`, ...EPH });
+        u.loan = current + amount;
+        u.balance += amount;
+        u.loanDate = u.loanDate || Date.now();
+        save(ECON_FILE, econ);
+        return interaction.reply({ content: `✅ **${amount.toLocaleString()}** ${CURRENCY} を借りました。\n借入残高: **${u.loan.toLocaleString()}** ${CURRENCY}\n※毎日5%の利子が加算されます。`, ...EPH });
+    }
+
+    // ==================== 銀行返済モーダル ====================
+    if (cid === 'modal_bank_repay') {
+        const input = interaction.fields.getTextInputValue('repay_amount').trim().toLowerCase();
+        const u = getUser(econ, user.id, user);
+        const loan = u.loan || 0;
+        if (loan <= 0) return interaction.reply({ content: '❌ 返済するローンがありません。', ...EPH });
+        const amount = input === 'all' ? loan : parseInt(input) || 0;
+        if (amount <= 0) return interaction.reply({ content: '❌ 有効な金額を入力してください。', ...EPH });
+        if (u.balance < amount) return interaction.reply({ content: `❌ 残高不足。現在: **${u.balance.toLocaleString()}** ${CURRENCY}`, ...EPH });
+        const actual = Math.min(amount, loan);
+        u.balance -= actual;
+        u.loan = loan - actual;
+        if (u.loan <= 0) { u.loan = 0; delete u.loanDate; }
+        save(ECON_FILE, econ);
+        return interaction.reply({ content: `✅ **${actual.toLocaleString()}** ${CURRENCY} を返済しました。\n残り借入: **${u.loan.toLocaleString()}** ${CURRENCY}`, ...EPH });
+    }
+
+    // ==================== 株購入モーダル ====================
+    if (cid.startsWith('modal_stock_buy_')) {
+        const corpId = cid.replace('modal_stock_buy_', '');
+        const amount = parseInt(interaction.fields.getTextInputValue('stock_amount')) || 0;
+        if (amount <= 0) return interaction.reply({ content: '❌ 有効な株数を入力してください。', ...EPH });
+        const corpData = load(CORP_FILE);
+        const c = corpData[corpId];
+        if (!c || !c.stock) return interaction.reply({ content: '❌ 会社が見つかりません。', ...EPH });
+        const u = getUser(econ, user.id, user);
+        const total = c.stock.price * amount;
+        if (u.balance < total) return interaction.reply({ content: `❌ 残高不足。必要: **${total.toLocaleString()}** / 現在: **${u.balance.toLocaleString()}** ${CURRENCY}`, ...EPH });
+        if (c.stock.availableShares < amount) return interaction.reply({ content: `❌ 購入可能株数が不足。現在: **${c.stock.availableShares}** 株`, ...EPH });
+        u.balance -= total;
+        if (!u.stocks) u.stocks = {};
+        u.stocks[c.id] = (u.stocks[c.id] || 0) + amount;
+        c.stock.availableShares -= amount;
+        c.balance = (c.balance || 0) + total;
+        c.stock.price = Math.ceil(c.stock.price * (1 + 0.01 * Math.min(amount, 10)));
+        if (!c.stock.history) c.stock.history = [];
+        c.stock.history.push(c.stock.price);
+        if (c.stock.history.length > 20) c.stock.history.shift();
+        save(ECON_FILE, econ);
+        save(CORP_FILE, corpData);
+        return interaction.reply({ content: `✅ **${c.name}** の株を **${amount}** 株 (**${total.toLocaleString()}** ${CURRENCY}) で購入しました！\n現在株価: **${c.stock.price.toLocaleString()}** ${CURRENCY}`, ...EPH });
+    }
+
+    // ==================== 株売却モーダル ====================
+    if (cid.startsWith('modal_stock_sell_')) {
+        const corpId = cid.replace('modal_stock_sell_', '');
+        const amount = parseInt(interaction.fields.getTextInputValue('stock_amount')) || 0;
+        if (amount <= 0) return interaction.reply({ content: '❌ 有効な株数を入力してください。', ...EPH });
+        const corpData = load(CORP_FILE);
+        const c = corpData[corpId];
+        if (!c || !c.stock) return interaction.reply({ content: '❌ 会社が見つかりません。', ...EPH });
+        const u = getUser(econ, user.id, user);
+        const held = (u.stocks || {})[c.id] || 0;
+        if (held < amount) return interaction.reply({ content: `❌ 保有株数不足。現在: **${held}** 株`, ...EPH });
+        const total = c.stock.price * amount;
+        u.balance += total;
+        u.stocks[c.id] -= amount;
+        c.stock.availableShares += amount;
+        c.stock.price = Math.max(1, Math.floor(c.stock.price * (1 - 0.008 * Math.min(amount, 10))));
+        if (!c.stock.history) c.stock.history = [];
+        c.stock.history.push(c.stock.price);
+        if (c.stock.history.length > 20) c.stock.history.shift();
+        save(ECON_FILE, econ);
+        save(CORP_FILE, corpData);
+        return interaction.reply({ content: `✅ **${c.name}** の株を **${amount}** 株 (**${total.toLocaleString()}** ${CURRENCY}) で売却しました！\n現在株価: **${c.stock.price.toLocaleString()}** ${CURRENCY}`, ...EPH });
+    }
+
+    // ==================== 株式発行モーダル ====================
+    if (cid.startsWith('modal_store_issuestock_')) {
+        const corpId = cid.replace('modal_store_issuestock_', '');
+        const corpData = load(CORP_FILE);
+        const c = corpData[corpId];
+        if (!c || c.ownerId !== user.id) return interaction.reply({ content: '❌ 権限がありません。', ...EPH });
+        if (c.stock) return interaction.reply({ content: '❌ すでに株式を発行しています。', ...EPH });
+        const price = parseInt(interaction.fields.getTextInputValue('stock_initial_price')) || 0;
+        const shares = parseInt(interaction.fields.getTextInputValue('stock_total_shares')) || 0;
+        if (price <= 0 || shares <= 0) return interaction.reply({ content: '❌ 有効な値を入力してください。', ...EPH });
+        c.stock = { price, totalShares: shares, availableShares: shares, history: [price] };
+        save(CORP_FILE, corpData);
+        return interaction.reply({ content: `✅ **${c.name}** の株式を発行しました！\n初期株価: **${price.toLocaleString()}** ${CURRENCY}　発行数: **${shares}** 株\n\`/stock ${c.name}\` で確認できます。`, ...EPH });
     }
 
     // ==================== ストア商品追加モーダル ====================
