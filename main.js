@@ -1224,7 +1224,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
 
         // econ ボタン
-        const econBtnPrefixes = ['earn_daily', 'earn_work', 'earn_crime', 'store_additem_', 'store_removeitem_', 'store_withdraw_'];
+        const econBtnPrefixes = ['earn_daily', 'earn_work', 'earn_crime', 'earn_rob', 'earn_flip', 'earn_slots', 'earn_bj', 'bj_hit_', 'bj_stand_', 'bj_double_', 'store_additem_', 'store_removeitem_', 'store_withdraw_'];
         if (econBtnPrefixes.some(p => cid.startsWith(p))) {
             await handleEconInteraction(interaction);
         }
@@ -1241,7 +1241,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     // econ モーダル
-    if (interaction.isModalSubmit() && interaction.customId.startsWith('modal_store_')) {
+    if (interaction.isModalSubmit() && (interaction.customId.startsWith('modal_store_') || interaction.customId.startsWith('modal_earn_'))) {
         await handleEconModal(interaction);
     }
 });
