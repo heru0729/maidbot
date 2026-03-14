@@ -29,8 +29,8 @@ const CURRENCY = '🪙';
 // コマンド定義をエクスポート
 const econCommands = [
     new SlashCommandBuilder().setName('balance').setDescription('所持金を確認します').addUserOption(o => o.setName('user').setDescription('対象ユーザー（未指定なら自分）')),
-    new SlashCommandBuilder().setName('daily').setDescription(`毎日${CURRENCY}をもらいます（24時間クールダウン）`),
-    new SlashCommandBuilder().setName('work').setDescription(`働いて${CURRENCY}を稼ぎます（1時間クールダウン）`),
+    new SlashCommandBuilder().setName('daily').setDescription('毎日コインをもらいます（24時間クールダウン）'),
+    new SlashCommandBuilder().setName('work').setDescription('働いてコインを稼ぎます（1時間クールダウン）'),
     new SlashCommandBuilder().setName('transfer').setDescription('他のユーザーに送金します').addUserOption(o => o.setName('user').setDescription('送金先ユーザー').setRequired(true)).addIntegerOption(o => o.setName('amount').setDescription('金額').setRequired(true).setMinValue(1)),
     new SlashCommandBuilder().setName('shop').setDescription('ショップのアイテム一覧を表示します'),
     new SlashCommandBuilder().setName('buy').setDescription('アイテムを購入します').addStringOption(o => o.setName('item').setDescription('アイテム名').setRequired(true)),
@@ -38,7 +38,7 @@ const econCommands = [
     new SlashCommandBuilder().setName('econrank').setDescription('所持金ランキングを表示します'),
     new SlashCommandBuilder().setName('additem').setDescription('ショップにアイテムを追加します').addStringOption(o => o.setName('name').setDescription('アイテム名').setRequired(true)).addIntegerOption(o => o.setName('price').setDescription('価格').setRequired(true).setMinValue(1)).addStringOption(o => o.setName('description').setDescription('説明').setRequired(true)).addRoleOption(o => o.setName('role').setDescription('購入時に付与するロール（任意）')).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
     new SlashCommandBuilder().setName('removeitem').setDescription('ショップからアイテムを削除します').addStringOption(o => o.setName('name').setDescription('アイテム名').setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-    new SlashCommandBuilder().setName('give').setDescription('管理者がユーザーに直接通貨を付与します').addUserOption(o => o.setName('user').setDescription('対象ユーザー').setRequired(true)).addIntegerOption(o => o.setName('amount').setDescription('金額（負の値で減算）').setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+    new SlashCommandBuilder().setName('give').setDescription('管理者がユーザーに直接通貨を付与/減算します').addUserOption(o => o.setName('user').setDescription('対象ユーザー').setRequired(true)).addIntegerOption(o => o.setName('amount').setDescription('金額（負の値で減算）').setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
 ];
 
 const delBtn = () => new ActionRowBuilder().addComponents(
