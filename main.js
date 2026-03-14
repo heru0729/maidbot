@@ -213,7 +213,7 @@ client.once(Events.ClientReady, async () => {
     setTimeout(updateStatus, 3000);
     setInterval(updateStatus, 30000);
 
-    // ローン利子処理（1時間ごとにチェック、日次で5%加算）
+    // ローン利子処理（1時間ごとにチェック、3時間ごとに5%加算）
     setInterval(() => {
         const fs = require('fs'), path = require('path');
         const econPath = path.join(__dirname, 'data', 'econ.json');
@@ -224,11 +224,11 @@ client.once(Events.ClientReady, async () => {
         for (const [id, u] of Object.entries(econ)) {
             if (!u.loan || u.loan <= 0) continue;
             const lastCharge = u.lastInterestCharge || u.loanDate || now;
-            const daysPassed = Math.floor((now - lastCharge) / 86400000);
-            if (daysPassed >= 1) {
-                const interest = Math.ceil(u.loan * 0.05 * daysPassed);
+            const periodsPassed = Math.floor((now - lastCharge) / 10800000); // 3時間
+            if (periodsPassed >= 1) {
+                const interest = Math.ceil(u.loan * 0.05 * periodsPassed);
                 u.loan += interest;
-                u.lastInterestCharge = now;
+                u.lastInterestCharge = lastCharge + periodsPassed * 10800000;
                 changed = true;
                 console.log(`[利子] ユーザー ${id}: +${interest} (合計 ${u.loan})`);
             }
@@ -1256,7 +1256,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
     // econ セレクトメニュー
     if (interaction.isStringSelectMenu()) {
         const cid = interaction.customId;
-        if (cid === 'store_select_corp' || cid.startsWith('store_buy_')) {
+        const econSelectPrefixes = ['store_select_corp', 'store_select_view', 'store_select_mixed', 'store_buy_', 'stock_select_view', 'stock_buyselect_', 'stock_sellselect_'];
+        if (econSelectPrefixes.some(p => cid === p || cid.startsWith(p))) {
             await handleEconInteraction(interaction);
         } else if (cid.startsWith('store_delitem_select_')) {
             await handleEconSelect(interaction);
@@ -1340,6 +1341,26 @@ client.on(Events.MessageCreate, async (message) => {
     const servers = loadData(SERVERS_FILE);
     const users = loadData(USERS_FILE);
     const gid = message.guildId;
+
+    // !bal コマンド（全員使用可）
+    if (message.content.toLowerCase().startsWith('!bal')) {
+        const fs = require('fs'), path = require('path');
+        const econPath = path.join(__dirname, 'data', 'econ.json');
+        const econ = fs.existsSync(econPath) ? JSON.parse(fs.readFileSync(econPath, 'utf8')) : {};
+        const mention = message.mentions.users.first();
+        const target = mention || message.author;
+        const u = econ[target.id] || { balance: 0 };
+        const loan = u.loan || 0;
+        const { EmbedBuilder: EB } = require('discord.js');
+        const embed = new EB().setTitle(`🪙 ${target.username} の所持金`)
+            .setThumbnail(target.displayAvatarURL())
+            .setColor(0xf1c40f)
+            .addFields(
+                { name: '残高', value: `**${u.balance.toLocaleString()}** 🪙`, inline: true },
+                { name: '借入残高', value: `**${loan.toLocaleString()}** 🪙`, inline: true }
+            ).setTimestamp();
+        return message.reply({ embeds: [embed] });
+    }
 
     if (!message.channel.name?.startsWith('ticket-')) recordMessage(gid, message.channelId, message.author.id);
 
