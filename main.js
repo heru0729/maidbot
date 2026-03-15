@@ -247,17 +247,63 @@ client.once(Events.ClientReady, async () => {
         for (const [id, u] of Object.entries(econ)) {
             if (!u.loan || u.loan <= 0) continue;
             const lastCharge = u.lastInterestCharge || u.loanDate || now;
-            const periodsPassed = Math.floor((now - lastCharge) / 10800000); // 3時間
+            const periodsPassed = Math.floor((now - lastCharge) / 10800000);
             if (periodsPassed >= 1) {
                 const interest = Math.ceil(u.loan * 0.05 * periodsPassed);
                 u.loan += interest;
                 u.lastInterestCharge = lastCharge + periodsPassed * 10800000;
                 changed = true;
-                console.log(`[利子] ユーザー ${id}: +${interest} (合計 ${u.loan})`);
             }
         }
         if (changed) fs.writeFileSync(econPath, JSON.stringify(econ, null, 4));
     }, 3600000);
+
+    // 1分ごとの市場自動調整（株式・仮想通貨）
+    setInterval(() => {
+        const fs = require('fs'), path = require('path');
+        const r3 = (x) => Math.round(x * 1000) / 1000;
+
+        // 株式
+        const corpPath = path.join(__dirname, 'data', 'corp.json');
+        if (fs.existsSync(corpPath)) {
+            const corp = JSON.parse(fs.readFileSync(corpPath, 'utf8'));
+            let changed = false;
+            for (const c of Object.values(corp)) {
+                if (!c.stock) continue;
+                // 流通率に基づく調整（売られてる比率が高いほど下落圧）
+                const circRatio = 1 - c.stock.availableShares / c.stock.totalShares;
+                // circRatio 0=全部売れ残り, 1=全部流通
+                const baseDrift = (circRatio - 0.5) * 0.008; // -0.4%〜+0.4%
+                const noise = (Math.random() - 0.5) * 0.012; // ±0.6%
+                const change = 1 + baseDrift + noise;
+                c.stock.price = r3(Math.max(0.001, c.stock.price * change));
+                c.stock.history = c.stock.history || [];
+                c.stock.history.push(c.stock.price);
+                if (c.stock.history.length > 60) c.stock.history.shift();
+                changed = true;
+            }
+            if (changed) fs.writeFileSync(corpPath, JSON.stringify(corp, null, 4));
+        }
+
+        // 仮想通貨
+        const cryptoPath = path.join(__dirname, 'data', 'crypto.json');
+        if (fs.existsSync(cryptoPath)) {
+            const cryptoData = JSON.parse(fs.readFileSync(cryptoPath, 'utf8'));
+            let changed = false;
+            for (const c of Object.values(cryptoData)) {
+                const circRatio = 1 - c.availableSupply / c.totalSupply;
+                const baseDrift = (circRatio - 0.5) * 0.01;
+                const noise = (Math.random() - 0.5) * 0.02;
+                const change = 1 + baseDrift + noise;
+                c.price = r3(Math.max(0.001, c.price * change));
+                c.history = c.history || [];
+                c.history.push(c.price);
+                if (c.history.length > 60) c.history.shift();
+                changed = true;
+            }
+            if (changed) fs.writeFileSync(cryptoPath, JSON.stringify(cryptoData, null, 4));
+        }
+    }, 60000);
 
     const commands = [
         new SlashCommandBuilder().setName('help').setDescription('ボットのコマンド一覧を表示します'),
@@ -339,7 +385,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
                 { name: '🔍 ユーティリティ', value: '`/botstatus` `/snipe` `/top`', inline: true },
                 { name: '⚙️ 管理', value: '`/set` `/clear` `/log` `/chatlock` `/chset`', inline: true },
                 { name: '🔨 モデレート', value: '`/kick` `/ban` `/unban` `/mute` `/unmute` `/serverlock`', inline: true },
-                { name: '🪙 エコノミー', value: '`/balance` `/earn` `/send` `/bank` `/shop` `/buy` `/sell` `/inventory` `/econrank` `/corp` `/stock` `/buystock` `/sellstock`', inline: false },
+                { name: '🪙 エコノミー', value: '`/balance` `/earn` `/send` `/bank` `/shop` `/buy` `/sell` `/inventory` `/econrank` `/corp` `/crypto` `/stock` `/buystock` `/sellstock`', inline: false },
                 { name: '❓ その他', value: '`/support` `/help`', inline: true }
             ).setFooter({ text: '/set で各種サーバー設定が可能です' });
             await interaction.reply({ embeds: [embed], ...EPH });
@@ -840,7 +886,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
 
         // econコマンド
-        const econCommandNames = ['balance','earn','send','rob','flip','slots','bank','shop','buy','sell','inventory','econrank','corp','stock','buystock','sellstock'];
+        const econCommandNames = ['balance','earn','send','rob','flip','slots','bank','shop','buy','sell','inventory','econrank','corp','crypto','stock','buystock','sellstock'];
         if (econCommandNames.includes(commandName)) {
             await handleEcon(interaction);
         }
@@ -1316,7 +1362,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
 
         // econ ボタン
-        const econBtnPrefixes = ['earn_daily', 'earn_work', 'earn_crime', 'earn_hunt', 'earn_fish', 'earn_rob', 'earn_flip', 'earn_slots', 'earn_bj', 'bj_hit_', 'bj_stand_', 'bj_double_', 'bank_loan', 'bank_repay', 'bank_reload', 'stock_buy_', 'stock_sell_', 'stock_refresh_', 'store_issuestock_', 'store_additem_', 'store_removeitem_', 'store_withdraw_'];
+        const econBtnPrefixes = ['earn_daily', 'earn_work', 'earn_crime', 'bj_hit_', 'bj_stand_', 'bj_double_', 'bank_loan', 'bank_repay', 'bank_reload', 'balance_reload', 'stock_buy_', 'stock_sell_', 'stock_refresh_', 'crypto_buy_', 'crypto_sell_', 'crypto_refresh_', 'store_issuestock_', 'store_additem_', 'store_removeitem_', 'store_withdraw_'];
         if (econBtnPrefixes.some(p => cid.startsWith(p))) {
             await handleEconInteraction(interaction);
         }
@@ -1333,7 +1379,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
             saveData(SERVERS_FILE, servers);
             return interaction.reply({ content: `✅ トリガー「${removed.trigger}」の自動返信を削除しました。`, ...EPH });
         }
-        const econSelectPrefixes = ['store_select_corp', 'store_select_view', 'store_select_mixed', 'store_buy_', 'stock_select_view', 'stock_buyselect_', 'stock_sellselect_', 'corp_deposit_select_'];
+        const econSelectPrefixes = ['buy_select', 'sell_select_', 'store_select_corp', 'store_select_view', 'store_select_mixed', 'store_buy_', 'stock_select_view', 'stock_buyselect_', 'stock_sellselect_', 'corp_deposit_select_', 'crypto_view_select', 'crypto_buyselect_', 'crypto_sellselect_'];
         if (econSelectPrefixes.some(p => cid === p || cid.startsWith(p))) {
             await handleEconInteraction(interaction);
         } else if (cid.startsWith('store_delitem_select_')) {
@@ -1342,7 +1388,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     // econ モーダル
-    if (interaction.isModalSubmit() && (interaction.customId.startsWith('modal_store_') || interaction.customId.startsWith('modal_earn_') || interaction.customId.startsWith('modal_bank_') || interaction.customId.startsWith('modal_stock_'))) {
+    if (interaction.isModalSubmit() && (interaction.customId.startsWith('modal_store_') || interaction.customId.startsWith('modal_earn_') || interaction.customId.startsWith('modal_bank_') || interaction.customId.startsWith('modal_stock_') || interaction.customId.startsWith('modal_crypto_'))) {
         await handleEconModal(interaction);
     }
 });
