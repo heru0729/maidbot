@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits, Partials, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, SlashCommandBuilder, REST, Routes, Events, ChannelType, PermissionFlagsBits, ModalBuilder, TextInputBuilder, TextInputStyle, MessageFlags, ChannelSelectMenuBuilder, RoleSelectMenuBuilder, ActivityType } = require('discord.js');
+const { Client, GatewayIntentBits, Partials, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, SlashCommandBuilder, REST, Routes, Events, ChannelType, PermissionFlagsBits, ModalBuilder, TextInputBuilder, TextInputStyle, MessageFlags, ChannelSelectMenuBuilder, RoleSelectMenuBuilder, StringSelectMenuBuilder, ActivityType } = require('discord.js');
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
@@ -198,11 +198,34 @@ function buildNgwordPanel(s) {
 function createMainSetRow3(s) {
     return new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('set_menu_mute').setLabel(`ミュートロール: ${s.muteRole ? '✅設定済' : '未設定'}`).setStyle(s.muteRole ? ButtonStyle.Success : ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId('set_menu_serverlock').setLabel('サーバーロック設定').setStyle(ButtonStyle.Danger)
+        new ButtonBuilder().setCustomId('set_menu_serverlock').setLabel('サーバーロック設定').setStyle(ButtonStyle.Danger),
+        new ButtonBuilder().setCustomId('set_menu_autoreply').setLabel(`自動返信 (${(s.autoReplies || []).length}件)`).setStyle(ButtonStyle.Primary)
     );
 }
 function buildSetPanel(s) {
     return { content: '⚙️ **サーバー管理設定パネル**\n下のボタンから各機能の設定を行ってください。', components: [createMainSetRow(s), createMainSetRow2(), createMainSetRow3(s)], flags: MessageFlags.Ephemeral };
+}
+
+function buildAutoReplyPanel(s) {
+    const replies = s.autoReplies || [];
+    let desc = replies.length === 0 ? '設定なし' : replies.map((r, i) => {
+        const modeLabel = r.mode === 'reply' ? '↩️ 返信' : '💬 送信';
+        const matchLabel = r.matchType === 'exact' ? '完全一致' : '含む';
+        const resPreview = r.responses.length === 1 ? r.responses[0] : `${r.responses[0]} 他${r.responses.length - 1}件`;
+        return `**${i + 1}.** トリガー: \`${r.trigger}\`\n返答: ${resPreview.slice(0, 40)}\nモード: ${modeLabel} | 判定: ${matchLabel}`;
+    }).join('\n\n');
+    if (desc.length > 3800) desc = desc.slice(0, 3700) + '\n...(省略)';
+    return {
+        embeds: [new EmbedBuilder().setTitle('💬 自動返信設定').setDescription(desc).setColor(0x3498db).setFooter({ text: '追加: モーダルでトリガー・返答を設定 / 返答は,区切りでランダム' })],
+        components: [
+            new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('autoreply_add').setLabel('➕ 追加').setStyle(ButtonStyle.Success),
+                new ButtonBuilder().setCustomId('autoreply_del').setLabel('🗑️ 削除').setStyle(ButtonStyle.Danger).setDisabled(replies.length === 0),
+                new ButtonBuilder().setCustomId('set_back_main').setLabel('← 戻る').setStyle(ButtonStyle.Secondary)
+            )
+        ],
+        ...{flags: MessageFlags.Ephemeral}
+    };
 }
 
 setupAuth(app, loadData, saveData, USERS_FILE, CLIENT_ID, CLIENT_SECRET);
@@ -1030,6 +1053,24 @@ client.on(Events.InteractionCreate, async (interaction) => {
             await ch.setRateLimitPerUser(clamped).catch(() => null);
             await interaction.reply({ content: clamped === 0 ? `✅ 低速モードをオフにしました。` : `✅ 低速モードを **${clamped}秒** に設定しました。`, ...EPH });
         }
+
+        if (cid === 'modal_autoreply_add') {
+            const trigger = interaction.fields.getTextInputValue('ar_trigger').trim();
+            const responsesRaw = interaction.fields.getTextInputValue('ar_responses').trim();
+            const modeRaw = interaction.fields.getTextInputValue('ar_mode').trim().toLowerCase();
+            const matchRaw = interaction.fields.getTextInputValue('ar_match').trim().toLowerCase();
+            const responses = responsesRaw.split(',').map(r => r.trim()).filter(Boolean);
+            const mode = modeRaw === 'send' ? 'send' : 'reply';
+            const matchType = matchRaw === 'exact' ? 'exact' : 'contains';
+            if (!trigger || responses.length === 0) return interaction.reply({ content: '❌ トリガーと返答を入力してください。', ...EPH });
+            if (!servers[guildId].autoReplies) servers[guildId].autoReplies = [];
+            if (servers[guildId].autoReplies.length >= 50) return interaction.reply({ content: '❌ 自動返信は最大50件までです。', ...EPH });
+            servers[guildId].autoReplies.push({ trigger, responses, mode, matchType });
+            saveData(SERVERS_FILE, servers);
+            const modeLabel = mode === 'reply' ? '↩️ 返信' : '💬 送信';
+            const matchLabel = matchType === 'exact' ? '完全一致' : '含む';
+            await interaction.reply({ content: `✅ 自動返信を追加しました。\nトリガー: \`${trigger}\`\n返答: ${responses.length}件\nモード: ${modeLabel} | 判定: ${matchLabel}`, ...EPH });
+        }
     }
 
     // ==================== ボタン ====================
@@ -1214,6 +1255,34 @@ client.on(Events.InteractionCreate, async (interaction) => {
                 new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('set_back_main').setLabel('← 戻る').setStyle(ButtonStyle.Secondary))
             ]});
         }
+
+        // 自動返信管理
+        if (cid === 'set_menu_autoreply') {
+            await interaction.update(buildAutoReplyPanel(servers[guildId]));
+        }
+        if (cid === 'autoreply_add') {
+            const modal = new ModalBuilder().setCustomId('modal_autoreply_add').setTitle('自動返信 追加');
+            modal.addComponents(
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('ar_trigger').setLabel('反応するワード').setStyle(TextInputStyle.Short).setPlaceholder('例: おはよう').setRequired(true)),
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('ar_responses').setLabel('返答内容（,区切りでランダム）').setStyle(TextInputStyle.Paragraph).setPlaceholder('例: おはようございます,おはよう！,よっ').setRequired(true)),
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('ar_mode').setLabel('モード: reply（返信）/ send（送信）').setStyle(TextInputStyle.Short).setPlaceholder('reply または send').setValue('reply').setRequired(true)),
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('ar_match').setLabel('判定: exact（完全一致）/ contains（含む）').setStyle(TextInputStyle.Short).setPlaceholder('exact または contains').setValue('contains').setRequired(true))
+            );
+            return interaction.showModal(modal);
+        }
+        if (cid === 'autoreply_del') {
+            const replies = servers[guildId].autoReplies || [];
+            if (replies.length === 0) return interaction.reply({ content: '削除できる自動返信がありません。', ...EPH });
+            const select = new StringSelectMenuBuilder()
+                .setCustomId('autoreply_del_select')
+                .setPlaceholder('削除するルールを選択')
+                .addOptions(replies.slice(0, 25).map((r, i) => ({
+                    label: `${i + 1}. ${r.trigger}`,
+                    description: r.responses[0]?.slice(0, 50) || '',
+                    value: String(i)
+                })));
+            return interaction.reply({ content: '削除するルールを選択:', components: [new ActionRowBuilder().addComponents(select)], ...EPH });
+        }
         if (cid.startsWith('ticket_open_')) {
             const mid = cid.split('_')[2];
             const channel = await interaction.guild.channels.create({
@@ -1256,6 +1325,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
     // econ セレクトメニュー
     if (interaction.isStringSelectMenu()) {
         const cid = interaction.customId;
+        if (cid === 'autoreply_del_select') {
+            const servers = loadData(SERVERS_FILE);
+            const idx = parseInt(interaction.values[0]);
+            if (!servers[guildId].autoReplies || !servers[guildId].autoReplies[idx]) return interaction.reply({ content: '❌ 該当ルールが見つかりません。', ...EPH });
+            const removed = servers[guildId].autoReplies.splice(idx, 1)[0];
+            saveData(SERVERS_FILE, servers);
+            return interaction.reply({ content: `✅ トリガー「${removed.trigger}」の自動返信を削除しました。`, ...EPH });
+        }
         const econSelectPrefixes = ['store_select_corp', 'store_select_view', 'store_select_mixed', 'store_buy_', 'stock_select_view', 'stock_buyselect_', 'stock_sellselect_'];
         if (econSelectPrefixes.some(p => cid === p || cid.startsWith(p))) {
             await handleEconInteraction(interaction);
@@ -1389,6 +1466,25 @@ client.on(Events.MessageCreate, async (message) => {
                 return message.channel.send(`<@${message.author.id}> NGワードを連呼したため ${servers[gid].ngwordTimeoutSeconds || 60}秒 タイムアウトしました。`).then(m => setTimeout(() => m.delete().catch(() => {}), 5000));
             }
             return message.channel.send(`<@${message.author.id}> 不適切な言葉が含まれていたため削除しました。(${v.count}/${limit}回)`).then(m => setTimeout(() => m.delete().catch(() => {}), 3000));
+        }
+    }
+
+    // 自動返信
+    if (servers[gid]?.autoReplies?.length > 0) {
+        const text = message.content;
+        for (const rule of servers[gid].autoReplies) {
+            const matched = rule.matchType === 'exact'
+                ? text === rule.trigger
+                : text.includes(rule.trigger);
+            if (matched) {
+                const response = rule.responses[Math.floor(Math.random() * rule.responses.length)];
+                if (rule.mode === 'reply') {
+                    await message.reply(response).catch(() => {});
+                } else {
+                    await message.channel.send(response).catch(() => {});
+                }
+                break; // 最初にマッチしたルールのみ実行
+            }
         }
     }
 
