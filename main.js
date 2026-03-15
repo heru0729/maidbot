@@ -339,7 +339,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
                 { name: '🔍 ユーティリティ', value: '`/botstatus` `/snipe` `/top`', inline: true },
                 { name: '⚙️ 管理', value: '`/set` `/clear` `/log` `/chatlock` `/chset`', inline: true },
                 { name: '🔨 モデレート', value: '`/kick` `/ban` `/unban` `/mute` `/unmute` `/serverlock`', inline: true },
-                { name: '🪙 エコノミー', value: '`/balance` `/earn` `/send` `/bank` `/shop` `/buy` `/sell` `/inventory` `/econrank` `/corp` `/store` `/stock` `/buystock` `/sellstock`', inline: false },
+                { name: '🪙 エコノミー', value: '`/balance` `/earn` `/send` `/bank` `/shop` `/buy` `/sell` `/inventory` `/econrank` `/corp` `/stock` `/buystock` `/sellstock`', inline: false },
                 { name: '❓ その他', value: '`/support` `/help`', inline: true }
             ).setFooter({ text: '/set で各種サーバー設定が可能です' });
             await interaction.reply({ embeds: [embed], ...EPH });
@@ -840,7 +840,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
 
         // econコマンド
-        const econCommandNames = ['balance','earn','send','rob','flip','slots','bank','shop','buy','sell','inventory','econrank','corp','store','stock','buystock','sellstock'];
+        const econCommandNames = ['balance','earn','send','rob','flip','slots','bank','shop','buy','sell','inventory','econrank','corp','stock','buystock','sellstock'];
         if (econCommandNames.includes(commandName)) {
             await handleEcon(interaction);
         }
@@ -1316,7 +1316,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
 
         // econ ボタン
-        const econBtnPrefixes = ['earn_daily', 'earn_work', 'earn_crime', 'earn_hunt', 'earn_fish', 'earn_rob', 'earn_flip', 'earn_slots', 'earn_bj', 'bj_hit_', 'bj_stand_', 'bj_double_', 'bank_loan', 'bank_repay', 'stock_buy_', 'stock_sell_', 'store_issuestock_', 'store_additem_', 'store_removeitem_', 'store_withdraw_'];
+        const econBtnPrefixes = ['earn_daily', 'earn_work', 'earn_crime', 'earn_hunt', 'earn_fish', 'earn_rob', 'earn_flip', 'earn_slots', 'earn_bj', 'bj_hit_', 'bj_stand_', 'bj_double_', 'bank_loan', 'bank_repay', 'bank_reload', 'stock_buy_', 'stock_sell_', 'stock_refresh_', 'store_issuestock_', 'store_additem_', 'store_removeitem_', 'store_withdraw_'];
         if (econBtnPrefixes.some(p => cid.startsWith(p))) {
             await handleEconInteraction(interaction);
         }
@@ -1333,7 +1333,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
             saveData(SERVERS_FILE, servers);
             return interaction.reply({ content: `✅ トリガー「${removed.trigger}」の自動返信を削除しました。`, ...EPH });
         }
-        const econSelectPrefixes = ['store_select_corp', 'store_select_view', 'store_select_mixed', 'store_buy_', 'stock_select_view', 'stock_buyselect_', 'stock_sellselect_'];
+        const econSelectPrefixes = ['store_select_corp', 'store_select_view', 'store_select_mixed', 'store_buy_', 'stock_select_view', 'stock_buyselect_', 'stock_sellselect_', 'corp_deposit_select_'];
         if (econSelectPrefixes.some(p => cid === p || cid.startsWith(p))) {
             await handleEconInteraction(interaction);
         } else if (cid.startsWith('store_delitem_select_')) {
