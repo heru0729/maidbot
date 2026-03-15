@@ -385,7 +385,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
                 { name: '🔍 ユーティリティ', value: '`/botstatus` `/snipe` `/top`', inline: true },
                 { name: '⚙️ 管理', value: '`/set` `/clear` `/log` `/chatlock` `/chset`', inline: true },
                 { name: '🔨 モデレート', value: '`/kick` `/ban` `/unban` `/mute` `/unmute` `/serverlock`', inline: true },
-                { name: '🪙 エコノミー', value: '`/balance` `/earn` `/send` `/bank` `/shop` `/buy` `/sell` `/inventory` `/econrank` `/corp` `/crypto` `/stock` `/buystock` `/sellstock`', inline: false },
+                { name: '🪙 エコノミー', value: '`/balance` `/earn` `/hunt` `/fish` `/rob` `/flip` `/slots` `/bj` `/send` `/bank` `/shop` `/buy` `/sell` `/inventory` `/econrank` `/corp` `/crypto` `/stock` `/buystock` `/sellstock`', inline: false },
                 { name: '❓ その他', value: '`/support` `/help`', inline: true }
             ).setFooter({ text: '/set で各種サーバー設定が可能です' });
             await interaction.reply({ embeds: [embed], ...EPH });
@@ -886,7 +886,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
 
         // econコマンド
-        const econCommandNames = ['balance','earn','send','rob','flip','slots','bank','shop','buy','sell','inventory','econrank','corp','crypto','stock','buystock','sellstock'];
+        const econCommandNames = ['balance','earn','hunt','fish','rob','flip','slots','bj','send','bank','shop','buy','sell','inventory','econrank','corp','crypto','stock','buystock','sellstock'];
         if (econCommandNames.includes(commandName)) {
             await handleEcon(interaction);
         }
@@ -1362,7 +1362,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
 
         // econ ボタン
-        const econBtnPrefixes = ['earn_daily', 'earn_work', 'earn_crime', 'bj_hit_', 'bj_stand_', 'bj_double_', 'bank_loan', 'bank_repay', 'bank_reload', 'balance_reload', 'stock_buy_', 'stock_sell_', 'stock_refresh_', 'crypto_buy_', 'crypto_sell_', 'crypto_refresh_', 'store_issuestock_', 'store_additem_', 'store_removeitem_', 'store_withdraw_'];
+        const econBtnPrefixes = ['earn_daily', 'earn_work', 'earn_crime', 'earn_hunt', 'earn_fish', 'earn_rob', 'earn_flip', 'earn_slots', 'earn_bj', 'bj_hit_', 'bj_stand_', 'bj_double_', 'bank_loan', 'bank_repay', 'bank_reload', 'balance_reload', 'stock_buy_', 'stock_sell_', 'stock_refresh_', 'crypto_buy_', 'crypto_sell_', 'crypto_refresh_', 'store_issuestock_', 'store_additem_', 'store_removeitem_', 'store_withdraw_'];
         if (econBtnPrefixes.some(p => cid.startsWith(p))) {
             await handleEconInteraction(interaction);
         }
