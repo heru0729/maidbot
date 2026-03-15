@@ -8,6 +8,9 @@ const SHOP_FILE  = path.join(__dirname, 'data', 'shop.json');
 const EPH = { flags: MessageFlags.Ephemeral };
 const CURRENCY = '🪙';
 const CORP_COST = 10000;
+const FEE_RATE = 0.02; // 売買手数料2%
+const round3 = (x) => Math.round(x * 1000) / 1000;
+const fmtPrice = (x) => Number.isInteger(x) ? x.toLocaleString() : x.toFixed(3).replace(/\.?0+$/, '');
 
 function load(f) {
     if (!fs.existsSync(path.dirname(f))) fs.mkdirSync(path.dirname(f), { recursive: true });
@@ -191,7 +194,15 @@ const econCommands = [
             .addStringOption(o => o.setName('description').setDescription('会社の説明').setRequired(true)))
         .addSubcommand(sub => sub.setName('setting').setDescription('会社の管理・ストア設定').addStringOption(o => o.setName('corp').setDescription('会社名（未指定でセレクト）')))
         .addSubcommand(sub => sub.setName('deposit').setDescription('会社にお金を入れます').addStringOption(o => o.setName('corp').setDescription('会社名（未指定でセレクト）')).addStringOption(o => o.setName('amount').setDescription('金額（数字・all・half）').setRequired(true))),
-    new SlashCommandBuilder().setName('stock').setDescription('株式市場（会社の株売買・チャート）').addStringOption(o => o.setName('corp').setDescription('会社名（未指定でセレクト表示）')),
+    new SlashCommandBuilder().setName('crypto')
+        .setDescription('仮想通貨市場')
+        .addSubcommand(sub => sub.setName('create').setDescription('仮想通貨を発行します（1人1枚）')
+            .addStringOption(o => o.setName('name').setDescription('通貨名').setRequired(true))
+            .addStringOption(o => o.setName('symbol').setDescription('シンボル（例: BTC）').setRequired(true)))
+        .addSubcommand(sub => sub.setName('list').setDescription('仮想通貨一覧を表示します'))
+        .addSubcommand(sub => sub.setName('view').setDescription('チャートと詳細を表示します').addStringOption(o => o.setName('symbol').setDescription('シンボル（未指定でセレクト）')))
+        .addSubcommand(sub => sub.setName('buy').setDescription('仮想通貨を購入します').addStringOption(o => o.setName('amount').setDescription('購入枚数（数字・all）').setRequired(true)).addStringOption(o => o.setName('symbol').setDescription('シンボル（未指定でセレクト）')))
+        .addSubcommand(sub => sub.setName('sell').setDescription('仮想通貨を売却します').addStringOption(o => o.setName('amount').setDescription('売却枚数（数字・all）').setRequired(true)).addStringOption(o => o.setName('symbol').setDescription('シンボル（未指定でセレクト）'))),
     new SlashCommandBuilder().setName('buystock').setDescription('株を購入します').addStringOption(o => o.setName('amount').setDescription('購入株数（数字・all）').setRequired(true)).addStringOption(o => o.setName('corp').setDescription('会社名（未指定でセレクト表示）')),
     new SlashCommandBuilder().setName('sellstock').setDescription('株を売却します').addIntegerOption(o => o.setName('amount').setDescription('売却株数').setRequired(true).setMinValue(1)).addStringOption(o => o.setName('corp').setDescription('会社名（未指定でセレクト表示）')),
 ];
@@ -206,18 +217,25 @@ async function handleEcon(interaction) {
         const corp = load(CORP_FILE);
         const ownedCorps = Object.values(corp).filter(c => c.ownerId === target.id);
         const loan = u.loan || 0;
-        const netBalance = u.balance - loan;
+        const netBalance = round3(u.balance - loan);
         const embed = new EmbedBuilder()
             .setTitle(`${CURRENCY} ${target.username} の所持金`)
             .setThumbnail(target.displayAvatarURL())
             .setColor(netBalance < 0 ? 0xff4757 : 0xf1c40f)
             .addFields(
-                { name: '残高', value: `**${u.balance.toLocaleString()}** ${CURRENCY}`, inline: true },
-                { name: '借入残高', value: loan > 0 ? `**-${loan.toLocaleString()}** ${CURRENCY}` : 'なし', inline: true },
-                { name: '実質残高', value: `**${netBalance.toLocaleString()}** ${CURRENCY}${netBalance < 0 ? ' 🔴' : ''}`, inline: true },
+                { name: '残高', value: `**${fmtPrice(u.balance)}** ${CURRENCY}`, inline: true },
+                { name: '借入残高', value: loan > 0 ? `**-${fmtPrice(loan)}** ${CURRENCY}` : 'なし', inline: true },
+                { name: '実質残高', value: `**${fmtPrice(netBalance)}** ${CURRENCY}${netBalance < 0 ? ' 🔴' : ''}`, inline: true },
                 { name: '保有会社', value: ownedCorps.length > 0 ? ownedCorps.map(c => c.name).join(', ') : 'なし', inline: true }
             ).setTimestamp();
-        return interaction.reply({ embeds: [embed], components: [delBtn()] });
+        const isSelf = target.id === user.id;
+        const rows = [delBtn()];
+        if (isSelf) {
+            rows.unshift(new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('balance_reload').setLabel('🔄 更新').setStyle(ButtonStyle.Secondary)
+            ));
+        }
+        return interaction.reply({ embeds: [embed], components: rows });
     }
 
     if (commandName === 'earn') {
@@ -599,6 +617,104 @@ async function handleEcon(interaction) {
     }
 
     // ==================== /stock ====================
+    // ==================== /crypto ====================
+    if (commandName === 'crypto') {
+        const sub = options.getSubcommand();
+        const CRYPTO_FILE = path.join(__dirname, 'data', 'crypto.json');
+        const cryptoData = load(CRYPTO_FILE);
+
+        if (sub === 'create') {
+            const name = options.getString('name').trim();
+            const symbol = options.getString('symbol').trim().toUpperCase();
+            const owned = Object.values(cryptoData).filter(c => c.ownerId === user.id);
+            if (owned.length >= 1) return interaction.reply({ content: '❌ 仮想通貨は1人1枚までです。', ...EPH });
+            if (Object.values(cryptoData).some(c => c.symbol === symbol)) return interaction.reply({ content: `❌ シンボル **${symbol}** はすでに使用されています。`, ...EPH });
+            const coinId = `coin_${Date.now()}_${user.id}`;
+            const TOTAL_SUPPLY = 1000000;
+            cryptoData[coinId] = {
+                id: coinId, name, symbol,
+                ownerId: user.id, ownerName: user.username,
+                createdAt: Date.now(),
+                price: 0.005,
+                totalSupply: TOTAL_SUPPLY,
+                availableSupply: TOTAL_SUPPLY,
+                history: [0.005],
+                marketCap: round3(0.005 * TOTAL_SUPPLY),
+            };
+            save(CRYPTO_FILE, cryptoData);
+            const embed = new EmbedBuilder().setTitle('🪙 仮想通貨発行完了').setColor(0xf1c40f)
+                .addFields(
+                    { name: '通貨名', value: name, inline: true },
+                    { name: 'シンボル', value: symbol, inline: true },
+                    { name: '発行枚数', value: `${TOTAL_SUPPLY.toLocaleString()} 枚`, inline: true },
+                    { name: '初期価格', value: `0.005 🪙`, inline: true }
+                ).setTimestamp();
+            return interaction.reply({ embeds: [embed], components: [delBtn()] });
+        }
+
+        if (sub === 'list') {
+            const coins = Object.values(cryptoData);
+            if (coins.length === 0) return interaction.reply({ content: '現在発行されている仮想通貨はありません。`/crypto create` で作れます。', ...EPH });
+            const embed = new EmbedBuilder().setTitle('💹 仮想通貨市場').setColor(0xf1c40f)
+                .setDescription(coins.map((c, i) => {
+                    const prev = c.history?.slice(-2)[0] || c.price;
+                    const arrow = c.price > prev ? '📈' : c.price < prev ? '📉' : '➡️';
+                    return `${arrow} **${c.name}** (${c.symbol})\n価格: **${fmtPrice(c.price)}** 🪙　時価総額: **${fmtPrice(round3(c.price * c.totalSupply))}** 🪙`;
+                }).join('\n\n'))
+                .setFooter({ text: '/crypto view [symbol] で詳細 | 手数料2%' });
+            return interaction.reply({ embeds: [embed], components: [delBtn()] });
+        }
+
+        if (sub === 'view') {
+            const sym = options.getString('symbol')?.toUpperCase();
+            if (!sym) {
+                const coins = Object.values(cryptoData);
+                if (coins.length === 0) return interaction.reply({ content: '仮想通貨がまだありません。', ...EPH });
+                if (coins.length === 1) return showCryptoDetail(interaction, coins[0], econ, user, CRYPTO_FILE);
+                const select = new StringSelectMenuBuilder().setCustomId('crypto_view_select').setPlaceholder('通貨を選択')
+                    .addOptions(coins.map(c => ({ label: `${c.name} (${c.symbol})`, description: `価格: ${fmtPrice(c.price)} 🪙`, value: c.id })));
+                return interaction.reply({ content: '💹 通貨を選択:', components: [new ActionRowBuilder().addComponents(select)] });
+            }
+            const coin = Object.values(cryptoData).find(c => c.symbol === sym);
+            if (!coin) return interaction.reply({ content: `❌ **${sym}** という通貨は存在しません。`, ...EPH });
+            return showCryptoDetail(interaction, coin, econ, user, CRYPTO_FILE);
+        }
+
+        if (sub === 'buy') {
+            const sym = options.getString('symbol')?.toUpperCase();
+            const amtInput = options.getString('amount').trim().toLowerCase();
+            const u = getUser(econ, user.id, user);
+            if (!sym) {
+                const coins = Object.values(cryptoData).filter(c => c.availableSupply > 0);
+                if (coins.length === 0) return interaction.reply({ content: '現在購入できる仮想通貨はありません。', ...EPH });
+                if (coins.length === 1) return doBuyCrypto(interaction, coins[0], amtInput, econ, u, cryptoData, CRYPTO_FILE);
+                const select = new StringSelectMenuBuilder().setCustomId(`crypto_buyselect_${amtInput}`).setPlaceholder('購入する通貨を選択')
+                    .addOptions(coins.map(c => ({ label: `${c.name} (${c.symbol})`, description: `価格: ${fmtPrice(c.price)} 🪙　残: ${c.availableSupply.toLocaleString()}枚`, value: c.id })));
+                return interaction.reply({ content: '💹 購入する通貨を選択:', components: [new ActionRowBuilder().addComponents(select)], ...EPH });
+            }
+            const coin = Object.values(cryptoData).find(c => c.symbol === sym);
+            if (!coin) return interaction.reply({ content: `❌ **${sym}** は存在しません。`, ...EPH });
+            return doBuyCrypto(interaction, coin, amtInput, econ, u, cryptoData, CRYPTO_FILE);
+        }
+
+        if (sub === 'sell') {
+            const sym = options.getString('symbol')?.toUpperCase();
+            const amtInput = options.getString('amount').trim().toLowerCase();
+            const u = getUser(econ, user.id, user);
+            if (!sym) {
+                const heldCoins = Object.values(cryptoData).filter(c => (u.crypto || {})[c.id] > 0);
+                if (heldCoins.length === 0) return interaction.reply({ content: '保有している仮想通貨がありません。', ...EPH });
+                if (heldCoins.length === 1) return doSellCrypto(interaction, heldCoins[0], amtInput, econ, u, cryptoData, CRYPTO_FILE);
+                const select = new StringSelectMenuBuilder().setCustomId(`crypto_sellselect_${amtInput}`).setPlaceholder('売却する通貨を選択')
+                    .addOptions(heldCoins.map(c => ({ label: `${c.name} (${c.symbol})`, description: `価格: ${fmtPrice(c.price)} 🪙　保有: ${(u.crypto || {})[c.id].toLocaleString()}枚`, value: c.id })));
+                return interaction.reply({ content: '💹 売却する通貨を選択:', components: [new ActionRowBuilder().addComponents(select)], ...EPH });
+            }
+            const coin = Object.values(cryptoData).find(c => c.symbol === sym);
+            if (!coin) return interaction.reply({ content: `❌ **${sym}** は存在しません。`, ...EPH });
+            return doSellCrypto(interaction, coin, amtInput, econ, u, cryptoData, CRYPTO_FILE);
+        }
+    }
+
     if (commandName === 'stock') {
         const corpData = load(CORP_FILE);
         const corpName = options.getString('corp');
@@ -729,11 +845,12 @@ async function showStockDetail(interaction, c, econ, user) {
         .setTitle(`📈 ${c.name} 株式情報`)
         .setColor(price > prev ? 0x57f287 : price < prev ? 0xff4757 : 0x3498db)
         .addFields(
-            { name: '現在株価', value: `**${price.toLocaleString()}** 🪙`, inline: true },
+            { name: '現在株価', value: `**${fmtPrice(price)}** 🪙`, inline: true },
             { name: '発行株数', value: `**${c.stock.totalShares.toLocaleString()}** 株`, inline: true },
             { name: '保有株数', value: `**${userShares}** 株`, inline: true },
             { name: '購入可能', value: `**${c.stock.availableShares}** 株`, inline: true },
-            { name: '時価総額', value: `**${(price * c.stock.totalShares).toLocaleString()}** 🪙`, inline: true }
+            { name: '時価総額', value: `**${fmtPrice(round3(price * c.stock.totalShares))}** 🪙`, inline: true },
+            { name: '手数料', value: '売買各2%', inline: true }
         )
         .setDescription(chartStr ? `\`\`\`\n${chartStr}\n\`\`\`` : '価格履歴なし');
     const row = new ActionRowBuilder().addComponents(
@@ -755,11 +872,12 @@ async function showStockDetailUpdate(interaction, c, econ, user) {
         .setTitle(`📈 ${c.name} 株式情報`)
         .setColor(price > prev ? 0x57f287 : price < prev ? 0xff4757 : 0x3498db)
         .addFields(
-            { name: '現在株価', value: `**${price.toLocaleString()}** 🪙`, inline: true },
+            { name: '現在株価', value: `**${fmtPrice(price)}** 🪙`, inline: true },
             { name: '発行株数', value: `**${c.stock.totalShares.toLocaleString()}** 株`, inline: true },
             { name: '保有株数', value: `**${userShares}** 株`, inline: true },
             { name: '購入可能', value: `**${c.stock.availableShares}** 株`, inline: true },
-            { name: '時価総額', value: `**${(price * c.stock.totalShares).toLocaleString()}** 🪙`, inline: true }
+            { name: '時価総額', value: `**${fmtPrice(round3(price * c.stock.totalShares))}** 🪙`, inline: true },
+            { name: '手数料', value: '売買各2%', inline: true }
         )
         .setDescription(chartStr ? `\`\`\`\n${chartStr}\n\`\`\`` : '価格履歴なし');
     const row = new ActionRowBuilder().addComponents(
@@ -772,37 +890,47 @@ async function showStockDetailUpdate(interaction, c, econ, user) {
 
 async function doBuyStock(interaction, c, amount, econ, user, corpData) {
     const u = getUser(econ, user.id, user);
-    const total = c.stock.price * amount;
-    if (u.balance < total) return interaction.reply({ content: `❌ 残高不足。必要: **${total.toLocaleString()}** / 現在: **${u.balance.toLocaleString()}** 🪙`, ...EPH });
+    const price = c.stock.price;
+    const subtotal = round3(price * amount);
+    const fee = round3(subtotal * FEE_RATE);
+    const total = round3(subtotal + fee);
+    if (u.balance < total) return interaction.reply({ content: `❌ 残高不足。必要: **${fmtPrice(total)}** 🪙 (手数料${fmtPrice(fee)}含)\n現在: **${fmtPrice(u.balance)}** 🪙`, ...EPH });
     if (c.stock.availableShares < amount) return interaction.reply({ content: `❌ 購入可能株数が不足。現在: **${c.stock.availableShares}** 株`, ...EPH });
-    u.balance -= total;
+    u.balance = round3(u.balance - total);
     if (!u.stocks) u.stocks = {};
     u.stocks[c.id] = (u.stocks[c.id] || 0) + amount;
     c.stock.availableShares -= amount;
-    c.balance = (c.balance || 0) + total;
-    c.stock.price = Math.ceil(c.stock.price * (1 + 0.01 * Math.min(amount, 10)));
+    c.balance = round3((c.balance || 0) + subtotal);
+    // 需要による価格上昇（小数点対応）
+    const ratio = 1 + 0.01 * Math.min(amount, 10);
+    c.stock.price = round3(price * ratio);
     if (!c.stock.history) c.stock.history = [];
     c.stock.history.push(c.stock.price);
-    if (c.stock.history.length > 20) c.stock.history.shift();
+    if (c.stock.history.length > 30) c.stock.history.shift();
     save(ECON_FILE, econ);
     save(CORP_FILE, corpData);
-    return interaction.reply({ content: `✅ **${c.name}** の株を **${amount}** 株 (**${total.toLocaleString()}** 🪙) で購入しました！\n現在株価: **${c.stock.price.toLocaleString()}** 🪙`, components: [delBtn()] });
+    return interaction.reply({ content: `✅ **${c.name}** の株を **${amount}** 株 購入！\n小計: ${fmtPrice(subtotal)} 🪙 + 手数料: ${fmtPrice(fee)} 🪙\n現在株価: **${fmtPrice(c.stock.price)}** 🪙`, components: [delBtn()] });
 }
 
 async function doSellStock(interaction, c, amount, econ, u, corpData) {
     const held = (u.stocks || {})[c.id] || 0;
     if (held < amount) return interaction.reply({ content: `❌ 保有株数不足。現在: **${held}** 株`, ...EPH });
-    const total = c.stock.price * amount;
-    u.balance += total;
+    const price = c.stock.price;
+    const subtotal = round3(price * amount);
+    const fee = round3(subtotal * FEE_RATE);
+    const total = round3(subtotal - fee);
+    u.balance = round3(u.balance + total);
     u.stocks[c.id] -= amount;
     c.stock.availableShares += amount;
-    c.stock.price = Math.max(1, Math.floor(c.stock.price * (1 - 0.008 * Math.min(amount, 10))));
+    // 供給による価格下落（小数点対応）
+    const ratio = 1 - 0.008 * Math.min(amount, 10);
+    c.stock.price = round3(Math.max(0.001, price * ratio));
     if (!c.stock.history) c.stock.history = [];
     c.stock.history.push(c.stock.price);
-    if (c.stock.history.length > 20) c.stock.history.shift();
+    if (c.stock.history.length > 30) c.stock.history.shift();
     save(ECON_FILE, econ);
     save(CORP_FILE, corpData);
-    return interaction.reply({ content: `✅ **${c.name}** の株を **${amount}** 株 (**${total.toLocaleString()}** 🪙) で売却しました！\n現在株価: **${c.stock.price.toLocaleString()}** 🪙`, components: [delBtn()] });
+    return interaction.reply({ content: `✅ **${c.name}** の株を **${amount}** 株 売却！\n小計: ${fmtPrice(subtotal)} 🪙 - 手数料: ${fmtPrice(fee)} 🪙 = **${fmtPrice(total)}** 🪙\n現在株価: **${fmtPrice(c.stock.price)}** 🪙`, components: [delBtn()] });
 }
 
 async function showStore(interaction, c, user) {
@@ -821,6 +949,81 @@ async function showStore(interaction, c, user) {
     }
     rows.push(delBtn());
     return interaction.reply({ embeds: [embed], components: rows });
+}
+
+async function showCryptoDetail(interaction, coin, econ, user, CRYPTO_FILE, isUpdate = false) {
+    const u = getUser(econ, user.id, user);
+    const price = coin.price;
+    const history = coin.history || [];
+    const chartStr = buildStockChart(history);
+    const held = (u.crypto || {})[coin.id] || 0;
+    const prev = history[history.length - 2] || price;
+    const embed = new EmbedBuilder()
+        .setTitle(`💹 ${coin.name} (${coin.symbol})`)
+        .setColor(price > prev ? 0x57f287 : price < prev ? 0xff4757 : 0xf1c40f)
+        .addFields(
+            { name: '現在価格', value: `**${fmtPrice(price)}** 🪙`, inline: true },
+            { name: '発行枚数', value: `${coin.totalSupply.toLocaleString()}`, inline: true },
+            { name: '保有枚数', value: `${held.toLocaleString()}`, inline: true },
+            { name: '購入可能', value: `${coin.availableSupply.toLocaleString()}`, inline: true },
+            { name: '時価総額', value: `**${fmtPrice(round3(price * coin.totalSupply))}** 🪙`, inline: true },
+            { name: '手数料', value: '売買各2%', inline: true }
+        )
+        .setDescription(chartStr ? `\`\`\`\n${chartStr}\n\`\`\`` : '価格履歴なし');
+    const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`crypto_buy_${coin.id}`).setLabel('💰 買う').setStyle(ButtonStyle.Success).setDisabled(coin.availableSupply <= 0),
+        new ButtonBuilder().setCustomId(`crypto_sell_${coin.id}`).setLabel('💸 売る').setStyle(ButtonStyle.Danger).setDisabled(held <= 0),
+        new ButtonBuilder().setCustomId(`crypto_refresh_${coin.id}`).setLabel('🔄 更新').setStyle(ButtonStyle.Secondary)
+    );
+    if (isUpdate) return interaction.update({ embeds: [embed], components: [row, delBtn()] });
+    return interaction.reply({ embeds: [embed], components: [row, delBtn()] });
+}
+
+async function doBuyCrypto(interaction, coin, amtInput, econ, u, cryptoData, CRYPTO_FILE) {
+    let amount;
+    if (amtInput === 'all') amount = Math.min(Math.floor(u.balance / (coin.price * (1 + FEE_RATE))), coin.availableSupply);
+    else amount = parseInt(amtInput) || 0;
+    if (amount <= 0) return interaction.reply({ content: '❌ 有効な枚数を入力してください。', ...EPH });
+    if (coin.availableSupply < amount) return interaction.reply({ content: `❌ 購入可能枚数不足。現在: **${coin.availableSupply.toLocaleString()}** 枚`, ...EPH });
+    const subtotal = round3(coin.price * amount);
+    const fee = round3(subtotal * FEE_RATE);
+    const total = round3(subtotal + fee);
+    if (u.balance < total) return interaction.reply({ content: `❌ 残高不足。必要: **${fmtPrice(total)}** 🪙 (手数料${fmtPrice(fee)}含)\n現在: **${fmtPrice(u.balance)}** 🪙`, ...EPH });
+    u.balance = round3(u.balance - total);
+    if (!u.crypto) u.crypto = {};
+    u.crypto[coin.id] = (u.crypto[coin.id] || 0) + amount;
+    coin.availableSupply -= amount;
+    const ratio = 1 + 0.005 * Math.min(Math.log10(amount + 1), 5);
+    coin.price = round3(Math.max(0.001, coin.price * ratio));
+    if (!coin.history) coin.history = [];
+    coin.history.push(coin.price);
+    if (coin.history.length > 60) coin.history.shift();
+    save(ECON_FILE, econ);
+    save(CRYPTO_FILE, cryptoData);
+    return interaction.reply({ content: `✅ **${coin.name}** を **${amount.toLocaleString()}** 枚 購入！\n小計: ${fmtPrice(subtotal)} 🪙 + 手数料: ${fmtPrice(fee)} 🪙\n現在価格: **${fmtPrice(coin.price)}** 🪙`, components: [delBtn()] });
+}
+
+async function doSellCrypto(interaction, coin, amtInput, econ, u, cryptoData, CRYPTO_FILE) {
+    const held = (u.crypto || {})[coin.id] || 0;
+    let amount;
+    if (amtInput === 'all') amount = held;
+    else amount = parseInt(amtInput) || 0;
+    if (amount <= 0) return interaction.reply({ content: '❌ 有効な枚数を入力してください。', ...EPH });
+    if (held < amount) return interaction.reply({ content: `❌ 保有枚数不足。現在: **${held.toLocaleString()}** 枚`, ...EPH });
+    const subtotal = round3(coin.price * amount);
+    const fee = round3(subtotal * FEE_RATE);
+    const total = round3(subtotal - fee);
+    u.balance = round3(u.balance + total);
+    u.crypto[coin.id] = held - amount;
+    coin.availableSupply += amount;
+    const ratio = 1 - 0.004 * Math.min(Math.log10(amount + 1), 5);
+    coin.price = round3(Math.max(0.001, coin.price * ratio));
+    if (!coin.history) coin.history = [];
+    coin.history.push(coin.price);
+    if (coin.history.length > 60) coin.history.shift();
+    save(ECON_FILE, econ);
+    save(CRYPTO_FILE, cryptoData);
+    return interaction.reply({ content: `✅ **${coin.name}** を **${amount.toLocaleString()}** 枚 売却！\n小計: ${fmtPrice(subtotal)} 🪙 - 手数料: ${fmtPrice(fee)} 🪙 = **${fmtPrice(total)}** 🪙\n現在価格: **${fmtPrice(coin.price)}** 🪙`, components: [delBtn()] });
 }
 
 async function showStoreManage(interaction, c, corpData, user) {
@@ -982,9 +1185,69 @@ async function handleEconInteraction(interaction) {
         return interaction.showModal(modal);
     }
 
-    if (cid === 'bank_reload') {
+    if (cid === 'balance_reload') {
         const u = getUser(econ, user.id, user);
-        return interaction.update(buildBankPanel(u));
+        const corp = load(CORP_FILE);
+        const ownedCorps = Object.values(corp).filter(c => c.ownerId === user.id);
+        const loan = u.loan || 0;
+        const netBalance = round3(u.balance - loan);
+        const embed = new EmbedBuilder()
+            .setTitle(`${CURRENCY} ${user.username} の所持金`)
+            .setThumbnail(user.displayAvatarURL())
+            .setColor(netBalance < 0 ? 0xff4757 : 0xf1c40f)
+            .addFields(
+                { name: '残高', value: `**${fmtPrice(u.balance)}** ${CURRENCY}`, inline: true },
+                { name: '借入残高', value: loan > 0 ? `**-${fmtPrice(loan)}** ${CURRENCY}` : 'なし', inline: true },
+                { name: '実質残高', value: `**${fmtPrice(netBalance)}** ${CURRENCY}${netBalance < 0 ? ' 🔴' : ''}`, inline: true },
+                { name: '保有会社', value: ownedCorps.length > 0 ? ownedCorps.map(c => c.name).join(', ') : 'なし', inline: true }
+            ).setTimestamp();
+        const row = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('balance_reload').setLabel('🔄 更新').setStyle(ButtonStyle.Secondary)
+        );
+        return interaction.update({ embeds: [embed], components: [row, delBtn()] });
+    }
+
+    // crypto ボタン
+    if (cid.startsWith('crypto_buy_') || cid.startsWith('crypto_sell_') || cid.startsWith('crypto_refresh_')) {
+        const CRYPTO_FILE = path.join(__dirname, 'data', 'crypto.json');
+        const cryptoData = load(CRYPTO_FILE);
+        const action = cid.startsWith('crypto_buy_') ? 'buy' : cid.startsWith('crypto_sell_') ? 'sell' : 'refresh';
+        const coinId = cid.replace(`crypto_${action}_`, '');
+        const coin = cryptoData[coinId];
+        if (!coin) return interaction.reply({ content: '❌ 通貨が見つかりません。', ...EPH });
+        if (action === 'refresh') return showCryptoDetail(interaction, coin, econ, user, CRYPTO_FILE, true);
+        const modal = new ModalBuilder().setCustomId(`modal_crypto_${action}_${coinId}`).setTitle(action === 'buy' ? `💰 ${coin.name} 購入` : `💸 ${coin.name} 売却`);
+        modal.addComponents(new ActionRowBuilder().addComponents(
+            new TextInputBuilder().setCustomId('crypto_amount').setLabel('枚数（数字・all）').setStyle(TextInputStyle.Short).setPlaceholder('例: 1000 または all').setRequired(true)
+        ));
+        return interaction.showModal(modal);
+    }
+
+    // crypto セレクト
+    if (interaction.isStringSelectMenu() && cid === 'crypto_view_select') {
+        const CRYPTO_FILE = path.join(__dirname, 'data', 'crypto.json');
+        const cryptoData = load(CRYPTO_FILE);
+        const coin = cryptoData[interaction.values[0]];
+        if (!coin) return interaction.reply({ content: '❌ 通貨が見つかりません。', ...EPH });
+        return showCryptoDetail(interaction, coin, econ, user, CRYPTO_FILE);
+    }
+    if (interaction.isStringSelectMenu() && cid.startsWith('crypto_buyselect_')) {
+        const CRYPTO_FILE = path.join(__dirname, 'data', 'crypto.json');
+        const cryptoData = load(CRYPTO_FILE);
+        const amtInput = cid.replace('crypto_buyselect_', '');
+        const coin = cryptoData[interaction.values[0]];
+        if (!coin) return interaction.reply({ content: '❌ 通貨が見つかりません。', ...EPH });
+        const u = getUser(econ, user.id, user);
+        return doBuyCrypto(interaction, coin, amtInput, econ, u, cryptoData, CRYPTO_FILE);
+    }
+    if (interaction.isStringSelectMenu() && cid.startsWith('crypto_sellselect_')) {
+        const CRYPTO_FILE = path.join(__dirname, 'data', 'crypto.json');
+        const cryptoData = load(CRYPTO_FILE);
+        const amtInput = cid.replace('crypto_sellselect_', '');
+        const coin = cryptoData[interaction.values[0]];
+        if (!coin) return interaction.reply({ content: '❌ 通貨が見つかりません。', ...EPH });
+        const u = getUser(econ, user.id, user);
+        return doSellCrypto(interaction, coin, amtInput, econ, u, cryptoData, CRYPTO_FILE);
     }
     if (cid === 'earn_rob') {
         const modal = new ModalBuilder().setCustomId('modal_earn_rob').setTitle('🔫 強盗');
@@ -1267,6 +1530,20 @@ async function handleEconModal(interaction) {
     const cid = interaction.customId;
     const { user, guild } = interaction;
     const econ = load(ECON_FILE);
+
+    // ==================== crypto 購入/売却モーダル ====================
+    if (cid.startsWith('modal_crypto_buy_') || cid.startsWith('modal_crypto_sell_')) {
+        const isBuy = cid.startsWith('modal_crypto_buy_');
+        const coinId = cid.replace(isBuy ? 'modal_crypto_buy_' : 'modal_crypto_sell_', '');
+        const CRYPTO_FILE = path.join(__dirname, 'data', 'crypto.json');
+        const cryptoData = load(CRYPTO_FILE);
+        const coin = cryptoData[coinId];
+        if (!coin) return interaction.reply({ content: '❌ 通貨が見つかりません。', ...EPH });
+        const amtInput = interaction.fields.getTextInputValue('crypto_amount').trim().toLowerCase();
+        const u = getUser(econ, user.id, user);
+        if (isBuy) return doBuyCrypto(interaction, coin, amtInput, econ, u, cryptoData, CRYPTO_FILE);
+        else return doSellCrypto(interaction, coin, amtInput, econ, u, cryptoData, CRYPTO_FILE);
+    }
 
     // ==================== 強盗モーダル ====================
     if (cid === 'modal_earn_rob') {
