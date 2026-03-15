@@ -83,7 +83,7 @@ function buildBJEmbed(game, status, balance, user) {
             { name: `ディーラー (${dealerScore})`, value: dealerShow, inline: false },
             { name: `あなた (${playerTotal})`, value: game.playerCards.join(' '), inline: false }
         )
-        .setDescription(s.desc || `${mention}賭け金: **${game.bet.toLocaleString()}** 🪙`)
+        .setDescription(s.desc || `${mention}賭け金: **${game.bet.toLocaleString()}** 🪙　レバレッジ: **${game.leverage || 2}x**`)
         .setFooter({ text: 'ヒット=カードを引く / スタンド=終了 / ダブル=2倍賭けで1枚引いて終了' });
 }
 function buildBJRows(gameKey) {
@@ -129,7 +129,9 @@ function cdStr(remaining) {
 }
 
 function buildEarnPanel(u, now) {
-    const dailyRem = 86400000 - (now - (u.dailyLast || 0));
+    const jstNow = new Date(now + 9 * 3600000);
+    const todayStr = `${jstNow.getUTCFullYear()}-${String(jstNow.getUTCMonth()+1).padStart(2,'0')}-${String(jstNow.getUTCDate()).padStart(2,'0')}`;
+    const dailyDone = u.dailyDate === todayStr;
     const workRem  = 3600000  - (now - (u.workLast  || 0));
     const crimeRem = 7200000  - (now - (u.crimeLast || 0));
     const huntRem  = 1800000  - (now - (u.huntLast  || 0));
@@ -139,7 +141,7 @@ function buildEarnPanel(u, now) {
         .setTitle('💰 お金を稼ぐ')
         .setColor(0xf1c40f)
         .addFields(
-            { name: '🎁 デイリー', value: `200〜400+ボーナス ${CURRENCY}\n連続${streak}日目 🔥\n${cdStr(dailyRem)}`, inline: true },
+            { name: '🎁 デイリー', value: `200〜400+ボーナス ${CURRENCY}\n連続${streak}日目 🔥\n${dailyDone ? '⏳ 受取済（深夜0時リセット）' : '✅ 準備完了'}`, inline: true },
             { name: '💼 労働', value: `50〜300 ${CURRENCY}\nCD: 1時間\n${cdStr(workRem)}`, inline: true },
             { name: '🦹 犯罪', value: `成功: 100〜2000 ${CURRENCY}\n失敗: 没収あり\nCD: 2時間\n${cdStr(crimeRem)}`, inline: true },
             { name: '🏹 狩猟', value: `獲物を狩る\nアイテムドロップあり\nCD: 30分\n${cdStr(huntRem)}`, inline: true },
@@ -150,7 +152,7 @@ function buildEarnPanel(u, now) {
             { name: '🃏 ブラックジャック', value: `21に近い方が勝ち\nBJ: 1.5倍獲得`, inline: true }
         );
     const row1 = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('earn_daily').setLabel('🎁 デイリー').setStyle(ButtonStyle.Success).setDisabled(dailyRem > 0),
+        new ButtonBuilder().setCustomId('earn_daily').setLabel('🎁 デイリー').setStyle(ButtonStyle.Success).setDisabled(dailyDone),
         new ButtonBuilder().setCustomId('earn_work').setLabel('💼 労働').setStyle(ButtonStyle.Primary).setDisabled(workRem > 0),
         new ButtonBuilder().setCustomId('earn_crime').setLabel('🦹 犯罪').setStyle(ButtonStyle.Danger).setDisabled(crimeRem > 0)
     );
@@ -177,10 +179,15 @@ const econCommands = [
     new SlashCommandBuilder().setName('inventory').setDescription('所持アイテムを確認します').addUserOption(o => o.setName('user').setDescription('対象ユーザー（未指定なら自分）')),
     new SlashCommandBuilder().setName('econrank').setDescription('所持金ランキングを表示します'),
     new SlashCommandBuilder().setName('bank').setDescription('銀行メニュー（残高確認・ローン・返済）'),
-    new SlashCommandBuilder().setName('corp').setDescription('会社を設立します（1人2社まで・設立費用10,000枚）').addStringOption(o => o.setName('name').setDescription('会社名').setRequired(true)).addStringOption(o => o.setName('description').setDescription('会社の説明').setRequired(true)),
-    new SlashCommandBuilder().setName('store').setDescription('会社のストアを管理・表示します').addStringOption(o => o.setName('corp').setDescription('会社名（未指定で一覧）')),
+    new SlashCommandBuilder().setName('corp')
+        .setDescription('会社の管理')
+        .addSubcommand(sub => sub.setName('create').setDescription('会社を設立します（1人2社まで・設立費用10,000枚）')
+            .addStringOption(o => o.setName('name').setDescription('会社名').setRequired(true))
+            .addStringOption(o => o.setName('description').setDescription('会社の説明').setRequired(true)))
+        .addSubcommand(sub => sub.setName('setting').setDescription('会社の管理・ストア設定').addStringOption(o => o.setName('corp').setDescription('会社名（未指定でセレクト）')))
+        .addSubcommand(sub => sub.setName('deposit').setDescription('会社にお金を入れます').addStringOption(o => o.setName('corp').setDescription('会社名（未指定でセレクト）')).addStringOption(o => o.setName('amount').setDescription('金額（数字・all・half）').setRequired(true))),
     new SlashCommandBuilder().setName('stock').setDescription('株式市場（会社の株売買・チャート）').addStringOption(o => o.setName('corp').setDescription('会社名（未指定でセレクト表示）')),
-    new SlashCommandBuilder().setName('buystock').setDescription('株を購入します').addIntegerOption(o => o.setName('amount').setDescription('購入株数').setRequired(true).setMinValue(1)).addStringOption(o => o.setName('corp').setDescription('会社名（未指定でセレクト表示）')),
+    new SlashCommandBuilder().setName('buystock').setDescription('株を購入します').addStringOption(o => o.setName('amount').setDescription('購入株数（数字・all）').setRequired(true)).addStringOption(o => o.setName('corp').setDescription('会社名（未指定でセレクト表示）')),
     new SlashCommandBuilder().setName('sellstock').setDescription('株を売却します').addIntegerOption(o => o.setName('amount').setDescription('売却株数').setRequired(true).setMinValue(1)).addStringOption(o => o.setName('corp').setDescription('会社名（未指定でセレクト表示）')),
 ];
 
@@ -207,8 +214,7 @@ async function handleEcon(interaction) {
     if (commandName === 'earn') {
         const u = getUser(econ, user.id, user);
         const now = Date.now();
-        await interaction.reply(buildEarnPanel(u, now));
-        return;
+        return interaction.reply({ ...buildEarnPanel(u, now), ...EPH });
     }
 
     if (commandName === 'send') {
@@ -241,11 +247,16 @@ async function handleEcon(interaction) {
         const shop = load(SHOP_FILE);
         const items = Object.values(shop);
         if (items.length === 0) return interaction.reply({ content: '🛒 現在ショップにアイテムがありません。', ...EPH });
-        const embed = new EmbedBuilder().setTitle('🛒 ショップ').setColor(0xe67e22)
-            .setDescription(items.map((item, i) =>
-                `**${i + 1}. ${item.name}**\n価格: **${item.price.toLocaleString()}** ${CURRENCY}　売却: **${Math.floor(item.price * 0.5).toLocaleString()}** ${CURRENCY}${item.roleId ? `　🏷️ ロール付与` : ''}\n${item.description}`
-            ).join('\n\n'))
-            .setFooter({ text: '/buy [アイテム名] で購入 / /sell [アイテム名] で売却（50%）' });
+        const embed = new EmbedBuilder()
+            .setTitle('🛒 ショップ')
+            .setColor(0xe67e22)
+            .setDescription('`/buy [アイテム名]` で購入 　`/sell [アイテム名]` で売却（購入価格の50%）')
+            .addFields(items.map((item, i) => ({
+                name: `${i + 1}. ${item.name}${item.roleId ? ' 🏷️' : ''}`,
+                value: `💰 **${item.price.toLocaleString()}** 🪙　↩️ 売却: **${Math.floor(item.price * 0.5).toLocaleString()}** 🪙\n${item.description}`,
+                inline: false
+            })))
+            .setFooter({ text: `全${items.length}件` });
         return interaction.reply({ embeds: [embed], components: [delBtn()] });
     }
 
@@ -320,27 +331,87 @@ async function handleEcon(interaction) {
     }
 
     if (commandName === 'corp') {
-        const corpName = options.getString('name').trim();
-        const corpDesc = options.getString('description').trim();
+        const sub = options.getSubcommand();
         const corpData = load(CORP_FILE);
-        const u = getUser(econ, user.id, user);
-        const owned = Object.values(corpData).filter(c => c.ownerId === user.id);
-        if (owned.length >= 2) return interaction.reply({ content: '❌ 1人につき最大2社まで設立できます。', ...EPH });
-        if (Object.values(corpData).some(c => c.name.toLowerCase() === corpName.toLowerCase())) return interaction.reply({ content: `❌ **${corpName}** という会社はすでに存在します。`, ...EPH });
-        if (u.balance < CORP_COST) return interaction.reply({ content: `❌ 設立費用不足。必要: **${CORP_COST.toLocaleString()}** ${CURRENCY}　現在: **${u.balance.toLocaleString()}** ${CURRENCY}`, ...EPH });
-        u.balance -= CORP_COST;
-        const corpId = `corp_${Date.now()}_${user.id}`;
-        corpData[corpId] = { id: corpId, name: corpName, description: corpDesc, ownerId: user.id, ownerName: user.username, createdAt: Date.now(), balance: 0, items: [], employees: [] };
-        save(ECON_FILE, econ);
-        save(CORP_FILE, corpData);
-        const embed = new EmbedBuilder().setTitle('🏢 会社設立完了').setColor(0x3498db)
-            .addFields(
-                { name: '会社名', value: corpName, inline: true },
-                { name: 'オーナー', value: user.username, inline: true },
-                { name: '設立費用', value: `${CORP_COST.toLocaleString()} ${CURRENCY}`, inline: true },
-                { name: '説明', value: corpDesc, inline: false }
-            ).setTimestamp();
-        return interaction.reply({ embeds: [embed], components: [delBtn()] });
+
+        if (sub === 'create') {
+            const corpName = options.getString('name').trim();
+            const corpDesc = options.getString('description').trim();
+            const u = getUser(econ, user.id, user);
+            const owned = Object.values(corpData).filter(c => c.ownerId === user.id);
+            if (owned.length >= 2) return interaction.reply({ content: '❌ 1人につき最大2社まで設立できます。', ...EPH });
+            if (Object.values(corpData).some(c => c.name.toLowerCase() === corpName.toLowerCase())) return interaction.reply({ content: `❌ **${corpName}** という会社はすでに存在します。`, ...EPH });
+            if (u.balance < CORP_COST) return interaction.reply({ content: `❌ 設立費用不足。必要: **${CORP_COST.toLocaleString()}** ${CURRENCY}　現在: **${u.balance.toLocaleString()}** ${CURRENCY}`, ...EPH });
+            u.balance -= CORP_COST;
+            const corpId = `corp_${Date.now()}_${user.id}`;
+            corpData[corpId] = { id: corpId, name: corpName, description: corpDesc, ownerId: user.id, ownerName: user.username, createdAt: Date.now(), balance: 0, items: [], employees: [] };
+            save(ECON_FILE, econ);
+            save(CORP_FILE, corpData);
+            const embed = new EmbedBuilder().setTitle('🏢 会社設立完了').setColor(0x3498db)
+                .addFields(
+                    { name: '会社名', value: corpName, inline: true },
+                    { name: 'オーナー', value: user.username, inline: true },
+                    { name: '設立費用', value: `${CORP_COST.toLocaleString()} ${CURRENCY}`, inline: true },
+                    { name: '説明', value: corpDesc, inline: false }
+                ).setTimestamp();
+            return interaction.reply({ embeds: [embed], components: [delBtn()] });
+        }
+
+        if (sub === 'setting') {
+            const corpName = options.getString('corp');
+            if (corpName) {
+                const c = Object.values(corpData).find(c => c.name.toLowerCase() === corpName.toLowerCase());
+                if (!c) return interaction.reply({ content: `❌ **${corpName}** という会社は存在しません。`, ...EPH });
+                if (c.ownerId !== user.id) return showStore(interaction, c, user);
+                return showStoreManage(interaction, c, corpData, user);
+            }
+            const owned = Object.values(corpData).filter(c => c.ownerId === user.id);
+            const all = Object.values(corpData);
+            if (all.length === 0) return interaction.reply({ content: '現在登録されている会社はありません。`/corp create` で設立できます。', ...EPH });
+            if (owned.length === 0) {
+                if (all.length === 1) return showStore(interaction, all[0], user);
+                const select = new StringSelectMenuBuilder().setCustomId('store_select_view').setPlaceholder('見たい会社を選択')
+                    .addOptions(all.map(c => ({ label: c.name, description: `${c.ownerName} | 商品数: ${c.items.length}件`, value: c.id })));
+                return interaction.reply({ content: '🏪 **ストア** — 会社を選択してください', components: [new ActionRowBuilder().addComponents(select)] });
+            }
+            if (owned.length === 1 && all.length === 1) return showStoreManage(interaction, owned[0], corpData, user);
+            const selectOptions = owned.map(c => ({ label: `⚙️ ${c.name} (管理)`, description: '管理画面を開く', value: `manage_${c.id}` }));
+            const viewOptions = all.filter(c => c.ownerId !== user.id).map(c => ({ label: `🏪 ${c.name} (閲覧)`, description: `${c.ownerName} | 商品数: ${c.items.length}件`, value: `view_${c.id}` }));
+            const select = new StringSelectMenuBuilder().setCustomId('store_select_mixed').setPlaceholder('会社を選択')
+                .addOptions([...selectOptions, ...viewOptions].slice(0, 25));
+            return interaction.reply({ content: '🏢 **ストア** — 会社を選択してください', components: [new ActionRowBuilder().addComponents(select)], ...EPH });
+        }
+
+        if (sub === 'deposit') {
+            const corpName = options.getString('corp');
+            const amtInput = (options.getString('amount') || '0').trim().toLowerCase();
+            const u = getUser(econ, user.id, user);
+            let c;
+            if (corpName) {
+                c = Object.values(corpData).find(c => c.name.toLowerCase() === corpName.toLowerCase());
+                if (!c) return interaction.reply({ content: `❌ **${corpName}** という会社は存在しません。`, ...EPH });
+            } else {
+                const owned = Object.values(corpData).filter(co => co.ownerId === user.id);
+                if (owned.length === 0) return interaction.reply({ content: '❌ 会社を所有していません。', ...EPH });
+                if (owned.length === 1) { c = owned[0]; }
+                else {
+                    const select = new StringSelectMenuBuilder().setCustomId(`corp_deposit_select_${amtInput}`).setPlaceholder('入金する会社を選択')
+                        .addOptions(owned.map(co => ({ label: co.name, description: `会社残高: ${(co.balance || 0).toLocaleString()} 🪙`, value: co.id })));
+                    return interaction.reply({ content: '入金する会社を選択してください:', components: [new ActionRowBuilder().addComponents(select)], ...EPH });
+                }
+            }
+            let amount;
+            if (amtInput === 'all') amount = u.balance;
+            else if (amtInput === 'half') amount = Math.floor(u.balance / 2);
+            else amount = parseInt(amtInput) || 0;
+            if (amount <= 0) return interaction.reply({ content: '❌ 有効な金額を入力してください。', ...EPH });
+            if (u.balance < amount) return interaction.reply({ content: `❌ 残高不足。現在: **${u.balance.toLocaleString()}** ${CURRENCY}`, ...EPH });
+            u.balance -= amount;
+            c.balance = (c.balance || 0) + amount;
+            save(ECON_FILE, econ);
+            save(CORP_FILE, corpData);
+            return interaction.reply({ content: `✅ **${c.name}** に **${amount.toLocaleString()}** ${CURRENCY} を入金しました。\n会社残高: **${c.balance.toLocaleString()}** ${CURRENCY}`, ...EPH });
+        }
     }
 
     // ==================== /bank ====================
@@ -390,24 +461,30 @@ async function handleEcon(interaction) {
     if (commandName === 'buystock') {
         const corpData = load(CORP_FILE);
         const corpName = options.getString('corp');
-        const amount = options.getInteger('amount');
+        const amtInput = (options.getString('amount') || '1').trim().toLowerCase();
+        const u = getUser(econ, user.id, user);
+        const resolveAmount = (c) => {
+            if (amtInput === 'all') return Math.min(Math.floor(u.balance / c.stock.price), c.stock.availableShares);
+            return parseInt(amtInput) || 1;
+        };
         if (!corpName) {
             const stockCorps = Object.values(corpData).filter(c => c.stock && c.stock.availableShares > 0);
             if (stockCorps.length === 0) return interaction.reply({ content: '📊 現在購入できる株式はありません。', ...EPH });
-            if (stockCorps.length === 1) return doBuyStock(interaction, stockCorps[0], amount, econ, user, corpData);
+            if (stockCorps.length === 1) { const amt = resolveAmount(stockCorps[0]); return doBuyStock(interaction, stockCorps[0], amt, econ, user, corpData); }
             const select = new StringSelectMenuBuilder()
-                .setCustomId(`stock_buyselect_${amount}`)
+                .setCustomId(`stock_buyselect_${amtInput}`)
                 .setPlaceholder('購入する会社を選択')
                 .addOptions(stockCorps.map(c => ({ label: c.name, description: `株価: ${c.stock.price.toLocaleString()} 🪙　残: ${c.stock.availableShares}株`, value: c.id })));
-            return interaction.reply({ content: `📈 **${amount}株** 購入する会社を選択してください`, components: [new ActionRowBuilder().addComponents(select)], ...EPH });
+            return interaction.reply({ content: `📈 購入する会社を選択してください`, components: [new ActionRowBuilder().addComponents(select)], ...EPH });
         }
         const c = Object.values(corpData).find(c => c.name.toLowerCase() === corpName.toLowerCase());
         if (!c) return interaction.reply({ content: `❌ **${corpName}** という会社は存在しません。`, ...EPH });
         if (!c.stock) return interaction.reply({ content: `❌ **${c.name}** はまだ株式を発行していません。`, ...EPH });
-        return doBuyStock(interaction, c, amount, econ, user, corpData);
+        const amt = resolveAmount(c);
+        if (amt <= 0) return interaction.reply({ content: '❌ 購入できる株数がありません。残高不足か在庫不足です。', ...EPH });
+        return doBuyStock(interaction, c, amt, econ, user, corpData);
     }
 
-    // ==================== /sellstock ====================
     if (commandName === 'sellstock') {
         const corpData = load(CORP_FILE);
         const corpName = options.getString('corp');
@@ -427,37 +504,6 @@ async function handleEcon(interaction) {
         if (!c) return interaction.reply({ content: `❌ **${corpName}** という会社は存在しません。`, ...EPH });
         if (!c.stock) return interaction.reply({ content: `❌ **${c.name}** は株式を発行していません。`, ...EPH });
         return doSellStock(interaction, c, amount, econ, u, corpData);
-    }
-
-    if (commandName === 'store') {
-        const corpData = load(CORP_FILE);
-        const corpName = options.getString('corp');
-        if (corpName) {
-            const c = Object.values(corpData).find(c => c.name.toLowerCase() === corpName.toLowerCase());
-            if (!c) return interaction.reply({ content: `❌ **${corpName}** という会社は存在しません。`, ...EPH });
-            return showStore(interaction, c, user);
-        }
-        const owned = Object.values(corpData).filter(c => c.ownerId === user.id);
-        const all = Object.values(corpData);
-        if (all.length === 0) return interaction.reply({ content: '現在登録されている会社はありません。`/corp` で設立できます。', ...EPH });
-        if (owned.length === 0) {
-            // 非オーナー: 全会社をセレクトメニューで選択
-            if (all.length === 1) return showStore(interaction, all[0], user);
-            const select = new StringSelectMenuBuilder()
-                .setCustomId('store_select_view')
-                .setPlaceholder('見たい会社を選択')
-                .addOptions(all.map(c => ({ label: c.name, description: `${c.ownerName} | 商品数: ${c.items.length}件`, value: c.id })));
-            return interaction.reply({ content: '🏪 **ストア** — 会社を選択してください', components: [new ActionRowBuilder().addComponents(select)] });
-        }
-        if (owned.length === 1 && all.length === 1) return showStoreManage(interaction, owned[0], corpData, user);
-        // 管理または閲覧を選択
-        const selectOptions = owned.map(c => ({ label: `⚙️ ${c.name} (管理)`, description: '管理画面を開く', value: `manage_${c.id}` }));
-        const viewOptions = all.filter(c => c.ownerId !== user.id).map(c => ({ label: `🏪 ${c.name} (閲覧)`, description: `${c.ownerName} | 商品数: ${c.items.length}件`, value: `view_${c.id}` }));
-        const select = new StringSelectMenuBuilder()
-            .setCustomId('store_select_mixed')
-            .setPlaceholder('会社を選択')
-            .addOptions([...selectOptions, ...viewOptions].slice(0, 25));
-        return interaction.reply({ content: '🏢 **ストア** — 会社を選択してください', components: [new ActionRowBuilder().addComponents(select)], ...EPH });
     }
 }
 
@@ -481,9 +527,36 @@ async function showStockDetail(interaction, c, econ, user) {
         .setDescription(chartStr ? `\`\`\`\n${chartStr}\n\`\`\`` : '価格履歴なし');
     const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId(`stock_buy_${c.id}`).setLabel('📈 買う').setStyle(ButtonStyle.Success).setDisabled(c.stock.availableShares <= 0),
-        new ButtonBuilder().setCustomId(`stock_sell_${c.id}`).setLabel('📉 売る').setStyle(ButtonStyle.Danger).setDisabled(userShares <= 0)
+        new ButtonBuilder().setCustomId(`stock_sell_${c.id}`).setLabel('📉 売る').setStyle(ButtonStyle.Danger).setDisabled(userShares <= 0),
+        new ButtonBuilder().setCustomId(`stock_refresh_${c.id}`).setLabel('🔄 更新').setStyle(ButtonStyle.Secondary)
     );
     return interaction.reply({ embeds: [embed], components: [row, delBtn()] });
+}
+
+async function showStockDetailUpdate(interaction, c, econ, user) {
+    const u = getUser(econ, user.id, user);
+    const price = c.stock.price;
+    const history = c.stock.history || [];
+    const chartStr = buildStockChart(history);
+    const userShares = (u.stocks || {})[c.id] || 0;
+    const prev = history[history.length - 2] || price;
+    const embed = new EmbedBuilder()
+        .setTitle(`📈 ${c.name} 株式情報`)
+        .setColor(price > prev ? 0x57f287 : price < prev ? 0xff4757 : 0x3498db)
+        .addFields(
+            { name: '現在株価', value: `**${price.toLocaleString()}** 🪙`, inline: true },
+            { name: '発行株数', value: `**${c.stock.totalShares.toLocaleString()}** 株`, inline: true },
+            { name: '保有株数', value: `**${userShares}** 株`, inline: true },
+            { name: '購入可能', value: `**${c.stock.availableShares}** 株`, inline: true },
+            { name: '時価総額', value: `**${(price * c.stock.totalShares).toLocaleString()}** 🪙`, inline: true }
+        )
+        .setDescription(chartStr ? `\`\`\`\n${chartStr}\n\`\`\`` : '価格履歴なし');
+    const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`stock_buy_${c.id}`).setLabel('📈 買う').setStyle(ButtonStyle.Success).setDisabled(c.stock.availableShares <= 0),
+        new ButtonBuilder().setCustomId(`stock_sell_${c.id}`).setLabel('📉 売る').setStyle(ButtonStyle.Danger).setDisabled(userShares <= 0),
+        new ButtonBuilder().setCustomId(`stock_refresh_${c.id}`).setLabel('🔄 更新').setStyle(ButtonStyle.Secondary)
+    );
+    return interaction.update({ embeds: [embed], components: [row, delBtn()] });
 }
 
 async function doBuyStock(interaction, c, amount, econ, user, corpData) {
@@ -552,8 +625,7 @@ async function showStoreManage(interaction, c, corpData, user) {
         new ButtonBuilder().setCustomId(`store_withdraw_${c.id}`).setLabel('売上回収').setStyle(ButtonStyle.Success)
     );
     const row2 = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(`store_issuestock_${c.id}`).setLabel('📊 株式発行').setStyle(ButtonStyle.Secondary).setDisabled(!!c.stock),
-        new ButtonBuilder().setCustomId('delete_reply').setLabel('✕ 閉じる').setStyle(ButtonStyle.Secondary)
+        new ButtonBuilder().setCustomId(`store_issuestock_${c.id}`).setLabel('📊 株式発行').setStyle(ButtonStyle.Secondary).setDisabled(!!c.stock)
     );
     return interaction.reply({ embeds: [embed], components: [row1, row2], ...EPH });
 }
@@ -572,13 +644,19 @@ async function handleEconInteraction(interaction) {
         let resultEmbed;
 
         if (cid === 'earn_daily') {
-            const remaining = 86400000 - (now - (u.dailyLast || 0));
-            if (remaining > 0) return interaction.reply({ content: `⏳ デイリーはまだ受け取れません。${cdStr(remaining)}`, ...EPH });
+            const jstNow = new Date(now + 9 * 3600000);
+            const todayStr = `${jstNow.getUTCFullYear()}-${String(jstNow.getUTCMonth()+1).padStart(2,'0')}-${String(jstNow.getUTCDate()).padStart(2,'0')}`;
+            if (u.dailyDate === todayStr) {
+                const nextMidnight = new Date(jstNow); nextMidnight.setUTCHours(24, 0, 0, 0);
+                const rem = nextMidnight.getTime() - jstNow.getTime();
+                const h = Math.floor(rem / 3600000), m = Math.floor((rem % 3600000) / 60000);
+                return interaction.reply({ content: `⏳ 今日のデイリーは受け取り済みです。次回: **${h}時間${m}分後**（深夜0時リセット）`, ...EPH });
+            }
             const streak = (u.dailyStreak || 0) + 1;
             const base = Math.floor(Math.random() * 201) + 200;
             const bonus = Math.min(streak, 7) * 50;
             const amount = base + bonus;
-            u.balance += amount; u.dailyLast = now; u.dailyStreak = streak;
+            u.balance += amount; u.dailyLast = now; u.dailyStreak = streak; u.dailyDate = todayStr;
             resultEmbed = new EmbedBuilder().setTitle('🎁 デイリーボーナス')
                 .setDescription(`<@${user.id}> **+${amount}** ${CURRENCY} を受け取りました！\n残高: **${u.balance.toLocaleString()}** ${CURRENCY}`)
                 .addFields(
@@ -786,6 +864,9 @@ async function handleEconInteraction(interaction) {
         modal.addComponents(
             new ActionRowBuilder().addComponents(
                 new TextInputBuilder().setCustomId('bj_amount').setLabel('賭け金額').setStyle(TextInputStyle.Short).setPlaceholder('例: 1000').setRequired(true)
+            ),
+            new ActionRowBuilder().addComponents(
+                new TextInputBuilder().setCustomId('bj_leverage').setLabel('レバレッジ倍率（2〜10、未入力で2）').setStyle(TextInputStyle.Short).setPlaceholder('例: 5').setValue('2').setRequired(false)
             )
         );
         return interaction.showModal(modal);
@@ -801,7 +882,8 @@ async function handleEconInteraction(interaction) {
         if (playerTotal > 21) {
             const econ2 = load(ECON_FILE);
             const u = getUser(econ2, user.id, user);
-            u.balance -= game.bet;
+            u.balance -= game.bet * (game.leverage || 2);
+            u.balance = Math.max(0, u.balance);
             save(ECON_FILE, econ2);
             bjGames.delete(gameKey);
             return interaction.update({ embeds: [buildBJEmbed(game, 'bust', u.balance, user)], components: [delBtn()] });
@@ -818,10 +900,11 @@ async function handleEconInteraction(interaction) {
         const dealerTotal = calcBJ(game.dealerCards);
         const econ2 = load(ECON_FILE);
         const u = getUser(econ2, user.id, user);
+        const lev = game.leverage || 2;
         let result;
-        if (dealerTotal > 21 || playerTotal > dealerTotal) { u.balance += game.bet; result = 'win'; }
+        if (dealerTotal > 21 || playerTotal > dealerTotal) { u.balance += game.bet * lev; result = 'win'; }
         else if (playerTotal === dealerTotal) { result = 'push'; }
-        else { u.balance -= game.bet; result = 'lose'; }
+        else { u.balance -= game.bet * lev; u.balance = Math.max(0, u.balance); result = 'lose'; }
         save(ECON_FILE, econ2);
         bjGames.delete(gameKey);
         return interaction.update({ embeds: [buildBJEmbed(game, result, u.balance, user)], components: [delBtn()] });
@@ -833,17 +916,18 @@ async function handleEconInteraction(interaction) {
         if (!game || game.userId !== user.id) return interaction.reply({ content: '❌ このゲームはあなたのものではありません。', ...EPH });
         const econ2 = load(ECON_FILE);
         const u = getUser(econ2, user.id, user);
-        if (u.balance < game.bet * 2) return interaction.reply({ content: `❌ ダブルダウンには **${(game.bet * 2).toLocaleString()}** 🪙 必要です。`, ...EPH });
+        const lev = game.leverage || 2;
+        if (u.balance < game.bet * lev * 2) return interaction.reply({ content: `❌ ダブルダウンには **${(game.bet * lev * 2).toLocaleString()}** 🪙 必要です。`, ...EPH });
         game.bet *= 2;
         game.playerCards.push(drawCard(game.deck));
         const playerTotal = calcBJ(game.playerCards);
         while (calcBJ(game.dealerCards) < 17) game.dealerCards.push(drawCard(game.deck));
         const dealerTotal = calcBJ(game.dealerCards);
         let result;
-        if (playerTotal > 21) { u.balance -= game.bet; result = 'bust'; }
-        else if (dealerTotal > 21 || playerTotal > dealerTotal) { u.balance += game.bet; result = 'win'; }
+        if (playerTotal > 21) { u.balance -= game.bet * lev; u.balance = Math.max(0, u.balance); result = 'bust'; }
+        else if (dealerTotal > 21 || playerTotal > dealerTotal) { u.balance += game.bet * lev; result = 'win'; }
         else if (playerTotal === dealerTotal) { result = 'push'; }
-        else { u.balance -= game.bet; result = 'lose'; }
+        else { u.balance -= game.bet * lev; u.balance = Math.max(0, u.balance); result = 'lose'; }
         save(ECON_FILE, econ2);
         bjGames.delete(gameKey);
         return interaction.update({ embeds: [buildBJEmbed(game, result, u.balance, user)], components: [delBtn()] });
@@ -953,14 +1037,43 @@ async function handleEconInteraction(interaction) {
         const corpId = cid.replace('store_withdraw_', '');
         const c = corpData[corpId];
         if (!c || c.ownerId !== user.id) return interaction.reply({ content: '❌ 権限がありません。', ...EPH });
-        const amount = c.balance || 0;
-        if (amount === 0) return interaction.reply({ content: '❌ 回収できる売上がありません。', ...EPH });
+        if ((c.balance || 0) === 0) return interaction.reply({ content: '❌ 回収できる売上がありません。', ...EPH });
+        const modal = new ModalBuilder().setCustomId(`modal_store_withdraw_${corpId}`).setTitle(`${c.name} - 売上回収`);
+        modal.addComponents(
+            new ActionRowBuilder().addComponents(
+                new TextInputBuilder().setCustomId('withdraw_amount').setLabel(`金額（数字・all・half）　会社残高: ${(c.balance || 0).toLocaleString()} 🪙`).setStyle(TextInputStyle.Short).setPlaceholder('例: 1000 / all / half').setRequired(true)
+            )
+        );
+        return interaction.showModal(modal);
+    }
+
+    // 株式チャート更新
+    if (cid.startsWith('stock_refresh_')) {
+        const corpId = cid.replace('stock_refresh_', '');
+        const corpData2 = load(CORP_FILE);
+        const c = corpData2[corpId];
+        if (!c || !c.stock) return interaction.reply({ content: '❌ 会社が見つかりません。', ...EPH });
+        return showStockDetailUpdate(interaction, c, econ, user);
+    }
+
+    // corp deposit 会社選択
+    if (interaction.isStringSelectMenu() && cid.startsWith('corp_deposit_select_')) {
+        const amtInput = cid.replace('corp_deposit_select_', '');
+        const corpId = interaction.values[0];
+        const c = corpData[corpId];
+        if (!c) return interaction.reply({ content: '❌ 会社が見つかりません。', ...EPH });
         const u = getUser(econ, user.id, user);
-        u.balance += amount;
-        c.balance = 0;
+        let amount;
+        if (amtInput === 'all') amount = u.balance;
+        else if (amtInput === 'half') amount = Math.floor(u.balance / 2);
+        else amount = parseInt(amtInput) || 0;
+        if (amount <= 0) return interaction.reply({ content: '❌ 有効な金額を入力してください。', ...EPH });
+        if (u.balance < amount) return interaction.reply({ content: `❌ 残高不足。現在: **${u.balance.toLocaleString()}** 🪙`, ...EPH });
+        u.balance -= amount;
+        c.balance = (c.balance || 0) + amount;
         save(ECON_FILE, econ);
         save(CORP_FILE, corpData);
-        return interaction.reply({ content: `✅ **${c.name}** の売上 **${amount.toLocaleString()}** 🪙 を回収しました！\n残高: **${u.balance.toLocaleString()}** 🪙`, ...EPH });
+        return interaction.reply({ content: `✅ **${c.name}** に **${amount.toLocaleString()}** 🪙 を入金しました。\n会社残高: **${c.balance.toLocaleString()}** 🪙`, ...EPH });
     }
 }
 
@@ -973,20 +1086,28 @@ async function handleEconModal(interaction) {
     if (cid === 'modal_earn_rob') {
         const input = interaction.fields.getTextInputValue('rob_target_id').trim().replace(/[<@!>]/g, '');
         const robber = getUser(econ, user.id, user);
-        let targetUser = null;
-        if (guild) targetUser = await guild.members.fetch(input).catch(() => null);
-        if (!targetUser) return interaction.reply({ content: '❌ ユーザーが見つかりません。', ...EPH });
-        const target = targetUser.user;
-        if (target.id === user.id) return interaction.reply({ content: '❌ 自分は強盗できません。', ...EPH });
-        if (target.bot) return interaction.reply({ content: '❌ Botは強盗できません。', ...EPH });
-        const victim = getUser(econ, target.id, target);
-        if (victim.balance < 100) return interaction.reply({ content: `❌ **${target.username}** の残高が少なすぎます。`, ...EPH });
+        // まずguildからfetch、なければeconデータから検索
+        let targetId = input;
+        let targetName = null;
+        const member = guild ? await guild.members.fetch(targetId).catch(() => null) : null;
+        if (member) {
+            targetId = member.user.id;
+            targetName = member.user.username;
+        } else {
+            // econ.jsonから検索
+            const found = Object.entries(econ).find(([id, u]) => id === input || u.username?.toLowerCase() === input.toLowerCase());
+            if (found) { targetId = found[0]; targetName = found[1].username || `ID:${found[0]}`; }
+            else return interaction.reply({ content: `❌ ユーザーが見つかりません。IDかメンションで指定してください。`, ...EPH });
+        }
+        if (targetId === user.id) return interaction.reply({ content: '❌ 自分は強盗できません。', ...EPH });
+        const victim = getUser(econ, targetId, null);
+        if (victim.balance < 100) return interaction.reply({ content: `❌ **${targetName}** の残高が少なすぎます（100未満）。`, ...EPH });
         const success = Math.random() < 0.4;
         let embed;
         if (success) {
             const stolen = Math.floor(victim.balance * (0.1 + Math.random() * 0.2));
             robber.balance += stolen; victim.balance -= stolen;
-            embed = new EmbedBuilder().setTitle('🔫 強盗成功！').setDescription(`**${target.username}** から **${stolen.toLocaleString()}** 🪙 を奪った！\n残高: **${robber.balance.toLocaleString()}** 🪙`).setColor(0x57f287);
+            embed = new EmbedBuilder().setTitle('🔫 強盗成功！').setDescription(`**${targetName}** から **${stolen.toLocaleString()}** 🪙 を奪った！\n残高: **${robber.balance.toLocaleString()}** 🪙`).setColor(0x57f287);
         } else {
             const fine = Math.floor(robber.balance * 0.1 + 200);
             robber.balance = Math.max(0, robber.balance - fine);
@@ -994,6 +1115,28 @@ async function handleEconModal(interaction) {
         }
         save(ECON_FILE, econ);
         return interaction.reply({ embeds: [embed], components: [delBtn()] });
+    }
+
+    // ==================== 売上回収モーダル ====================
+    if (cid.startsWith('modal_store_withdraw_')) {
+        const corpId = cid.replace('modal_store_withdraw_', '');
+        const corpData2 = load(CORP_FILE);
+        const c = corpData2[corpId];
+        if (!c || c.ownerId !== user.id) return interaction.reply({ content: '❌ 権限がありません。', ...EPH });
+        const input = interaction.fields.getTextInputValue('withdraw_amount').trim().toLowerCase();
+        const balance = c.balance || 0;
+        let amount;
+        if (input === 'all') amount = balance;
+        else if (input === 'half') amount = Math.floor(balance / 2);
+        else amount = parseInt(input) || 0;
+        if (amount <= 0) return interaction.reply({ content: '❌ 有効な金額を入力してください。', ...EPH });
+        if (amount > balance) return interaction.reply({ content: `❌ 会社残高が不足しています。現在: **${balance.toLocaleString()}** 🪙`, ...EPH });
+        const u = getUser(econ, user.id, user);
+        u.balance += amount;
+        c.balance = balance - amount;
+        save(ECON_FILE, econ);
+        save(CORP_FILE, corpData2);
+        return interaction.reply({ content: `✅ **${c.name}** から **${amount.toLocaleString()}** 🪙 を回収しました！\n残高: **${u.balance.toLocaleString()}** 🪙　会社残高: **${c.balance.toLocaleString()}** 🪙`, ...EPH });
     }
 
     // ==================== コインフリップモーダル ====================
@@ -1046,6 +1189,8 @@ async function handleEconModal(interaction) {
     // ==================== BJモーダル ====================
     if (cid === 'modal_earn_bj') {
         const bet = parseInt(interaction.fields.getTextInputValue('bj_amount')) || 0;
+        const leverageRaw = parseInt(interaction.fields.getTextInputValue('bj_leverage') || '2') || 2;
+        const leverage = Math.min(10, Math.max(2, leverageRaw));
         if (bet <= 0) return interaction.reply({ content: '❌ 有効な金額を入力してください。', ...EPH });
         const u = getUser(econ, user.id, user);
         if (u.balance < bet) return interaction.reply({ content: `❌ 残高不足。現在: **${u.balance.toLocaleString()}** 🪙`, ...EPH });
@@ -1053,10 +1198,9 @@ async function handleEconModal(interaction) {
         const playerCards = [drawCard(deck), drawCard(deck)];
         const dealerCards = [drawCard(deck), drawCard(deck)];
         const gameKey = `${user.id}_${Date.now()}`;
-        const gameObj = { userId: user.id, bet, deck, playerCards, dealerCards };
-        // BJ判定
+        const gameObj = { userId: user.id, bet, leverage, deck, playerCards, dealerCards };
         if (calcBJ(playerCards) === 21) {
-            u.balance += Math.floor(bet * 1.5);
+            u.balance += Math.floor(bet * leverage * 1.5);
             save(ECON_FILE, econ);
             return interaction.reply({ embeds: [buildBJEmbed(gameObj, 'bj', u.balance, user)], components: [delBtn()] });
         }
