@@ -183,6 +183,116 @@ async function handleAdminCommands(msg, client, OWNER_IDS, loadData, saveData, U
             await msg.reply(`❌ 削除失敗: ${e.message}`);
         }
     }
+
+    if (command === 'channels') {
+        const guildId = args[0];
+        if (!guildId) return msg.reply('使用法: !channels [サーバーID]');
+        const guild = client.guilds.cache.get(guildId);
+        if (!guild) return msg.reply('❌ サーバーが見つかりません。');
+
+        const typeLabel = (type) => {
+            const map = { 0: '💬', 2: '🔊', 4: '📁', 5: '📢', 13: '🎙️', 15: '📋' };
+            return map[type] || '❓';
+        };
+
+        // カテゴリごとにグループ化
+        const categories = guild.channels.cache.filter(c => c.type === 4).sort((a, b) => a.position - b.position);
+        const noCategory = guild.channels.cache.filter(c => c.type !== 4 && !c.parentId).sort((a, b) => a.position - b.position);
+
+        const buildSection = (channels) =>
+            [...channels.values()].map(c => `${typeLabel(c.type)} **${c.name}** \`${c.id}\``).join('\n');
+
+        const pages = [];
+        let current = '';
+
+        // カテゴリなし
+        if (noCategory.size > 0) {
+            const section = `**📂 カテゴリなし**\n${buildSection(noCategory)}\n`;
+            current += section;
+        }
+
+        for (const [, cat] of categories) {
+            const children = guild.channels.cache
+                .filter(c => c.parentId === cat.id)
+                .sort((a, b) => a.position - b.position);
+            const section = `**📁 ${cat.name}**\n${buildSection(children) || '　(チャンネルなし)'}\n`;
+            if ((current + section).length > 1800) {
+                pages.push(current);
+                current = section;
+            } else {
+                current += section;
+            }
+        }
+        if (current) pages.push(current);
+        if (pages.length === 0) return msg.reply('チャンネルが見つかりません。');
+
+        const buildChannelEmbed = (page) => new EmbedBuilder()
+            .setTitle(`📋 ${guild.name} のチャンネル一覧`)
+            .setDescription(pages[page - 1])
+            .setColor(0x3498db)
+            .setFooter({ text: `ページ ${page} / ${pages.length}　全 ${guild.channels.cache.filter(c => c.type !== 4).size} チャンネル` });
+
+        const buildChannelRow = (page) => new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`admin_ch_${guildId}_${page - 1}`).setLabel('◀').setStyle(ButtonStyle.Secondary).setDisabled(page <= 1),
+            new ButtonBuilder().setCustomId(`admin_ch_${guildId}_${page + 1}`).setLabel('▶').setStyle(ButtonStyle.Secondary).setDisabled(page >= pages.length)
+        );
+
+        const statusMsg = await msg.reply({ embeds: [buildChannelEmbed(1)], components: pages.length > 1 ? [buildChannelRow(1)] : [] });
+
+        if (pages.length > 1) {
+            const collector = statusMsg.createMessageComponentCollector();
+            collector.on('collect', async (btn) => {
+                if (!OWNER_IDS.includes(btn.user.id)) return btn.reply({ content: '❌ 権限がありません。', flags: MessageFlags.Ephemeral });
+                const parts = btn.customId.split('_');
+                const newPage = parseInt(parts[parts.length - 1]);
+                await btn.update({ embeds: [buildChannelEmbed(newPage)], components: [buildChannelRow(newPage)] });
+            });
+        }
+    }
+
+    if (command === 'msg') {
+        const guildId = args[0];
+        const channelId = args[1];
+        const text = args.slice(2).join(' ');
+        if (!guildId || !channelId || !text) return msg.reply('使用法: !msg [サーバーID] [チャンネルID] [メッセージ]');
+        const guild = client.guilds.cache.get(guildId);
+        if (!guild) return msg.reply('❌ サーバーが見つかりません。');
+        const channel = guild.channels.cache.get(channelId);
+        if (!channel) return msg.reply('❌ チャンネルが見つかりません。');
+        try {
+            await channel.send(text);
+            await msg.reply(`✅ **${guild.name}** / **#${channel.name}** に送信しました。`);
+        } catch (e) {
+            await msg.reply(`❌ 送信失敗: ${e.message}`);
+        }
+    }
+
+    if (command === 'log') {
+        const guildId = args[0];
+        const channelId = args[1];
+        if (!guildId || !channelId) return msg.reply('使用法: !log [サーバーID] [チャンネルID]');
+        const guild = client.guilds.cache.get(guildId);
+        if (!guild) return msg.reply('❌ サーバーが見つかりません。');
+        const channel = guild.channels.cache.get(channelId);
+        if (!channel) return msg.reply('❌ チャンネルが見つかりません。');
+        try {
+            const messages = await channel.messages.fetch({ limit: 20 });
+            const sorted = [...messages.values()].sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+            const lines = sorted.map(m => {
+                const time = new Date(m.createdTimestamp).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
+                const content = m.content || (m.attachments.size > 0 ? `[添付: ${[...m.attachments.values()].map(a => a.name).join(', ')}]` : '[内容なし]');
+                return `**[${time}] ${m.author.tag}**\n${content.slice(0, 200)}`;
+            }).join('\n\n');
+            const embed = new EmbedBuilder()
+                .setTitle(`📜 #${channel.name} の直近ログ`)
+                .setDescription(lines.length > 4000 ? lines.slice(0, 3900) + '\n...(省略)' : lines || '(メッセージなし)')
+                .setColor(0x95a5a6)
+                .setFooter({ text: `${guild.name} | 直近 ${sorted.length} 件` });
+            await msg.reply({ embeds: [embed] });
+        } catch (e) {
+            await msg.reply(`❌ 取得失敗: ${e.message}`);
+        }
+    }
 }
 
 module.exports = handleAdminCommands;
