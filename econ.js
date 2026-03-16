@@ -1591,6 +1591,28 @@ async function handleEconModal(interaction) {
         else return doSellCrypto(interaction, coin, amtInput, econ, u, cryptoData, CRYPTO_FILE);
     }
 
+    // ==================== 売上回収モーダル ====================
+    if (cid.startsWith('modal_store_withdraw_')) {
+        const corpId = cid.replace('modal_store_withdraw_', '');
+        const corpData = load(CORP_FILE);
+        const c = corpData[corpId];
+        if (!c || c.ownerId !== user.id) return interaction.reply({ content: '❌ 権限がありません。', ...EPH });
+        const input = interaction.fields.getTextInputValue('withdraw_amount').trim().toLowerCase();
+        const balance = c.balance || 0;
+        let amount;
+        if (input === 'all') amount = balance;
+        else if (input === 'half') amount = Math.floor(balance / 2);
+        else amount = parseInt(input) || 0;
+        if (amount <= 0) return interaction.reply({ content: '❌ 有効な金額を入力してください。', ...EPH });
+        if (amount > balance) return interaction.reply({ content: `❌ 会社残高が不足しています。現在: **${balance.toLocaleString()}** 🪙`, ...EPH });
+        const u = getUser(econ, user.id, user);
+        u.balance += amount;
+        c.balance = balance - amount;
+        save(ECON_FILE, econ);
+        save(CORP_FILE, corpData);
+        return interaction.reply({ content: `✅ **${c.name}** から **${amount.toLocaleString()}** 🪙 を回収しました！\n残高: **${u.balance.toLocaleString()}** 🪙　会社残高: **${c.balance.toLocaleString()}** 🪙`, ...EPH });
+    }
+
     // ==================== 強盗モーダル ====================
     // ==================== 銀行ローンモーダル ====================
     if (cid === 'modal_bank_loan') {
