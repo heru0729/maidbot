@@ -1201,7 +1201,8 @@ async function showStoreManage(interaction, c, corpData, user) {
         new ButtonBuilder().setCustomId(`store_withdraw_${c.id}`).setLabel('売上回収').setStyle(ButtonStyle.Success)
     );
     const row2 = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(`store_issuestock_${c.id}`).setLabel(c.stock ? '📊 株式追加発行' : '📊 株式発行').setStyle(ButtonStyle.Secondary)
+        new ButtonBuilder().setCustomId(`store_issuestock_${c.id}`).setLabel(c.stock ? '📊 株式追加発行' : '📊 株式発行').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(`corp_dissolve_${c.id}`).setLabel('🗑️ 会社解散').setStyle(ButtonStyle.Danger)
     );
     return interaction.reply({ embeds: [embed], components: [row1, row2], ...EPH });
 }
@@ -1212,7 +1213,54 @@ async function handleEconInteraction(interaction) {
     const econ = load(ECON_FILE);
     const corpData = load(CORP_FILE);
 
-    // 銀行ボタン
+    // 会社解散ボタン（確認）
+    if (cid.startsWith('corp_dissolve_')) {
+        const corpId = cid.replace('corp_dissolve_', '');
+        const c = corpData[corpId];
+        if (!c || c.ownerId !== user.id) return interaction.reply({ content: '❌ 権限がありません。', ...EPH });
+        const embed = new EmbedBuilder().setTitle('⚠️ 会社解散の確認').setColor(0xff4757)
+            .setDescription(`**${c.name}** を解散しますか？\n\n以下が自動処理されます：\n• 会社残高 **${(c.balance || 0).toLocaleString()}** 🪙 をオーナーに返還\n• 株式保有者に現在株価で自動買い戻し\n\n**この操作は取り消せません。**`);
+        const row = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`corp_dissolve_confirm_${corpId}`).setLabel('解散する').setStyle(ButtonStyle.Danger),
+            new ButtonBuilder().setCustomId(`corp_dissolve_cancel`).setLabel('キャンセル').setStyle(ButtonStyle.Secondary)
+        );
+        return interaction.reply({ embeds: [embed], components: [row], ...EPH });
+    }
+
+    // 会社解散確定
+    if (cid.startsWith('corp_dissolve_confirm_')) {
+        const corpId = cid.replace('corp_dissolve_confirm_', '');
+        const corpData2 = load(CORP_FILE);
+        const c = corpData2[corpId];
+        if (!c || c.ownerId !== user.id) return interaction.reply({ content: '❌ 権限がありません。', ...EPH });
+        const u = getUser(econ, user.id, user);
+
+        // 会社残高をオーナーに返還
+        if (c.balance > 0) u.balance += c.balance;
+
+        // 株主に現在株価で自動買い戻し
+        let stockRefundMsg = '';
+        if (c.stock) {
+            for (const [uid, userData] of Object.entries(econ)) {
+                const held = (userData.stocks || {})[corpId] || 0;
+                if (held > 0) {
+                    const refund = Math.floor(c.stock.price * held);
+                    userData.balance = (userData.balance || 0) + refund;
+                    delete userData.stocks[corpId];
+                }
+            }
+            stockRefundMsg = `\n株主に合計 **${(c.stock.price * (c.stock.totalShares - c.stock.availableShares)).toLocaleString()}** 🪙 を返還`;
+        }
+
+        delete corpData2[corpId];
+        save(ECON_FILE, econ);
+        save(CORP_FILE, corpData2);
+        return interaction.reply({ content: `✅ **${c.name}** を解散しました。\n会社残高 **${(c.balance || 0).toLocaleString()}** 🪙 を回収${stockRefundMsg}`, ...EPH });
+    }
+
+    if (cid === 'corp_dissolve_cancel') {
+        return interaction.update({ content: '❌ 解散をキャンセルしました。', embeds: [], components: [] });
+    }
     if (cid === 'bank_loan') {
         const modal = new ModalBuilder().setCustomId('modal_bank_loan').setTitle('💸 ローンを借りる');
         modal.addComponents(
