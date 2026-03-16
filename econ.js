@@ -1,6 +1,10 @@
-const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, SlashCommandBuilder, PermissionFlagsBits, MessageFlags, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
+const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, SlashCommandBuilder, PermissionFlagsBits, MessageFlags, ModalBuilder, TextInputBuilder, TextInputStyle, AttachmentBuilder } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
+
+// canvasが使える場合は画像チャート、使えない場合はテキストチャートにフォールバック
+let buildPriceChart = null;
+try { ({ buildPriceChart } = require('./chart.js')); } catch (e) { /* canvasなし */ }
 
 const ECON_FILE  = path.join(__dirname, 'data', 'econ.json');
 const CORP_FILE  = path.join(__dirname, 'data', 'corp.json');
@@ -25,6 +29,17 @@ function getUser(econ, userId, user) {
 }
 
 // ==================== 株式チャート ====================
+// チャートを生成（canvas画像 or テキストフォールバック）
+async function makeChart(history, label, color) {
+    if (buildPriceChart && history && history.length >= 2) {
+        try {
+            const buf = buildPriceChart(history, label, color);
+            return { attachment: new AttachmentBuilder(buf, { name: 'chart.png' }), imageUrl: 'attachment://chart.png' };
+        } catch (e) { /* fallthrough */ }
+    }
+    return { attachment: null, imageUrl: null };
+}
+
 function buildStockChart(history) {
     if (!history || history.length < 2) return null;
     const h = history.slice(-10);
@@ -154,13 +169,15 @@ const econCommands = [
         .addSubcommand(s => s.setName('flip').setDescription('コインフリップ').addStringOption(o => o.setName('amount').setDescription('金額（数字・all・half）').setRequired(true)).addStringOption(o => o.setName('side').setDescription('omote か ura').setRequired(true)))
         .addSubcommand(s => s.setName('slots').setDescription('スロット').addStringOption(o => o.setName('amount').setDescription('金額（数字・all・half）').setRequired(true)))
         .addSubcommand(s => s.setName('bj').setDescription('ブラックジャック').addStringOption(o => o.setName('amount').setDescription('賭け金額（数字・all・half）').setRequired(true)).addIntegerOption(o => o.setName('leverage').setDescription('レバレッジ倍率（2〜10）').setMinValue(2).setMaxValue(10))),
-    new SlashCommandBuilder().setName('send').setDescription('他のユーザーに送金します').addUserOption(o => o.setName('user').setDescription('送金先ユーザー').setRequired(true)).addStringOption(o => o.setName('amount').setDescription('金額（数字・all・half）').setRequired(true)),
+    new SlashCommandBuilder().setName('pay').setDescription('他のユーザーに送金します').addUserOption(o => o.setName('user').setDescription('送金先ユーザー').setRequired(true)).addStringOption(o => o.setName('amount').setDescription('金額（数字・all・half）').setRequired(true)),
+    new SlashCommandBuilder().setName('dust').setDescription('インベントリのアイテムを捨てます').addStringOption(o => o.setName('item').setDescription('アイテム名（未指定でセレクト）')).addIntegerOption(o => o.setName('amount').setDescription('捨てる数（未指定で1個）').setMinValue(1)),
     new SlashCommandBuilder().setName('shop').setDescription('ショップのアイテム一覧を表示します'),
     new SlashCommandBuilder().setName('buy').setDescription('アイテムを購入します').addStringOption(o => o.setName('item').setDescription('アイテム名（未指定でセレクト）')),
     new SlashCommandBuilder().setName('sell').setDescription('インベントリのアイテムを売却します').addStringOption(o => o.setName('item').setDescription('アイテム名（未指定でセレクト）')).addIntegerOption(o => o.setName('amount').setDescription('売却数（未指定で1個）').setMinValue(1)),
     new SlashCommandBuilder().setName('inventory').setDescription('所持アイテムを確認します').addUserOption(o => o.setName('user').setDescription('対象ユーザー（未指定なら自分）')),
     new SlashCommandBuilder().setName('econrank').setDescription('所持金ランキングを表示します'),
     new SlashCommandBuilder().setName('bank').setDescription('銀行メニュー（残高確認・ローン・返済）'),
+    new SlashCommandBuilder().setName('account').setDescription('口座メニュー（入金・出金・利息0.5%/日）'),
     new SlashCommandBuilder().setName('corp')
         .setDescription('会社の管理')
         .addSubcommand(sub => sub.setName('create').setDescription('会社を設立します（1人2社まで・設立費用10,000枚）')
@@ -446,7 +463,7 @@ async function handleEcon(interaction) {
         return;
     }
 
-    if (commandName === 'send') {
+    if (commandName === 'pay') {
         const target = options.getUser('user');
         if (target.id === user.id) return interaction.reply({ content: '❌ 自分自身には送金できません。', ...EPH });
         if (target.bot) return interaction.reply({ content: '❌ Botには送金できません。', ...EPH });
@@ -470,6 +487,25 @@ async function handleEcon(interaction) {
                 { name: '残高', value: `${sender.balance.toLocaleString()} ${CURRENCY}`, inline: true }
             ).setTimestamp();
         return interaction.reply({ embeds: [embed], components: [delBtn()] });
+    }
+
+    if (commandName === 'dust') {
+        const u = getUser(econ, user.id, user);
+        if (!u.inventory || u.inventory.length === 0) return interaction.reply({ content: '❌ インベントリが空です。', ...EPH });
+        const itemName = options.getString('item');
+        const dustCount = options.getInteger('amount') || 1;
+        if (!itemName) {
+            const counts = {};
+            for (const item of u.inventory) counts[item.name] = (counts[item.name] || 0) + 1;
+            const select = new StringSelectMenuBuilder()
+                .setCustomId(`dust_select_${dustCount}`)
+                .setPlaceholder('捨てるアイテムを選択')
+                .addOptions(Object.entries(counts).slice(0, 25).map(([name, count]) => ({
+                    label: name, description: `所持: ${count}個`, value: name
+                })));
+            return interaction.reply({ content: `🗑️ 捨てるアイテムを選択してください（${dustCount}個捨てます）:`, components: [new ActionRowBuilder().addComponents(select)], ...EPH });
+        }
+        return doDustItem(interaction, itemName, dustCount, econ, u);
     }
 
     if (commandName === 'shop') {
@@ -838,6 +874,18 @@ async function handleEcon(interaction) {
     }
 }
 
+async function doDustItem(interaction, itemName, dustCount, econ, u) {
+    const indices = [];
+    for (let i = 0; i < u.inventory.length && indices.length < dustCount; i++) {
+        if (u.inventory[i].name.toLowerCase() === itemName.toLowerCase()) indices.push(i);
+    }
+    if (indices.length === 0) return interaction.reply({ content: `❌ **${itemName}** をインベントリに持っていません。`, ...EPH });
+    if (indices.length < dustCount) return interaction.reply({ content: `❌ **${itemName}** は ${indices.length} 個しか持っていません。`, ...EPH });
+    for (const i of [...indices].reverse()) u.inventory.splice(i, 1);
+    save(ECON_FILE, econ);
+    return interaction.reply({ content: `🗑️ **${itemName}** × ${dustCount} を捨てました。`, ...EPH });
+}
+
 async function doBuyItem(interaction, itemName, econ, user, guild, shop) {
     const item = Object.values(shop || load(SHOP_FILE)).find(i => i.name.toLowerCase() === itemName.toLowerCase());
     if (!item) return interaction.reply({ content: `❌ **${itemName}** は存在しません。`, ...EPH });
@@ -875,12 +923,13 @@ async function showStockDetail(interaction, c, econ, user) {
     const u = getUser(econ, user.id, user);
     const price = c.stock.price;
     const history = c.stock.history || [];
-    const chartStr = buildStockChart(history);
     const userShares = (u.stocks || {})[c.id] || 0;
     const prev = history[history.length - 2] || price;
+    const accentColor = price > prev ? 0x57f287 : price < prev ? 0xff4757 : 0x3498db;
+    const { attachment, imageUrl } = await makeChart(history, `${c.name} 株式`, price > prev ? '#57f287' : price < prev ? '#ff4757' : '#5865f2');
     const embed = new EmbedBuilder()
         .setTitle(`📈 ${c.name} 株式情報`)
-        .setColor(price > prev ? 0x57f287 : price < prev ? 0xff4757 : 0x3498db)
+        .setColor(accentColor)
         .addFields(
             { name: '現在株価', value: `**${fmtPrice(price)}** 🪙`, inline: true },
             { name: '発行株数', value: `**${c.stock.totalShares.toLocaleString()}** 株`, inline: true },
@@ -888,26 +937,29 @@ async function showStockDetail(interaction, c, econ, user) {
             { name: '購入可能', value: `**${c.stock.availableShares}** 株`, inline: true },
             { name: '時価総額', value: `**${fmtPrice(round3(price * c.stock.totalShares))}** 🪙`, inline: true },
             { name: '手数料', value: '売買各2%', inline: true }
-        )
-        .setDescription(chartStr ? `\`\`\`\n${chartStr}\n\`\`\`` : '価格履歴なし');
+        );
+    if (imageUrl) embed.setImage(imageUrl);
+    else { const chartStr = buildStockChart(history); if (chartStr) embed.setDescription(`\`\`\`\n${chartStr}\n\`\`\``); }
     const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId(`stock_buy_${c.id}`).setLabel('📈 買う').setStyle(ButtonStyle.Success).setDisabled(c.stock.availableShares <= 0),
         new ButtonBuilder().setCustomId(`stock_sell_${c.id}`).setLabel('📉 売る').setStyle(ButtonStyle.Danger).setDisabled(userShares <= 0),
         new ButtonBuilder().setCustomId(`stock_refresh_${c.id}`).setLabel('🔄 更新').setStyle(ButtonStyle.Secondary)
     );
-    return interaction.reply({ embeds: [embed], components: [row, delBtn()] });
+    const files = attachment ? [attachment] : [];
+    return interaction.reply({ embeds: [embed], components: [row, delBtn()], files });
 }
 
 async function showStockDetailUpdate(interaction, c, econ, user) {
     const u = getUser(econ, user.id, user);
     const price = c.stock.price;
     const history = c.stock.history || [];
-    const chartStr = buildStockChart(history);
     const userShares = (u.stocks || {})[c.id] || 0;
     const prev = history[history.length - 2] || price;
+    const accentColor = price > prev ? 0x57f287 : price < prev ? 0xff4757 : 0x3498db;
+    const { attachment, imageUrl } = await makeChart(history, `${c.name} 株式`, price > prev ? '#57f287' : price < prev ? '#ff4757' : '#5865f2');
     const embed = new EmbedBuilder()
         .setTitle(`📈 ${c.name} 株式情報`)
-        .setColor(price > prev ? 0x57f287 : price < prev ? 0xff4757 : 0x3498db)
+        .setColor(accentColor)
         .addFields(
             { name: '現在株価', value: `**${fmtPrice(price)}** 🪙`, inline: true },
             { name: '発行株数', value: `**${c.stock.totalShares.toLocaleString()}** 株`, inline: true },
@@ -915,14 +967,16 @@ async function showStockDetailUpdate(interaction, c, econ, user) {
             { name: '購入可能', value: `**${c.stock.availableShares}** 株`, inline: true },
             { name: '時価総額', value: `**${fmtPrice(round3(price * c.stock.totalShares))}** 🪙`, inline: true },
             { name: '手数料', value: '売買各2%', inline: true }
-        )
-        .setDescription(chartStr ? `\`\`\`\n${chartStr}\n\`\`\`` : '価格履歴なし');
+        );
+    if (imageUrl) embed.setImage(imageUrl);
+    else { const chartStr = buildStockChart(history); if (chartStr) embed.setDescription(`\`\`\`\n${chartStr}\n\`\`\``); }
     const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId(`stock_buy_${c.id}`).setLabel('📈 買う').setStyle(ButtonStyle.Success).setDisabled(c.stock.availableShares <= 0),
         new ButtonBuilder().setCustomId(`stock_sell_${c.id}`).setLabel('📉 売る').setStyle(ButtonStyle.Danger).setDisabled(userShares <= 0),
         new ButtonBuilder().setCustomId(`stock_refresh_${c.id}`).setLabel('🔄 更新').setStyle(ButtonStyle.Secondary)
     );
-    return interaction.update({ embeds: [embed], components: [row, delBtn()] });
+    const files = attachment ? [attachment] : [];
+    return interaction.update({ embeds: [embed], components: [row, delBtn()], files });
 }
 
 async function doBuyStock(interaction, c, amount, econ, user, corpData) {
@@ -992,12 +1046,13 @@ async function showCryptoDetail(interaction, coin, econ, user, CRYPTO_FILE, isUp
     const u = getUser(econ, user.id, user);
     const price = coin.price;
     const history = coin.history || [];
-    const chartStr = buildStockChart(history);
     const held = (u.crypto || {})[coin.id] || 0;
     const prev = history[history.length - 2] || price;
+    const accentColor = price > prev ? 0x57f287 : price < prev ? 0xff4757 : 0xf1c40f;
+    const { attachment, imageUrl } = await makeChart(history, `${coin.name} (${coin.symbol})`, price > prev ? '#57f287' : price < prev ? '#ff4757' : '#f1c40f');
     const embed = new EmbedBuilder()
         .setTitle(`💹 ${coin.name} (${coin.symbol})`)
-        .setColor(price > prev ? 0x57f287 : price < prev ? 0xff4757 : 0xf1c40f)
+        .setColor(accentColor)
         .addFields(
             { name: '現在価格', value: `**${fmtPrice(price)}** 🪙`, inline: true },
             { name: '発行枚数', value: `${coin.totalSupply.toLocaleString()}`, inline: true },
@@ -1005,15 +1060,17 @@ async function showCryptoDetail(interaction, coin, econ, user, CRYPTO_FILE, isUp
             { name: '購入可能', value: `${coin.availableSupply.toLocaleString()}`, inline: true },
             { name: '時価総額', value: `**${fmtPrice(round3(price * coin.totalSupply))}** 🪙`, inline: true },
             { name: '手数料', value: '売買各2%', inline: true }
-        )
-        .setDescription(chartStr ? `\`\`\`\n${chartStr}\n\`\`\`` : '価格履歴なし');
+        );
+    if (imageUrl) embed.setImage(imageUrl);
+    else { const chartStr = buildStockChart(history); if (chartStr) embed.setDescription(`\`\`\`\n${chartStr}\n\`\`\``); }
     const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId(`crypto_buy_${coin.id}`).setLabel('💰 買う').setStyle(ButtonStyle.Success).setDisabled(coin.availableSupply <= 0),
         new ButtonBuilder().setCustomId(`crypto_sell_${coin.id}`).setLabel('💸 売る').setStyle(ButtonStyle.Danger).setDisabled(held <= 0),
         new ButtonBuilder().setCustomId(`crypto_refresh_${coin.id}`).setLabel('🔄 更新').setStyle(ButtonStyle.Secondary)
     );
-    if (isUpdate) return interaction.update({ embeds: [embed], components: [row, delBtn()] });
-    return interaction.reply({ embeds: [embed], components: [row, delBtn()] });
+    const files = attachment ? [attachment] : [];
+    if (isUpdate) return interaction.update({ embeds: [embed], components: [row, delBtn()], files });
+    return interaction.reply({ embeds: [embed], components: [row, delBtn()], files });
 }
 
 async function doBuyCrypto(interaction, coin, amtInput, econ, u, cryptoData, CRYPTO_FILE) {
@@ -1030,7 +1087,7 @@ async function doBuyCrypto(interaction, coin, amtInput, econ, u, cryptoData, CRY
     if (!u.crypto) u.crypto = {};
     u.crypto[coin.id] = (u.crypto[coin.id] || 0) + amount;
     coin.availableSupply -= amount;
-    const ratio = 1 + 0.005 * Math.min(Math.log10(amount + 1), 5);
+    const ratio = 1 + 0.02 * Math.min(Math.log10(amount + 1), 5); // 最大+10%
     coin.price = round3(Math.max(0.001, coin.price * ratio));
     if (!coin.history) coin.history = [];
     coin.history.push(coin.price);
@@ -1053,7 +1110,7 @@ async function doSellCrypto(interaction, coin, amtInput, econ, u, cryptoData, CR
     u.balance = round3(u.balance + total);
     u.crypto[coin.id] = held - amount;
     coin.availableSupply += amount;
-    const ratio = 1 - 0.004 * Math.min(Math.log10(amount + 1), 5);
+    const ratio = 1 - 0.015 * Math.min(Math.log10(amount + 1), 5); // 最大-7.5%
     coin.price = round3(Math.max(0.001, coin.price * ratio));
     if (!coin.history) coin.history = [];
     coin.history.push(coin.price);
@@ -1076,7 +1133,7 @@ async function showStoreManage(interaction, c, corpData, user) {
         new ButtonBuilder().setCustomId(`store_withdraw_${c.id}`).setLabel('売上回収').setStyle(ButtonStyle.Success)
     );
     const row2 = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(`store_issuestock_${c.id}`).setLabel('📊 株式発行').setStyle(ButtonStyle.Secondary).setDisabled(!!c.stock)
+        new ButtonBuilder().setCustomId(`store_issuestock_${c.id}`).setLabel(c.stock ? '📊 株式追加発行' : '📊 株式発行').setStyle(ButtonStyle.Secondary)
     );
     return interaction.reply({ embeds: [embed], components: [row1, row2], ...EPH });
 }
@@ -1123,15 +1180,26 @@ async function handleEconInteraction(interaction) {
     // ストア: 株式発行ボタン
     if (cid.startsWith('store_issuestock_')) {
         const corpId = cid.replace('store_issuestock_', '');
-        const modal = new ModalBuilder().setCustomId(`modal_store_issuestock_${corpId}`).setTitle('📊 株式発行');
-        modal.addComponents(
-            new ActionRowBuilder().addComponents(
-                new TextInputBuilder().setCustomId('stock_initial_price').setLabel('初期株価').setStyle(TextInputStyle.Short).setPlaceholder('例: 500').setRequired(true)
-            ),
-            new ActionRowBuilder().addComponents(
-                new TextInputBuilder().setCustomId('stock_total_shares').setLabel('発行株数').setStyle(TextInputStyle.Short).setPlaceholder('例: 100').setRequired(true)
-            )
-        );
+        const c = corpData[corpId];
+        if (!c || c.ownerId !== user.id) return interaction.reply({ content: '❌ 権限がありません。', ...EPH });
+        const isAdditional = !!c.stock;
+        const modal = new ModalBuilder().setCustomId(`modal_store_issuestock_${corpId}`).setTitle(isAdditional ? '📊 株式追加発行' : '📊 株式発行');
+        if (isAdditional) {
+            modal.addComponents(
+                new ActionRowBuilder().addComponents(
+                    new TextInputBuilder().setCustomId('stock_total_shares').setLabel(`追加発行株数（現在: ${c.stock.totalShares.toLocaleString()}株　株価: ${fmtPrice(c.stock.price)}🪙）`).setStyle(TextInputStyle.Short).setPlaceholder('例: 100').setRequired(true)
+                )
+            );
+        } else {
+            modal.addComponents(
+                new ActionRowBuilder().addComponents(
+                    new TextInputBuilder().setCustomId('stock_initial_price').setLabel('初期株価').setStyle(TextInputStyle.Short).setPlaceholder('例: 500').setRequired(true)
+                ),
+                new ActionRowBuilder().addComponents(
+                    new TextInputBuilder().setCustomId('stock_total_shares').setLabel('発行株数').setStyle(TextInputStyle.Short).setPlaceholder('例: 100').setRequired(true)
+                )
+            );
+        }
         return interaction.showModal(modal);
     }
 
@@ -1267,6 +1335,14 @@ async function handleEconInteraction(interaction) {
         const embed = buildBJEmbed(game, result, u.balance, user);
         if (debtMsg) embed.setFooter({ text: debtMsg });
         return interaction.update({ embeds: [embed], components: [delBtn()] });
+    }
+
+    // dust セレクト
+    if (interaction.isStringSelectMenu() && cid.startsWith('dust_select_')) {
+        const dustCount = parseInt(cid.replace('dust_select_', '')) || 1;
+        const itemName = interaction.values[0];
+        const u = getUser(econ, user.id, user);
+        return doDustItem(interaction, itemName, dustCount, econ, u);
     }
 
     // buy セレクト
@@ -1543,13 +1619,22 @@ async function handleEconModal(interaction) {
         const corpData = load(CORP_FILE);
         const c = corpData[corpId];
         if (!c || c.ownerId !== user.id) return interaction.reply({ content: '❌ 権限がありません。', ...EPH });
-        if (c.stock) return interaction.reply({ content: '❌ すでに株式を発行しています。', ...EPH });
-        const price = parseInt(interaction.fields.getTextInputValue('stock_initial_price')) || 0;
         const shares = parseInt(interaction.fields.getTextInputValue('stock_total_shares')) || 0;
-        if (price <= 0 || shares <= 0) return interaction.reply({ content: '❌ 有効な値を入力してください。', ...EPH });
-        c.stock = { price, totalShares: shares, availableShares: shares, history: [price] };
-        save(CORP_FILE, corpData);
-        return interaction.reply({ content: `✅ **${c.name}** の株式を発行しました！\n初期株価: **${price.toLocaleString()}** ${CURRENCY}　発行数: **${shares}** 株\n\`/stock ${c.name}\` で確認できます。`, ...EPH });
+        if (shares <= 0) return interaction.reply({ content: '❌ 有効な株数を入力してください。', ...EPH });
+        if (c.stock) {
+            // 追加発行
+            c.stock.totalShares += shares;
+            c.stock.availableShares += shares;
+            save(CORP_FILE, corpData);
+            return interaction.reply({ content: `✅ **${c.name}** の株式を **${shares.toLocaleString()}** 株 追加発行しました！\n総発行株数: **${c.stock.totalShares.toLocaleString()}** 株　現在株価: **${fmtPrice(c.stock.price)}** 🪙`, ...EPH });
+        } else {
+            // 新規発行
+            const price = parseFloat(interaction.fields.getTextInputValue('stock_initial_price')) || 0;
+            if (price <= 0) return interaction.reply({ content: '❌ 有効な株価を入力してください。', ...EPH });
+            c.stock = { price: round3(price), totalShares: shares, availableShares: shares, history: [round3(price)] };
+            save(CORP_FILE, corpData);
+            return interaction.reply({ content: `✅ **${c.name}** の株式を新規発行しました！\n初期株価: **${fmtPrice(price)}** 🪙　発行数: **${shares.toLocaleString()}** 株`, ...EPH });
+        }
     }
 
     // ==================== ストア商品追加モーダル ====================
