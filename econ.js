@@ -226,7 +226,7 @@ async function handleEcon(interaction) {
                 new ButtonBuilder().setCustomId('balance_reload').setLabel('🔄 更新').setStyle(ButtonStyle.Secondary)
             ));
         }
-        return interaction.reply({ embeds: [embed], components: rows, ...EPH });
+        return interaction.reply({ embeds: [embed], components: rows });
     }
 
     if (commandName === 'earn') {
@@ -486,7 +486,7 @@ async function handleEcon(interaction) {
                 { name: '金額', value: `**${amount.toLocaleString()}** ${CURRENCY}`, inline: false },
                 { name: '残高', value: `${sender.balance.toLocaleString()} ${CURRENCY}`, inline: true }
             ).setTimestamp();
-        return interaction.reply({ embeds: [embed], components: [delBtn()], ...EPH });
+        return interaction.reply({ embeds: [embed], components: [delBtn()] });
     }
 
     if (commandName === 'dust') {
@@ -578,7 +578,7 @@ async function handleEcon(interaction) {
             for (const item of inv) counts[item.name] = (counts[item.name] || 0) + 1;
             embed.setDescription(Object.entries(counts).map(([name, count]) => `• **${name}** × ${count}`).join('\n'));
         }
-        return interaction.reply({ embeds: [embed], components: [delBtn()], ...EPH });
+        return interaction.reply({ embeds: [embed], components: [delBtn()] });
     }
 
     if (commandName === 'econrank') {
