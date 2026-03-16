@@ -184,7 +184,7 @@ const econCommands = [
             .addStringOption(o => o.setName('name').setDescription('会社名').setRequired(true))
             .addStringOption(o => o.setName('description').setDescription('会社の説明').setRequired(true)))
         .addSubcommand(sub => sub.setName('setting').setDescription('会社の管理・ストア設定').addStringOption(o => o.setName('corp').setDescription('会社名（未指定でセレクト）')))
-        .addSubcommand(sub => sub.setName('deposit').setDescription('会社にお金を入れます').addStringOption(o => o.setName('corp').setDescription('会社名（未指定でセレクト）')).addStringOption(o => o.setName('amount').setDescription('金額（数字・all・half）').setRequired(true))),
+        .addSubcommand(sub => sub.setName('deposit').setDescription('会社にお金を入れます').addStringOption(o => o.setName('amount').setDescription('金額（数字・all・half）').setRequired(true)).addStringOption(o => o.setName('corp').setDescription('会社名（未指定でセレクト）'))),
     new SlashCommandBuilder().setName('crypto')
         .setDescription('仮想通貨市場')
         .addSubcommand(sub => sub.setName('create').setDescription('仮想通貨を発行します（1人1枚）')
