@@ -142,54 +142,9 @@ function cdStr(remaining) {
     return `⏳ あと${s}秒`;
 }
 
-function buildEarnPanel(u, now) {
-    const jstNow = new Date(now + 9 * 3600000);
-    const todayStr = `${jstNow.getUTCFullYear()}-${String(jstNow.getUTCMonth()+1).padStart(2,'0')}-${String(jstNow.getUTCDate()).padStart(2,'0')}`;
-    const dailyDone = u.dailyDate === todayStr;
-    const workRem  = 3600000  - (now - (u.workLast  || 0));
-    const crimeRem = 7200000  - (now - (u.crimeLast || 0));
-    const huntRem  = 1800000  - (now - (u.huntLast  || 0));
-    const fishRem  = 2700000  - (now - (u.fishLast  || 0));
-    const streak = u.dailyStreak || 0;
-
-    const embed = new EmbedBuilder()
-        .setTitle('💰 お金を稼ぐ')
-        .setColor(0xf1c40f)
-        .addFields(
-            { name: '🎁 デイリー', value: `200〜400+ボーナス\n連続${streak}日目 🔥\n${dailyDone ? '⏳ 受取済（深夜0時リセット）' : '✅ 準備完了'}`, inline: true },
-            { name: '💼 労働', value: `50〜300 ${CURRENCY}\nCD: 1時間\n${cdStr(workRem)}`, inline: true },
-            { name: '🦹 犯罪', value: `100〜2000 ${CURRENCY}\nCD: 2時間\n${cdStr(crimeRem)}`, inline: true },
-            { name: '🏹 狩猟', value: `アイテムドロップ\nCD: 30分\n${cdStr(huntRem)}`, inline: true },
-            { name: '🎣 釣り', value: `魚ドロップ\nCD: 45分\n${cdStr(fishRem)}`, inline: true },
-            { name: '🔫 強盗', value: `他ユーザーの10〜30%奪取\n失敗: 罰金`, inline: true },
-            { name: '🪙 コインフリップ', value: `賭けて2倍 or 没収\n50/50`, inline: true },
-            { name: '🎰 スロット', value: `最大10倍\n💎揃い10x ⭐揃い5x`, inline: true },
-            { name: '🃏 ブラックジャック', value: `レバレッジ2〜10倍\nBJ: 1.5倍`, inline: true }
-        );
-
-    const row1 = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('earn_daily').setLabel('🎁 デイリー').setStyle(ButtonStyle.Success).setDisabled(dailyDone),
-        new ButtonBuilder().setCustomId('earn_work').setLabel('💼 労働').setStyle(ButtonStyle.Primary).setDisabled(workRem > 0),
-        new ButtonBuilder().setCustomId('earn_crime').setLabel('🦹 犯罪').setStyle(ButtonStyle.Danger).setDisabled(crimeRem > 0)
-    );
-    const row2 = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('earn_hunt').setLabel('🏹 狩猟').setStyle(ButtonStyle.Success).setDisabled(huntRem > 0),
-        new ButtonBuilder().setCustomId('earn_fish').setLabel('🎣 釣り').setStyle(ButtonStyle.Primary).setDisabled(fishRem > 0),
-        new ButtonBuilder().setCustomId('earn_rob').setLabel('🔫 強盗').setStyle(ButtonStyle.Danger)
-    );
-    const row3 = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('earn_flip').setLabel('🪙 フリップ').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId('earn_slots').setLabel('🎰 スロット').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId('earn_bj').setLabel('🃏 BJ').setStyle(ButtonStyle.Primary)
-    );
-
-    return { embeds: [embed], components: [row1, row2, row3] };
-}
-
 const econCommands = [
     new SlashCommandBuilder().setName('balance').setDescription('所持金を確認します').addUserOption(o => o.setName('user').setDescription('対象ユーザー（未指定なら自分）')),
     new SlashCommandBuilder().setName('earn').setDescription('お金を稼ぐ')
-        .addSubcommand(s => s.setName('panel').setDescription('稼ぎパネルを表示（デイリー・労働・犯罪）'))
         .addSubcommand(s => s.setName('daily').setDescription('デイリーボーナスを受け取る'))
         .addSubcommand(s => s.setName('work').setDescription('働いてコインを稼ぐ（CD: 1時間）'))
         .addSubcommand(s => s.setName('crime').setDescription('犯罪でコインを稼ぐ（CD: 2時間）'))
@@ -258,175 +213,237 @@ async function handleEcon(interaction) {
     }
 
     if (commandName === 'earn') {
+        const sub = options.getSubcommand();
         const u = getUser(econ, user.id, user);
         const now = Date.now();
-        return interaction.reply({ ...buildEarnPanel(u, now), ...EPH });
-    }
 
-    if (commandName === 'hunt') {
-        const u = getUser(econ, user.id, user);
-        const now = Date.now();
-        const remaining = 1800000 - (now - (u.huntLast || 0));
-        if (remaining > 0) return interaction.reply({ content: `⏳ まだ狩りに行けません。${cdStr(remaining)}`, ...EPH });
-        u.huntLast = now;
-        const hunts = [
-            { name: 'ウサギ',   item: '🐰 ウサギの毛皮',  sell: 80,  rare: false },
-            { name: 'シカ',     item: '🦌 シカの角',      sell: 250, rare: false },
-            { name: 'クマ',     item: '🐻 クマの毛皮',    sell: 500, rare: true  },
-            { name: 'キツネ',   item: '🦊 キツネの毛皮',  sell: 150, rare: false },
-            { name: 'イノシシ', item: '🐗 イノシシの牙',  sell: 200, rare: false },
-            { name: 'オオカミ', item: '🐺 オオカミの毛皮', sell: 400, rare: true  },
-        ];
-        const weights = hunts.map(h => h.rare ? 1 : 3);
-        const wtotal = weights.reduce((a,b)=>a+b,0);
-        let wr = Math.random()*wtotal, hunt=hunts[0];
-        for(let i=0;i<hunts.length;i++){wr-=weights[i];if(wr<=0){hunt=hunts[i];break;}}
-        if(!u.inventory) u.inventory=[];
-        u.inventory.push({name:hunt.item,boughtAt:now,sellPrice:hunt.sell});
-        save(ECON_FILE,econ);
-        const huntEmbed = new EmbedBuilder().setTitle(`🏹 ${hunt.name}を仕留めた！`)
-            .setDescription(`<@${user.id}> **${hunt.item}** を手に入れた！\n売却価格: **${hunt.sell.toLocaleString()}** ${CURRENCY}`)
-            .setColor(hunt.rare ? 0xf1c40f : 0x57f287).setTimestamp();
-        const huntReply = await interaction.reply({ embeds: [huntEmbed], fetchReply: true });
-        setTimeout(() => huntReply.delete().catch(()=>{}), 8000);
-        return;
-    }
-
-    if (commandName === 'fish') {
-        const u = getUser(econ, user.id, user);
-        const now = Date.now();
-        const remaining = 2700000 - (now - (u.fishLast || 0));
-        if (remaining > 0) return interaction.reply({ content: `⏳ まだ釣りに行けません。${cdStr(remaining)}`, ...EPH });
-        u.fishLast = now;
-        const fishes = [
-            { name: 'コイ',     item: '🐟 コイ',       sell: 60,   rare: false, legendary: false },
-            { name: 'サーモン', item: '🐠 サーモン',    sell: 150,  rare: false, legendary: false },
-            { name: 'マグロ',   item: '🐡 マグロ',      sell: 400,  rare: true,  legendary: false },
-            { name: 'フグ',     item: '🐡 フグ',        sell: 300,  rare: true,  legendary: false },
-            { name: 'タコ',     item: '🐙 タコ',        sell: 200,  rare: false, legendary: false },
-            { name: 'ゴミ',     item: '🗑️ ゴミ',       sell: 5,    rare: false, legendary: false },
-            { name: '伝説の魚', item: '✨ 伝説の魚',    sell: 2000, rare: true,  legendary: true  },
-        ];
-        const weights = fishes.map(f => f.legendary ? 0.2 : f.rare ? 1 : 4);
-        const wtotal = weights.reduce((a,b)=>a+b,0);
-        let wr = Math.random()*wtotal, fish=fishes[0];
-        for(let i=0;i<fishes.length;i++){wr-=weights[i];if(wr<=0){fish=fishes[i];break;}}
-        if(!u.inventory) u.inventory=[];
-        u.inventory.push({name:fish.item,boughtAt:now,sellPrice:fish.sell});
-        save(ECON_FILE,econ);
-        const fishEmbed = new EmbedBuilder()
-            .setTitle(fish.legendary ? '🌟 伝説の魚を釣り上げた！！' : `🎣 ${fish.name} を釣った！`)
-            .setDescription(`<@${user.id}> **${fish.item}** を手に入れた！\n売却価格: **${fish.sell.toLocaleString()}** ${CURRENCY}`)
-            .setColor(fish.legendary ? 0xf1c40f : fish.rare ? 0x3498db : 0x95a5a6).setTimestamp();
-        const fishReply = await interaction.reply({ embeds: [fishEmbed], fetchReply: true });
-        setTimeout(() => fishReply.delete().catch(()=>{}), fish.legendary ? 30000 : 8000);
-        return;
-    }
-
-    if (commandName === 'rob') {
-        const u = getUser(econ, user.id, user);
-        const input = options.getString('target').replace(/[<@!>]/g, '');
-        const member = guild ? await guild.members.fetch(input).catch(() => null) : null;
-        let targetId = input, targetName = null;
-        if (member) { targetId = member.user.id; targetName = member.user.username; }
-        else {
-            const found = Object.entries(econ).find(([id,eu])=>id===input||eu.username?.toLowerCase()===input.toLowerCase());
-            if (found) { targetId=found[0]; targetName=found[1].username||`ID:${found[0]}`; }
-            else return interaction.reply({ content: '❌ ユーザーが見つかりません。', ...EPH });
-        }
-        if (targetId === user.id) return interaction.reply({ content: '❌ 自分は強盗できません。', ...EPH });
-        const victim = getUser(econ, targetId, null);
-        if (victim.balance < 100) return interaction.reply({ content: `❌ **${targetName}** の残高が少なすぎます。`, ...EPH });
-        const success = Math.random() < 0.4;
-        let robEmbed;
-        if (success) {
-            const stolen = Math.floor(victim.balance * (0.1 + Math.random() * 0.2));
-            u.balance += stolen; victim.balance -= stolen;
-            robEmbed = new EmbedBuilder().setTitle('🔫 強盗成功！').setDescription(`**${targetName}** から **${stolen.toLocaleString()}** 🪙 を奪った！\n残高: **${u.balance.toLocaleString()}** 🪙`).setColor(0x57f287);
-        } else {
-            const fine = Math.floor(u.balance * 0.1 + 200);
-            u.balance = Math.max(0, u.balance - fine);
-            robEmbed = new EmbedBuilder().setTitle('🚔 強盗失敗！').setDescription(`捕まった！罰金 **${fine.toLocaleString()}** 🪙\n残高: **${u.balance.toLocaleString()}** 🪙`).setColor(0xff4757);
-        }
-        save(ECON_FILE, econ);
-        return interaction.reply({ embeds: [robEmbed], components: [delBtn()] });
-    }
-
-    if (commandName === 'flip') {
-        const u = getUser(econ, user.id, user);
-        const amtInput = options.getString('amount').trim().toLowerCase();
-        const sideInput = options.getString('side').trim().toLowerCase();
-        let amount;
-        if (amtInput === 'all') amount = u.balance;
-        else if (amtInput === 'half') amount = Math.floor(u.balance / 2);
-        else amount = parseInt(amtInput) || 0;
-        const side = (sideInput === 'omote' || sideInput === '表') ? 'heads' : 'tails';
-        if (amount <= 0) return interaction.reply({ content: '❌ 有効な金額を入力してください。', ...EPH });
-        if (u.balance < amount) return interaction.reply({ content: `❌ 残高不足。現在: **${u.balance.toLocaleString()}** 🪙`, ...EPH });
-        const result = Math.random() < 0.5 ? 'heads' : 'tails';
-        const win = result === side;
-        if (win) u.balance += amount; else u.balance -= amount;
-        save(ECON_FILE, econ);
-        const flipEmbed = new EmbedBuilder()
-            .setTitle(win ? '🎉 勝利！' : '😢 敗北...')
-            .setColor(win ? 0x57f287 : 0xff4757)
-            .addFields(
-                { name: '選択', value: side === 'heads' ? '表 🪙' : '裏 🔄', inline: true },
-                { name: '結果', value: result === 'heads' ? '表 🪙' : '裏 🔄', inline: true },
-                { name: win ? `+${amount.toLocaleString()} 獲得` : `-${amount.toLocaleString()} 没収`, value: `残高: **${u.balance.toLocaleString()}** 🪙`, inline: false }
-            );
-        return interaction.reply({ embeds: [flipEmbed], components: [delBtn()] });
-    }
-
-    if (commandName === 'slots') {
-        const u = getUser(econ, user.id, user);
-        const amtInput = options.getString('amount').trim().toLowerCase();
-        let amount;
-        if (amtInput === 'all') amount = u.balance;
-        else if (amtInput === 'half') amount = Math.floor(u.balance / 2);
-        else amount = parseInt(amtInput) || 0;
-        if (amount <= 0) return interaction.reply({ content: '❌ 有効な金額を入力してください。', ...EPH });
-        if (u.balance < amount) return interaction.reply({ content: `❌ 残高不足。現在: **${u.balance.toLocaleString()}** 🪙`, ...EPH });
-        const symbols = ['🍒', '🍋', '🍊', '🍇', '⭐', '💎'];
-        const roll = () => symbols[Math.floor(Math.random() * symbols.length)];
-        const s = [roll(), roll(), roll()];
-        let multiplier = 0;
-        if (s[0]===s[1]&&s[1]===s[2]) multiplier = s[0]==='💎'?10:s[0]==='⭐'?5:3;
-        else if (s[0]===s[1]||s[1]===s[2]||s[0]===s[2]) multiplier = 1.5;
-        const win = multiplier > 0;
-        const payout = win ? Math.floor(amount * multiplier) : 0;
-        u.balance += payout - amount;
-        save(ECON_FILE, econ);
-        const slotsEmbed = new EmbedBuilder().setTitle('🎰 スロット')
-            .setDescription(`**[ ${s.join(' | ')} ]**\n\n${win?`🎉 **${multiplier}x** 当たり！ **+${payout.toLocaleString()}** 🪙`:`💸 ハズレ... **-${amount.toLocaleString()}** 🪙`}`)
-            .setColor(win ? 0xf1c40f : 0x95a5a6)
-            .addFields({ name: '残高', value: `**${u.balance.toLocaleString()}** 🪙`, inline: true });
-        return interaction.reply({ embeds: [slotsEmbed], components: [delBtn()] });
-    }
-
-    if (commandName === 'bj') {
-        const u = getUser(econ, user.id, user);
-        const amtInput = options.getString('amount').trim().toLowerCase();
-        const leverageRaw = options.getInteger('leverage') || 2;
-        const leverage = Math.min(10, Math.max(2, leverageRaw));
-        let bet;
-        if (amtInput === 'all') bet = u.balance;
-        else if (amtInput === 'half') bet = Math.floor(u.balance / 2);
-        else bet = parseInt(amtInput) || 0;
-        if (bet <= 0) return interaction.reply({ content: '❌ 有効な金額を入力してください。', ...EPH });
-        if (u.balance < bet) return interaction.reply({ content: `❌ 残高不足。現在: **${u.balance.toLocaleString()}** 🪙`, ...EPH });
-        const deck = buildDeck();
-        const playerCards = [drawCard(deck), drawCard(deck)];
-        const dealerCards = [drawCard(deck), drawCard(deck)];
-        const gameKey = `${user.id}_${Date.now()}`;
-        const gameObj = { userId: user.id, bet, leverage, deck, playerCards, dealerCards };
-        if (calcBJ(playerCards) === 21) {
-            u.balance += Math.floor(bet * leverage * 1.5);
+        if (sub === 'daily') {
+            const jstNow = new Date(now + 9 * 3600000);
+            const todayStr = `${jstNow.getUTCFullYear()}-${String(jstNow.getUTCMonth()+1).padStart(2,'0')}-${String(jstNow.getUTCDate()).padStart(2,'0')}`;
+            if (u.dailyDate === todayStr) {
+                const nextMidnight = new Date(jstNow); nextMidnight.setUTCHours(24, 0, 0, 0);
+                const rem = nextMidnight.getTime() - jstNow.getTime();
+                const h = Math.floor(rem / 3600000), m = Math.floor((rem % 3600000) / 60000);
+                return interaction.reply({ content: `⏳ 今日のデイリーは受け取り済みです。次回: **${h}時間${m}分後**（深夜0時リセット）`, ...EPH });
+            }
+            const streak = (u.dailyStreak || 0) + 1;
+            const base = Math.floor(Math.random() * 201) + 200;
+            const bonus = Math.min(streak, 7) * 50;
+            u.balance += base + bonus; u.dailyLast = now; u.dailyStreak = streak; u.dailyDate = todayStr;
             save(ECON_FILE, econ);
-            return interaction.reply({ embeds: [buildBJEmbed(gameObj, 'bj', u.balance, user)], components: [delBtn()] });
+            const embed = new EmbedBuilder().setTitle('🎁 デイリーボーナス')
+                .setDescription(`<@${user.id}> **+${base + bonus}** ${CURRENCY} を受け取りました！\n残高: **${u.balance.toLocaleString()}** ${CURRENCY}`)
+                .addFields({ name: '内訳', value: `ベース: ${base} + 連続: ${bonus}`, inline: true }, { name: '連続ログイン', value: `${streak}日目 🔥`, inline: true })
+                .setColor(0x57f287).setTimestamp();
+            return interaction.reply({ embeds: [embed], components: [delBtn()] });
         }
-        bjGames.set(gameKey, gameObj);
-        return interaction.reply({ embeds: [buildBJEmbed(gameObj, 'playing', null, user)], components: buildBJRows(gameKey) });
+
+        if (sub === 'work') {
+            const workRem = 3600000 - (now - (u.workLast || 0));
+            if (workRem > 0) return interaction.reply({ content: `⏳ まだ働けません。${cdStr(workRem)}`, ...EPH });
+            const jobs = [
+                { name: 'プログラマー', desc: 'コードを書きまくった', min: 80, max: 180 },
+                { name: 'シェフ', desc: '料理を作って客に振る舞った', min: 60, max: 150 },
+                { name: 'ゲーム実況者', desc: '配信が大盛況だった', min: 50, max: 200 },
+                { name: '宅配ドライバー', desc: '荷物を時間通りに届けた', min: 70, max: 140 },
+                { name: 'デザイナー', desc: 'クライアントに絶賛された', min: 90, max: 170 },
+                { name: '作家', desc: '原稿を書き上げた', min: 60, max: 160 },
+                { name: '教師', desc: '生徒に感謝された', min: 55, max: 130 },
+                { name: '音楽家', desc: 'ライブが満員だった', min: 80, max: 220 },
+                { name: '漁師', desc: '大漁だった', min: 70, max: 160 },
+                { name: '株トレーダー', desc: 'うまくポジションを取った', min: 30, max: 300 },
+            ];
+            const job = jobs[Math.floor(Math.random() * jobs.length)];
+            const amount = Math.floor(Math.random() * (job.max - job.min + 1)) + job.min;
+            u.balance += amount; u.workLast = now;
+            save(ECON_FILE, econ);
+            const embed = new EmbedBuilder().setTitle(`💼 ${job.name} として働いた`)
+                .setDescription(`<@${user.id}> ${job.desc}！\n**+${amount}** ${CURRENCY} を獲得！\n残高: **${u.balance.toLocaleString()}** ${CURRENCY}`)
+                .setColor(0x3498db).setTimestamp();
+            return interaction.reply({ embeds: [embed], components: [delBtn()] });
+        }
+
+        if (sub === 'crime') {
+            const crimeRem = 7200000 - (now - (u.crimeLast || 0));
+            if (crimeRem > 0) return interaction.reply({ content: `⏳ まだ犯罪はできません。${cdStr(crimeRem)}`, ...EPH });
+            u.crimeLast = now;
+            const crimes = [
+                { name: '車上荒らし', success: 0.6, gain: [200, 500], fine: [100, 300] },
+                { name: '銀行強盗',   success: 0.3, gain: [800, 2000], fine: [400, 800] },
+                { name: 'スリ',       success: 0.7, gain: [100, 300],  fine: [50, 200] },
+                { name: '詐欺',       success: 0.5, gain: [300, 700],  fine: [200, 500] },
+                { name: '密輸',       success: 0.4, gain: [500, 1200], fine: [300, 600] },
+            ];
+            const crime = crimes[Math.floor(Math.random() * crimes.length)];
+            const success = Math.random() < crime.success;
+            let embed;
+            if (success) {
+                const amount = Math.floor(Math.random() * (crime.gain[1] - crime.gain[0] + 1)) + crime.gain[0];
+                u.balance += amount;
+                embed = new EmbedBuilder().setTitle(`🦹 ${crime.name} 成功！`).setDescription(`<@${user.id}> **+${amount}** ${CURRENCY}！\n残高: **${u.balance.toLocaleString()}** ${CURRENCY}`).setColor(0x57f287);
+            } else {
+                const fine = Math.floor(Math.random() * (crime.fine[1] - crime.fine[0] + 1)) + crime.fine[0];
+                u.balance = Math.max(0, u.balance - fine);
+                embed = new EmbedBuilder().setTitle(`🚔 ${crime.name} 失敗！`).setDescription(`<@${user.id}> 捕まった！**${fine}** ${CURRENCY} 没収。\n残高: **${u.balance.toLocaleString()}** ${CURRENCY}`).setColor(0xff4757);
+            }
+            save(ECON_FILE, econ);
+            return interaction.reply({ embeds: [embed], components: [delBtn()] });
+        }
+
+        if (sub === 'hunt') {
+            const remaining = 1800000 - (now - (u.huntLast || 0));
+            if (remaining > 0) return interaction.reply({ content: `⏳ まだ狩りに行けません。${cdStr(remaining)}`, ...EPH });
+            u.huntLast = now;
+            const hunts = [
+                { name: 'ウサギ',   item: '🐰 ウサギの毛皮',  sell: 80,  rare: false },
+                { name: 'シカ',     item: '🦌 シカの角',      sell: 250, rare: false },
+                { name: 'クマ',     item: '🐻 クマの毛皮',    sell: 500, rare: true  },
+                { name: 'キツネ',   item: '🦊 キツネの毛皮',  sell: 150, rare: false },
+                { name: 'イノシシ', item: '🐗 イノシシの牙',  sell: 200, rare: false },
+                { name: 'オオカミ', item: '🐺 オオカミの毛皮', sell: 400, rare: true  },
+            ];
+            const wt = hunts.map(h => h.rare ? 1 : 3), wsum = wt.reduce((a,b)=>a+b,0);
+            let wr = Math.random()*wsum, hunt=hunts[0];
+            for(let i=0;i<hunts.length;i++){wr-=wt[i];if(wr<=0){hunt=hunts[i];break;}}
+            if(!u.inventory) u.inventory=[];
+            u.inventory.push({name:hunt.item,boughtAt:now,sellPrice:hunt.sell});
+            save(ECON_FILE,econ);
+            const embed = new EmbedBuilder().setTitle(`🏹 ${hunt.name}を仕留めた！`)
+                .setDescription(`<@${user.id}> **${hunt.item}** を入手！\n売却価格: **${hunt.sell.toLocaleString()}** ${CURRENCY}`)
+                .setColor(hunt.rare ? 0xf1c40f : 0x57f287).setTimestamp();
+            const r = await interaction.reply({ embeds: [embed], fetchReply: true });
+            setTimeout(() => r.delete().catch(()=>{}), 8000);
+            return;
+        }
+
+        if (sub === 'fish') {
+            const remaining = 2700000 - (now - (u.fishLast || 0));
+            if (remaining > 0) return interaction.reply({ content: `⏳ まだ釣りに行けません。${cdStr(remaining)}`, ...EPH });
+            u.fishLast = now;
+            const fishes = [
+                { name: 'コイ',     item: '🐟 コイ',       sell: 60,   rare: false, legendary: false },
+                { name: 'サーモン', item: '🐠 サーモン',    sell: 150,  rare: false, legendary: false },
+                { name: 'マグロ',   item: '🐡 マグロ',      sell: 400,  rare: true,  legendary: false },
+                { name: 'フグ',     item: '🐡 フグ',        sell: 300,  rare: true,  legendary: false },
+                { name: 'タコ',     item: '🐙 タコ',        sell: 200,  rare: false, legendary: false },
+                { name: 'ゴミ',     item: '🗑️ ゴミ',       sell: 5,    rare: false, legendary: false },
+                { name: '伝説の魚', item: '✨ 伝説の魚',    sell: 2000, rare: true,  legendary: true  },
+            ];
+            const wt = fishes.map(f => f.legendary ? 0.2 : f.rare ? 1 : 4), wsum = wt.reduce((a,b)=>a+b,0);
+            let wr = Math.random()*wsum, fish=fishes[0];
+            for(let i=0;i<fishes.length;i++){wr-=wt[i];if(wr<=0){fish=fishes[i];break;}}
+            if(!u.inventory) u.inventory=[];
+            u.inventory.push({name:fish.item,boughtAt:now,sellPrice:fish.sell});
+            save(ECON_FILE,econ);
+            const embed = new EmbedBuilder()
+                .setTitle(fish.legendary ? '🌟 伝説の魚を釣り上げた！！' : `🎣 ${fish.name} を釣った！`)
+                .setDescription(`<@${user.id}> **${fish.item}** を入手！\n売却価格: **${fish.sell.toLocaleString()}** ${CURRENCY}`)
+                .setColor(fish.legendary ? 0xf1c40f : fish.rare ? 0x3498db : 0x95a5a6).setTimestamp();
+            const r = await interaction.reply({ embeds: [embed], fetchReply: true });
+            setTimeout(() => r.delete().catch(()=>{}), fish.legendary ? 30000 : 8000);
+            return;
+        }
+
+        if (sub === 'rob') {
+            const input = options.getString('target').replace(/[<@!>]/g, '');
+            const member = guild ? await guild.members.fetch(input).catch(() => null) : null;
+            let targetId = input, targetName = null;
+            if (member) { targetId = member.user.id; targetName = member.user.username; }
+            else {
+                const found = Object.entries(econ).find(([id,eu])=>id===input||eu.username?.toLowerCase()===input.toLowerCase());
+                if (found) { targetId=found[0]; targetName=found[1].username||`ID:${found[0]}`; }
+                else return interaction.reply({ content: '❌ ユーザーが見つかりません。', ...EPH });
+            }
+            if (targetId === user.id) return interaction.reply({ content: '❌ 自分は強盗できません。', ...EPH });
+            const victim = getUser(econ, targetId, null);
+            if (victim.balance < 100) return interaction.reply({ content: `❌ **${targetName}** の残高が少なすぎます。`, ...EPH });
+            const success = Math.random() < 0.4;
+            let embed;
+            if (success) {
+                const stolen = Math.floor(victim.balance * (0.1 + Math.random() * 0.2));
+                u.balance += stolen; victim.balance -= stolen;
+                embed = new EmbedBuilder().setTitle('🔫 強盗成功！').setDescription(`**${targetName}** から **${stolen.toLocaleString()}** 🪙 を奪った！\n残高: **${u.balance.toLocaleString()}** 🪙`).setColor(0x57f287);
+            } else {
+                const fine = Math.floor(u.balance * 0.1 + 200);
+                u.balance = Math.max(0, u.balance - fine);
+                embed = new EmbedBuilder().setTitle('🚔 強盗失敗！').setDescription(`捕まった！罰金 **${fine.toLocaleString()}** 🪙\n残高: **${u.balance.toLocaleString()}** 🪙`).setColor(0xff4757);
+            }
+            save(ECON_FILE, econ);
+            return interaction.reply({ embeds: [embed], components: [delBtn()] });
+        }
+
+        if (sub === 'flip') {
+            const amtInput = options.getString('amount').trim().toLowerCase();
+            const sideInput = options.getString('side').trim().toLowerCase();
+            let amount;
+            if (amtInput === 'all') amount = u.balance;
+            else if (amtInput === 'half') amount = Math.floor(u.balance / 2);
+            else amount = parseInt(amtInput) || 0;
+            const side = (sideInput === 'omote' || sideInput === '表') ? 'heads' : 'tails';
+            if (amount <= 0) return interaction.reply({ content: '❌ 有効な金額を入力してください。', ...EPH });
+            if (u.balance < amount) return interaction.reply({ content: `❌ 残高不足。現在: **${u.balance.toLocaleString()}** 🪙`, ...EPH });
+            const result = Math.random() < 0.5 ? 'heads' : 'tails';
+            const win = result === side;
+            if (win) u.balance += amount; else u.balance -= amount;
+            save(ECON_FILE, econ);
+            const embed = new EmbedBuilder().setTitle(win ? '🎉 勝利！' : '😢 敗北...').setColor(win ? 0x57f287 : 0xff4757)
+                .addFields(
+                    { name: '選択', value: side === 'heads' ? '表 🪙' : '裏 🔄', inline: true },
+                    { name: '結果', value: result === 'heads' ? '表 🪙' : '裏 🔄', inline: true },
+                    { name: win ? `+${amount.toLocaleString()} 獲得` : `-${amount.toLocaleString()} 没収`, value: `残高: **${u.balance.toLocaleString()}** 🪙`, inline: false }
+                );
+            return interaction.reply({ embeds: [embed], components: [delBtn()] });
+        }
+
+        if (sub === 'slots') {
+            const amtInput = options.getString('amount').trim().toLowerCase();
+            let amount;
+            if (amtInput === 'all') amount = u.balance;
+            else if (amtInput === 'half') amount = Math.floor(u.balance / 2);
+            else amount = parseInt(amtInput) || 0;
+            if (amount <= 0) return interaction.reply({ content: '❌ 有効な金額を入力してください。', ...EPH });
+            if (u.balance < amount) return interaction.reply({ content: `❌ 残高不足。現在: **${u.balance.toLocaleString()}** 🪙`, ...EPH });
+            const symbols = ['🍒', '🍋', '🍊', '🍇', '⭐', '💎'];
+            const roll = () => symbols[Math.floor(Math.random() * symbols.length)];
+            const s = [roll(), roll(), roll()];
+            let multiplier = 0;
+            if (s[0]===s[1]&&s[1]===s[2]) multiplier = s[0]==='💎'?10:s[0]==='⭐'?5:3;
+            else if (s[0]===s[1]||s[1]===s[2]||s[0]===s[2]) multiplier = 1.5;
+            const win = multiplier > 0;
+            const payout = win ? Math.floor(amount * multiplier) : 0;
+            u.balance += payout - amount;
+            save(ECON_FILE, econ);
+            const embed = new EmbedBuilder().setTitle('🎰 スロット')
+                .setDescription(`**[ ${s.join(' | ')} ]**\n\n${win?`🎉 **${multiplier}x** 当たり！ **+${payout.toLocaleString()}** 🪙`:`💸 ハズレ... **-${amount.toLocaleString()}** 🪙`}`)
+                .setColor(win ? 0xf1c40f : 0x95a5a6)
+                .addFields({ name: '残高', value: `**${u.balance.toLocaleString()}** 🪙`, inline: true });
+            return interaction.reply({ embeds: [embed], components: [delBtn()] });
+        }
+
+        if (sub === 'bj') {
+            const amtInput = options.getString('amount').trim().toLowerCase();
+            const leverageRaw = options.getInteger('leverage') || 2;
+            const leverage = Math.min(10, Math.max(2, leverageRaw));
+            let bet;
+            if (amtInput === 'all') bet = u.balance;
+            else if (amtInput === 'half') bet = Math.floor(u.balance / 2);
+            else bet = parseInt(amtInput) || 0;
+            if (bet <= 0) return interaction.reply({ content: '❌ 有効な金額を入力してください。', ...EPH });
+            if (u.balance < bet) return interaction.reply({ content: `❌ 残高不足。現在: **${u.balance.toLocaleString()}** 🪙`, ...EPH });
+            const deck = buildDeck();
+            const playerCards = [drawCard(deck), drawCard(deck)];
+            const dealerCards = [drawCard(deck), drawCard(deck)];
+            const gameKey = `${user.id}_${Date.now()}`;
+            const gameObj = { userId: user.id, bet, leverage, deck, playerCards, dealerCards };
+            if (calcBJ(playerCards) === 21) {
+                u.balance += Math.floor(bet * leverage * 1.5);
+                save(ECON_FILE, econ);
+                return interaction.reply({ embeds: [buildBJEmbed(gameObj, 'bj', u.balance, user)], components: [delBtn()] });
+            }
+            bjGames.set(gameKey, gameObj);
+            return interaction.reply({ embeds: [buildBJEmbed(gameObj, 'playing', null, user)], components: buildBJRows(gameKey) });
+        }
+        return;
     }
 
     if (commandName === 'send') {
@@ -1070,141 +1087,6 @@ async function handleEconInteraction(interaction) {
     const econ = load(ECON_FILE);
     const corpData = load(CORP_FILE);
 
-    // ==================== earnボタン ====================
-    const earnBtns = ['earn_daily','earn_work','earn_crime','earn_hunt','earn_fish'];
-    if (earnBtns.includes(cid)) {
-        const u = getUser(econ, user.id, user);
-        const now = Date.now();
-        let resultEmbed;
-
-        if (cid === 'earn_daily') {
-            const jstNow = new Date(now + 9 * 3600000);
-            const todayStr = `${jstNow.getUTCFullYear()}-${String(jstNow.getUTCMonth()+1).padStart(2,'0')}-${String(jstNow.getUTCDate()).padStart(2,'0')}`;
-            if (u.dailyDate === todayStr) {
-                const nextMidnight = new Date(jstNow); nextMidnight.setUTCHours(24, 0, 0, 0);
-                const rem = nextMidnight.getTime() - jstNow.getTime();
-                const h = Math.floor(rem / 3600000), m = Math.floor((rem % 3600000) / 60000);
-                return interaction.reply({ content: `⏳ 今日のデイリーは受け取り済みです。次回: **${h}時間${m}分後**（深夜0時リセット）`, ...EPH });
-            }
-            const streak = (u.dailyStreak || 0) + 1;
-            const base = Math.floor(Math.random() * 201) + 200;
-            const bonus = Math.min(streak, 7) * 50;
-            const amount = base + bonus;
-            u.balance += amount; u.dailyLast = now; u.dailyStreak = streak; u.dailyDate = todayStr;
-            resultEmbed = new EmbedBuilder().setTitle('🎁 デイリーボーナス')
-                .setDescription(`<@${user.id}> **+${amount}** ${CURRENCY} を受け取りました！\n残高: **${u.balance.toLocaleString()}** ${CURRENCY}`)
-                .addFields(
-                    { name: '内訳', value: `ベース: ${base} + 連続ボーナス: ${bonus}`, inline: true },
-                    { name: '連続ログイン', value: `${streak}日目 🔥`, inline: true }
-                ).setColor(0x57f287).setTimestamp();
-        }
-
-        if (cid === 'earn_work') {
-            const remaining = 3600000 - (now - (u.workLast || 0));
-            if (remaining > 0) return interaction.reply({ content: `⏳ まだ働けません。${cdStr(remaining)}`, ...EPH });
-            const jobs = [
-                { name: 'プログラマー', desc: 'コードを書きまくった', min: 80, max: 180 },
-                { name: 'シェフ', desc: '料理を作って客に振る舞った', min: 60, max: 150 },
-                { name: 'ゲーム実況者', desc: '配信が大盛況だった', min: 50, max: 200 },
-                { name: '宅配ドライバー', desc: '荷物を時間通りに届けた', min: 70, max: 140 },
-                { name: 'デザイナー', desc: 'クライアントに絶賛された', min: 90, max: 170 },
-                { name: '作家', desc: '原稿を書き上げた', min: 60, max: 160 },
-                { name: '教師', desc: '生徒に感謝された', min: 55, max: 130 },
-                { name: '音楽家', desc: 'ライブが満員だった', min: 80, max: 220 },
-                { name: '漁師', desc: '大漁だった', min: 70, max: 160 },
-                { name: '株トレーダー', desc: 'うまくポジションを取った', min: 30, max: 300 },
-            ];
-            const job = jobs[Math.floor(Math.random() * jobs.length)];
-            const amount = Math.floor(Math.random() * (job.max - job.min + 1)) + job.min;
-            u.balance += amount; u.workLast = now;
-            resultEmbed = new EmbedBuilder().setTitle(`💼 ${job.name} として働いた`)
-                .setDescription(`<@${user.id}> ${job.desc}！\n**+${amount}** ${CURRENCY} を獲得！\n残高: **${u.balance.toLocaleString()}** ${CURRENCY}`)
-                .setColor(0x3498db).setTimestamp();
-        }
-
-        if (cid === 'earn_crime') {
-            const remaining = 7200000 - (now - (u.crimeLast || 0));
-            if (remaining > 0) return interaction.reply({ content: `⏳ まだ犯罪はできません。${cdStr(remaining)}`, ...EPH });
-            u.crimeLast = now;
-            const crimes = [
-                { name: '車上荒らし', success: 0.6, gain: [200, 500], fine: [100, 300] },
-                { name: '銀行強盗',   success: 0.3, gain: [800, 2000], fine: [400, 800] },
-                { name: 'スリ',       success: 0.7, gain: [100, 300],  fine: [50, 200] },
-                { name: '詐欺',       success: 0.5, gain: [300, 700],  fine: [200, 500] },
-                { name: '密輸',       success: 0.4, gain: [500, 1200], fine: [300, 600] },
-            ];
-            const crime = crimes[Math.floor(Math.random() * crimes.length)];
-            const success = Math.random() < crime.success;
-            if (success) {
-                const amount = Math.floor(Math.random() * (crime.gain[1] - crime.gain[0] + 1)) + crime.gain[0];
-                u.balance += amount;
-                resultEmbed = new EmbedBuilder().setTitle(`🦹 ${crime.name} 成功！`)
-                    .setDescription(`<@${user.id}> うまくいった！\n**+${amount}** ${CURRENCY} を獲得！\n残高: **${u.balance.toLocaleString()}** ${CURRENCY}`).setColor(0x57f287);
-            } else {
-                const fine = Math.floor(Math.random() * (crime.fine[1] - crime.fine[0] + 1)) + crime.fine[0];
-                u.balance = Math.max(0, u.balance - fine);
-                resultEmbed = new EmbedBuilder().setTitle(`🚔 ${crime.name} 失敗！`)
-                    .setDescription(`<@${user.id}> 捕まった！**${fine}** ${CURRENCY} を没収された。\n残高: **${u.balance.toLocaleString()}** ${CURRENCY}`).setColor(0xff4757);
-            }
-        }
-
-        if (cid === 'earn_hunt') {
-            const remaining = 1800000 - (now - (u.huntLast || 0));
-            if (remaining > 0) return interaction.reply({ content: `⏳ まだ狩りに行けません。${cdStr(remaining)}`, ...EPH });
-            u.huntLast = now;
-            const hunts = [
-                { name: 'ウサギ',   item: '🐰 ウサギの毛皮',  sell: 80,  rare: false },
-                { name: 'シカ',     item: '🦌 シカの角',      sell: 250, rare: false },
-                { name: 'クマ',     item: '🐻 クマの毛皮',    sell: 500, rare: true  },
-                { name: 'キツネ',   item: '🦊 キツネの毛皮',  sell: 150, rare: false },
-                { name: 'イノシシ', item: '🐗 イノシシの牙',  sell: 200, rare: false },
-                { name: 'オオカミ', item: '🐺 オオカミの毛皮', sell: 400, rare: true  },
-            ];
-            const weights = hunts.map(h => h.rare ? 1 : 3);
-            const wtotal = weights.reduce((a,b)=>a+b,0);
-            let wr = Math.random()*wtotal, hunt=hunts[0];
-            for(let i=0;i<hunts.length;i++){wr-=weights[i];if(wr<=0){hunt=hunts[i];break;}}
-            if(!u.inventory) u.inventory=[];
-            u.inventory.push({name:hunt.item,boughtAt:now,sellPrice:hunt.sell});
-            resultEmbed = new EmbedBuilder().setTitle(`🏹 ${hunt.name}を仕留めた！`)
-                .setDescription(`<@${user.id}> **${hunt.item}** を入手！\n売却価格: **${hunt.sell.toLocaleString()}** ${CURRENCY}`)
-                .setColor(hunt.rare ? 0xf1c40f : 0x57f287).setTimestamp();
-        }
-
-        if (cid === 'earn_fish') {
-            const remaining = 2700000 - (now - (u.fishLast || 0));
-            if (remaining > 0) return interaction.reply({ content: `⏳ まだ釣りに行けません。${cdStr(remaining)}`, ...EPH });
-            u.fishLast = now;
-            const fishes = [
-                { name: 'コイ',     item: '🐟 コイ',        sell: 60,   rare: false, legendary: false },
-                { name: 'サーモン', item: '🐠 サーモン',     sell: 150,  rare: false, legendary: false },
-                { name: 'マグロ',   item: '🐡 マグロ',       sell: 400,  rare: true,  legendary: false },
-                { name: 'フグ',     item: '🐡 フグ',         sell: 300,  rare: true,  legendary: false },
-                { name: 'タコ',     item: '🐙 タコ',         sell: 200,  rare: false, legendary: false },
-                { name: 'ゴミ',     item: '🗑️ ゴミ',        sell: 5,    rare: false, legendary: false },
-                { name: '伝説の魚', item: '✨ 伝説の魚',     sell: 2000, rare: true,  legendary: true  },
-            ];
-            const weights = fishes.map(f => f.legendary ? 0.2 : f.rare ? 1 : 4);
-            const wtotal = weights.reduce((a,b)=>a+b,0);
-            let wr = Math.random()*wtotal, fish=fishes[0];
-            for(let i=0;i<fishes.length;i++){wr-=weights[i];if(wr<=0){fish=fishes[i];break;}}
-            if(!u.inventory) u.inventory=[];
-            u.inventory.push({name:fish.item,boughtAt:now,sellPrice:fish.sell});
-            resultEmbed = new EmbedBuilder()
-                .setTitle(fish.legendary ? '🌟 伝説の魚を釣り上げた！！' : `🎣 ${fish.name} を釣った！`)
-                .setDescription(`<@${user.id}> **${fish.item}** を入手！\n売却価格: **${fish.sell.toLocaleString()}** ${CURRENCY}`)
-                .setColor(fish.legendary ? 0xf1c40f : fish.rare ? 0x3498db : 0x95a5a6).setTimestamp();
-        }
-
-        if (!resultEmbed) return;
-        save(ECON_FILE, econ);
-        const updatedPanel = buildEarnPanel(u, now);
-        await interaction.update(updatedPanel);
-        const followMsg = await interaction.followUp({ embeds: [resultEmbed], ...EPH, fetchReply: true });
-        if (cid !== 'earn_daily') setTimeout(() => followMsg.delete().catch(()=>{}), 8000);
-        return;
-    }
-
     // 銀行ボタン
     if (cid === 'bank_loan') {
         const modal = new ModalBuilder().setCustomId('modal_bank_loan').setTitle('💸 ローンを借りる');
@@ -1316,54 +1198,6 @@ async function handleEconInteraction(interaction) {
         if (!coin) return interaction.reply({ content: '❌ 通貨が見つかりません。', ...EPH });
         const u = getUser(econ, user.id, user);
         return doSellCrypto(interaction, coin, amtInput, econ, u, cryptoData, CRYPTO_FILE);
-    }
-    if (cid === 'earn_rob') {
-        const modal = new ModalBuilder().setCustomId('modal_earn_rob').setTitle('🔫 強盗');
-        modal.addComponents(
-            new ActionRowBuilder().addComponents(
-                new TextInputBuilder().setCustomId('rob_target_id').setLabel('ターゲットのユーザーID or メンション').setStyle(TextInputStyle.Short).setPlaceholder('例: 123456789 または @username').setRequired(true)
-            )
-        );
-        return interaction.showModal(modal);
-    }
-
-    // コインフリップ → モーダルで金額・表裏入力
-    if (cid === 'earn_flip') {
-        const modal = new ModalBuilder().setCustomId('modal_earn_flip').setTitle('🪙 コインフリップ');
-        modal.addComponents(
-            new ActionRowBuilder().addComponents(
-                new TextInputBuilder().setCustomId('flip_amount').setLabel('賭け金額').setStyle(TextInputStyle.Short).setPlaceholder('例: 500').setRequired(true)
-            ),
-            new ActionRowBuilder().addComponents(
-                new TextInputBuilder().setCustomId('flip_side').setLabel('表か裏 (omote / ura)').setStyle(TextInputStyle.Short).setPlaceholder('omote または ura').setRequired(true)
-            )
-        );
-        return interaction.showModal(modal);
-    }
-
-    // スロット → モーダルで金額入力
-    if (cid === 'earn_slots') {
-        const modal = new ModalBuilder().setCustomId('modal_earn_slots').setTitle('🎰 スロット');
-        modal.addComponents(
-            new ActionRowBuilder().addComponents(
-                new TextInputBuilder().setCustomId('slots_amount').setLabel('賭け金額').setStyle(TextInputStyle.Short).setPlaceholder('例: 200').setRequired(true)
-            )
-        );
-        return interaction.showModal(modal);
-    }
-
-    // ブラックジャック → モーダルで金額入力
-    if (cid === 'earn_bj') {
-        const modal = new ModalBuilder().setCustomId('modal_earn_bj').setTitle('🃏 ブラックジャック');
-        modal.addComponents(
-            new ActionRowBuilder().addComponents(
-                new TextInputBuilder().setCustomId('bj_amount').setLabel('賭け金額').setStyle(TextInputStyle.Short).setPlaceholder('例: 1000').setRequired(true)
-            ),
-            new ActionRowBuilder().addComponents(
-                new TextInputBuilder().setCustomId('bj_leverage').setLabel('レバレッジ倍率（2〜10、未入力で2）').setStyle(TextInputStyle.Short).setPlaceholder('例: 5').setValue('2').setRequired(false)
-            )
-        );
-        return interaction.showModal(modal);
     }
 
     // BJ: ヒット
@@ -1614,131 +1448,6 @@ async function handleEconModal(interaction) {
     }
 
     // ==================== 強盗モーダル ====================
-    if (cid === 'modal_earn_rob') {
-        const input = interaction.fields.getTextInputValue('rob_target_id').trim().replace(/[<@!>]/g, '');
-        const robber = getUser(econ, user.id, user);
-        // まずguildからfetch、なければeconデータから検索
-        let targetId = input;
-        let targetName = null;
-        const member = guild ? await guild.members.fetch(targetId).catch(() => null) : null;
-        if (member) {
-            targetId = member.user.id;
-            targetName = member.user.username;
-        } else {
-            // econ.jsonから検索
-            const found = Object.entries(econ).find(([id, u]) => id === input || u.username?.toLowerCase() === input.toLowerCase());
-            if (found) { targetId = found[0]; targetName = found[1].username || `ID:${found[0]}`; }
-            else return interaction.reply({ content: `❌ ユーザーが見つかりません。IDかメンションで指定してください。`, ...EPH });
-        }
-        if (targetId === user.id) return interaction.reply({ content: '❌ 自分は強盗できません。', ...EPH });
-        const victim = getUser(econ, targetId, null);
-        if (victim.balance < 100) return interaction.reply({ content: `❌ **${targetName}** の残高が少なすぎます（100未満）。`, ...EPH });
-        const success = Math.random() < 0.4;
-        let embed;
-        if (success) {
-            const stolen = Math.floor(victim.balance * (0.1 + Math.random() * 0.2));
-            robber.balance += stolen; victim.balance -= stolen;
-            embed = new EmbedBuilder().setTitle('🔫 強盗成功！').setDescription(`**${targetName}** から **${stolen.toLocaleString()}** 🪙 を奪った！\n残高: **${robber.balance.toLocaleString()}** 🪙`).setColor(0x57f287);
-        } else {
-            const fine = Math.floor(robber.balance * 0.1 + 200);
-            robber.balance = Math.max(0, robber.balance - fine);
-            embed = new EmbedBuilder().setTitle('🚔 強盗失敗！').setDescription(`捕まった！罰金 **${fine.toLocaleString()}** 🪙\n残高: **${robber.balance.toLocaleString()}** 🪙`).setColor(0xff4757);
-        }
-        save(ECON_FILE, econ);
-        return interaction.reply({ embeds: [embed], components: [delBtn()] });
-    }
-
-    // ==================== 売上回収モーダル ====================
-    if (cid.startsWith('modal_store_withdraw_')) {
-        const corpId = cid.replace('modal_store_withdraw_', '');
-        const corpData2 = load(CORP_FILE);
-        const c = corpData2[corpId];
-        if (!c || c.ownerId !== user.id) return interaction.reply({ content: '❌ 権限がありません。', ...EPH });
-        const input = interaction.fields.getTextInputValue('withdraw_amount').trim().toLowerCase();
-        const balance = c.balance || 0;
-        let amount;
-        if (input === 'all') amount = balance;
-        else if (input === 'half') amount = Math.floor(balance / 2);
-        else amount = parseInt(input) || 0;
-        if (amount <= 0) return interaction.reply({ content: '❌ 有効な金額を入力してください。', ...EPH });
-        if (amount > balance) return interaction.reply({ content: `❌ 会社残高が不足しています。現在: **${balance.toLocaleString()}** 🪙`, ...EPH });
-        const u = getUser(econ, user.id, user);
-        u.balance += amount;
-        c.balance = balance - amount;
-        save(ECON_FILE, econ);
-        save(CORP_FILE, corpData2);
-        return interaction.reply({ content: `✅ **${c.name}** から **${amount.toLocaleString()}** 🪙 を回収しました！\n残高: **${u.balance.toLocaleString()}** 🪙　会社残高: **${c.balance.toLocaleString()}** 🪙`, ...EPH });
-    }
-
-    // ==================== コインフリップモーダル ====================
-    if (cid === 'modal_earn_flip') {
-        const amount = parseInt(interaction.fields.getTextInputValue('flip_amount')) || 0;
-        const sideInput = interaction.fields.getTextInputValue('flip_side').trim().toLowerCase();
-        const side = sideInput === 'omote' || sideInput === '表' ? 'heads' : sideInput === 'ura' || sideInput === '裏' ? 'tails' : null;
-        if (!side) return interaction.reply({ content: '❌ 表は `omote`、裏は `ura` で入力してください。', ...EPH });
-        if (amount <= 0) return interaction.reply({ content: '❌ 有効な金額を入力してください。', ...EPH });
-        const u = getUser(econ, user.id, user);
-        if (u.balance < amount) return interaction.reply({ content: `❌ 残高不足。現在: **${u.balance.toLocaleString()}** 🪙`, ...EPH });
-        const result = Math.random() < 0.5 ? 'heads' : 'tails';
-        const win = result === side;
-        if (win) u.balance += amount; else u.balance -= amount;
-        save(ECON_FILE, econ);
-        const embed = new EmbedBuilder()
-            .setTitle(win ? '🎉 勝利！' : '😢 敗北...')
-            .setColor(win ? 0x57f287 : 0xff4757)
-            .addFields(
-                { name: '選択', value: side === 'heads' ? '表 🪙' : '裏 🔄', inline: true },
-                { name: '結果', value: result === 'heads' ? '表 🪙' : '裏 🔄', inline: true },
-                { name: win ? `+${amount.toLocaleString()} 獲得` : `-${amount.toLocaleString()} 没収`, value: `残高: **${u.balance.toLocaleString()}** 🪙`, inline: false }
-            );
-        return interaction.reply({ embeds: [embed], components: [delBtn()] });
-    }
-
-    // ==================== スロットモーダル ====================
-    if (cid === 'modal_earn_slots') {
-        const amount = parseInt(interaction.fields.getTextInputValue('slots_amount')) || 0;
-        if (amount <= 0) return interaction.reply({ content: '❌ 有効な金額を入力してください。', ...EPH });
-        const u = getUser(econ, user.id, user);
-        if (u.balance < amount) return interaction.reply({ content: `❌ 残高不足。現在: **${u.balance.toLocaleString()}** 🪙`, ...EPH });
-        const symbols = ['🍒', '🍋', '🍊', '🍇', '⭐', '💎'];
-        const roll = () => symbols[Math.floor(Math.random() * symbols.length)];
-        const s = [roll(), roll(), roll()];
-        let multiplier = 0;
-        if (s[0] === s[1] && s[1] === s[2]) multiplier = s[0] === '💎' ? 10 : s[0] === '⭐' ? 5 : 3;
-        else if (s[0] === s[1] || s[1] === s[2] || s[0] === s[2]) multiplier = 1.5;
-        const win = multiplier > 0;
-        const payout = win ? Math.floor(amount * multiplier) : 0;
-        u.balance += payout - amount;
-        save(ECON_FILE, econ);
-        const embed = new EmbedBuilder().setTitle('🎰 スロット')
-            .setDescription(`**[ ${s.join(' | ')} ]**\n\n${win ? `🎉 **${multiplier}x** 当たり！ **+${payout.toLocaleString()}** 🪙` : `💸 ハズレ... **-${amount.toLocaleString()}** 🪙`}`)
-            .setColor(win ? 0xf1c40f : 0x95a5a6)
-            .addFields({ name: '残高', value: `**${u.balance.toLocaleString()}** 🪙`, inline: true });
-        return interaction.reply({ embeds: [embed], components: [delBtn()] });
-    }
-
-    // ==================== BJモーダル ====================
-    if (cid === 'modal_earn_bj') {
-        const bet = parseInt(interaction.fields.getTextInputValue('bj_amount')) || 0;
-        const leverageRaw = parseInt(interaction.fields.getTextInputValue('bj_leverage') || '2') || 2;
-        const leverage = Math.min(10, Math.max(2, leverageRaw));
-        if (bet <= 0) return interaction.reply({ content: '❌ 有効な金額を入力してください。', ...EPH });
-        const u = getUser(econ, user.id, user);
-        if (u.balance < bet) return interaction.reply({ content: `❌ 残高不足。現在: **${u.balance.toLocaleString()}** 🪙`, ...EPH });
-        const deck = buildDeck();
-        const playerCards = [drawCard(deck), drawCard(deck)];
-        const dealerCards = [drawCard(deck), drawCard(deck)];
-        const gameKey = `${user.id}_${Date.now()}`;
-        const gameObj = { userId: user.id, bet, leverage, deck, playerCards, dealerCards };
-        if (calcBJ(playerCards) === 21) {
-            u.balance += Math.floor(bet * leverage * 1.5);
-            save(ECON_FILE, econ);
-            return interaction.reply({ embeds: [buildBJEmbed(gameObj, 'bj', u.balance, user)], components: [delBtn()] });
-        }
-        bjGames.set(gameKey, gameObj);
-        return interaction.reply({ embeds: [buildBJEmbed(gameObj, 'playing', null, user)], components: buildBJRows(gameKey) });
-    }
-
     // ==================== 銀行ローンモーダル ====================
     if (cid === 'modal_bank_loan') {
         const input = interaction.fields.getTextInputValue('loan_amount').trim().toLowerCase();
