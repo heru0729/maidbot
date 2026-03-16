@@ -435,18 +435,23 @@ client.on(Events.InteractionCreate, async (interaction) => {
             };
 
             const buildHelpRow = (page) => new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId(`help_first_${page}`).setLabel('⏮ 最初').setStyle(ButtonStyle.Secondary).setDisabled(page === 0),
                 new ButtonBuilder().setCustomId(`help_prev_${page}`).setLabel('◀ 前へ').setStyle(ButtonStyle.Secondary).setDisabled(page === 0),
-                new ButtonBuilder().setCustomId(`help_next_${page}`).setLabel('次へ ▶').setStyle(ButtonStyle.Secondary).setDisabled(page === helpPages.length - 1)
+                new ButtonBuilder().setCustomId(`help_next_${page}`).setLabel('次へ ▶').setStyle(ButtonStyle.Secondary).setDisabled(page === helpPages.length - 1),
+                new ButtonBuilder().setCustomId(`help_last_${page}`).setLabel('最後 ⏭').setStyle(ButtonStyle.Secondary).setDisabled(page === helpPages.length - 1)
             );
 
             const msg = await interaction.reply({ embeds: [buildHelpEmbed(0)], components: [buildHelpRow(0)], ...EPH, fetchReply: true });
 
             const collector = msg.createMessageComponentCollector({ time: 120000 });
             collector.on('collect', async btn => {
-                const [, dir, pageStr] = btn.customId.split('_');
-                let page = parseInt(pageStr);
+                const parts = btn.customId.split('_');
+                const dir = parts[1];
+                let page = parseInt(parts[2]);
                 if (dir === 'next') page++;
-                else page--;
+                else if (dir === 'prev') page--;
+                else if (dir === 'first') page = 0;
+                else if (dir === 'last') page = helpPages.length - 1;
                 page = Math.max(0, Math.min(helpPages.length - 1, page));
                 await btn.update({ embeds: [buildHelpEmbed(page)], components: [buildHelpRow(page)] });
             });
@@ -1426,7 +1431,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
 
         // econ ボタン
-        const econBtnPrefixes = ['bj_hit_', 'bj_stand_', 'bj_double_', 'bank_loan', 'bank_repay', 'bank_reload', 'balance_reload', 'stock_buy_', 'stock_sell_', 'stock_refresh_', 'crypto_buy_', 'crypto_sell_', 'crypto_refresh_', 'store_issuestock_', 'store_additem_', 'store_removeitem_', 'store_withdraw_'];
+        const econBtnPrefixes = ['bj_hit_', 'bj_stand_', 'bj_double_', 'bank_loan', 'bank_repay', 'bank_reload', 'balance_reload', 'stock_buy_', 'stock_sell_', 'stock_refresh_', 'crypto_buy_', 'crypto_sell_', 'crypto_refresh_', 'store_issuestock_', 'store_additem_', 'store_removeitem_', 'store_withdraw_', 'corp_dissolve_'];
         if (econBtnPrefixes.some(p => cid.startsWith(p))) {
             await handleEconInteraction(interaction);
         }
