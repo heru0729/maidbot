@@ -171,9 +171,11 @@ const econCommands = [
         .addSubcommand(s => s.setName('bj').setDescription('ブラックジャック').addStringOption(o => o.setName('amount').setDescription('賭け金額（数字・all・half）').setRequired(true)).addIntegerOption(o => o.setName('leverage').setDescription('レバレッジ倍率（2〜10）').setMinValue(2).setMaxValue(10))),
     new SlashCommandBuilder().setName('pay').setDescription('他のユーザーに送金します').addUserOption(o => o.setName('user').setDescription('送金先ユーザー').setRequired(true)).addStringOption(o => o.setName('amount').setDescription('金額（数字・all・half）').setRequired(true)),
     new SlashCommandBuilder().setName('dust').setDescription('インベントリのアイテムを捨てます').addStringOption(o => o.setName('item').setDescription('アイテム名（未指定でセレクト）')).addIntegerOption(o => o.setName('amount').setDescription('捨てる数（未指定で1個）').setMinValue(1)),
-    new SlashCommandBuilder().setName('shop').setDescription('ショップのアイテム一覧を表示します'),
+    new SlashCommandBuilder().setName('shop').setDescription('ショップ・会社ストアのアイテム一覧を表示します'),
     new SlashCommandBuilder().setName('buy').setDescription('アイテムを購入します').addStringOption(o => o.setName('item').setDescription('アイテム名（未指定でセレクト）')),
-    new SlashCommandBuilder().setName('sell').setDescription('インベントリのアイテムを売却します').addStringOption(o => o.setName('item').setDescription('アイテム名（未指定でセレクト）')).addIntegerOption(o => o.setName('amount').setDescription('売却数（未指定で1個）').setMinValue(1)),
+    new SlashCommandBuilder().setName('sell').setDescription('インベントリのアイテムを売却します')
+        .addSubcommand(sub => sub.setName('shop').setDescription('ショップに売却（規定価格）').addStringOption(o => o.setName('item').setDescription('アイテム名（未指定でセレクト）')).addIntegerOption(o => o.setName('amount').setDescription('個数（未指定で1）').setMinValue(1)))
+        .addSubcommand(sub => sub.setName('player').setDescription('プレイヤーに自由価格で売却').addStringOption(o => o.setName('item').setDescription('アイテム名').setRequired(true)).addStringOption(o => o.setName('price').setDescription('販売価格（数字・all・half）').setRequired(true)).addUserOption(o => o.setName('buyer').setDescription('販売相手（未指定で出品）'))),
     new SlashCommandBuilder().setName('inventory').setDescription('所持アイテムを確認します').addUserOption(o => o.setName('user').setDescription('対象ユーザー（未指定なら自分）')),
     new SlashCommandBuilder().setName('econrank').setDescription('所持金ランキングを表示します'),
     new SlashCommandBuilder().setName('bank').setDescription('銀行メニュー（残高確認・ローン・返済）'),
@@ -194,6 +196,7 @@ const econCommands = [
         .addSubcommand(sub => sub.setName('view').setDescription('チャートと詳細を表示します').addStringOption(o => o.setName('symbol').setDescription('シンボル（未指定でセレクト）')))
         .addSubcommand(sub => sub.setName('buy').setDescription('仮想通貨を購入します').addStringOption(o => o.setName('amount').setDescription('購入枚数（数字・all）').setRequired(true)).addStringOption(o => o.setName('symbol').setDescription('シンボル（未指定でセレクト）')))
         .addSubcommand(sub => sub.setName('sell').setDescription('仮想通貨を売却します').addStringOption(o => o.setName('amount').setDescription('売却枚数（数字・all）').setRequired(true)).addStringOption(o => o.setName('symbol').setDescription('シンボル（未指定でセレクト）'))),
+    new SlashCommandBuilder().setName('stock').setDescription('株式市場（会社の株売買・チャート）').addStringOption(o => o.setName('corp').setDescription('会社名（未指定でセレクト表示）')),
     new SlashCommandBuilder().setName('buystock').setDescription('株を購入します').addStringOption(o => o.setName('amount').setDescription('購入株数（数字・all）').setRequired(true)).addStringOption(o => o.setName('corp').setDescription('会社名（未指定でセレクト表示）')),
     new SlashCommandBuilder().setName('sellstock').setDescription('株を売却します').addIntegerOption(o => o.setName('amount').setDescription('売却株数').setRequired(true).setMinValue(1)).addStringOption(o => o.setName('corp').setDescription('会社名（未指定でセレクト表示）')),
 ];
@@ -510,19 +513,40 @@ async function handleEcon(interaction) {
 
     if (commandName === 'shop') {
         const shop = load(SHOP_FILE);
-        const items = Object.values(shop);
-        if (items.length === 0) return interaction.reply({ content: '🛒 現在ショップにアイテムがありません。', ...EPH });
-        const embed = new EmbedBuilder()
-            .setTitle('🛒 ショップ')
-            .setColor(0xe67e22)
-            .setDescription('`/buy [アイテム名]` で購入 　`/sell [アイテム名]` で売却（購入価格の50%）')
-            .addFields(items.map((item, i) => ({
-                name: `${i + 1}. ${item.name}${item.roleId ? ' 🏷️' : ''}`,
-                value: `💰 **${item.price.toLocaleString()}** 🪙　↩️ 売却: **${Math.floor(item.price * 0.5).toLocaleString()}** 🪙\n${item.description}`,
+        const corpData = load(CORP_FILE);
+        const shopItems = Object.values(shop);
+        const corps = Object.values(corpData).filter(c => c.items && c.items.length > 0);
+
+        if (shopItems.length === 0 && corps.length === 0) {
+            return interaction.reply({ content: '🛒 現在ショップにアイテムがありません。', ...EPH });
+        }
+
+        const embed = new EmbedBuilder().setTitle('🛒 ショップ').setColor(0xe67e22);
+
+        if (shopItems.length > 0) {
+            embed.addFields({
+                name: '📦 公式ショップ',
+                value: shopItems.map((item, i) =>
+                    `**${i + 1}. ${item.name}**${item.roleId ? ' 🏷️' : ''}\n💰 **${item.price.toLocaleString()}** 🪙　↩️ 売却: **${Math.floor(item.price * 0.5).toLocaleString()}** 🪙\n${item.description}`
+                ).join('\n\n'),
                 inline: false
-            })))
-            .setFooter({ text: `全${items.length}件` });
-        return interaction.reply({ embeds: [embed], components: [delBtn()], ...EPH });
+            });
+        }
+
+        for (const corp of corps) {
+            embed.addFields({
+                name: `🏪 ${corp.name}（オーナー: ${corp.ownerName}）`,
+                value: corp.items.map((item, i) =>
+                    `**${i + 1}. ${item.name}**\n💰 **${item.price.toLocaleString()}** 🪙　${item.description}`
+                ).join('\n\n'),
+                inline: false
+            });
+        }
+
+        embed.setDescription('`/buy` で購入　`/sell shop` でショップ売却　`/sell player` でプレイヤー販売')
+            .setFooter({ text: `公式${shopItems.length}件 + 会社ストア${corps.reduce((a,c)=>a+c.items.length,0)}件` });
+
+        return interaction.reply({ embeds: [embed], components: [delBtn()] });
     }
 
     if (commandName === 'buy') {
@@ -546,25 +570,69 @@ async function handleEcon(interaction) {
     }
 
     if (commandName === 'sell') {
-        const itemName = options.getString('item');
-        const sellCount = options.getInteger('amount') || 1;
+        const sub = options.getSubcommand();
         const u = getUser(econ, user.id, user);
         if (!u.inventory || u.inventory.length === 0) return interaction.reply({ content: '❌ インベントリが空です。', ...EPH });
-        if (!itemName) {
-            // インベントリからセレクト
-            const counts = {};
-            for (const item of u.inventory) counts[item.name] = (counts[item.name] || 0) + 1;
-            if (Object.keys(counts).length === 0) return interaction.reply({ content: '❌ 売却できるアイテムがありません。', ...EPH });
-            const select = new StringSelectMenuBuilder()
-                .setCustomId(`sell_select_${sellCount}`)
-                .setPlaceholder('売却するアイテムを選択')
-                .addOptions(Object.entries(counts).slice(0, 25).map(([name, count]) => {
-                    const sellPrice = u.inventory.find(i => i.name === name)?.sellPrice || 0;
-                    return { label: name, description: `所持: ${count}個 | 売却価格: ${sellPrice.toLocaleString()} 🪙/個`, value: name };
-                }));
-            return interaction.reply({ content: `🎒 売却するアイテムを選択してください（${sellCount}個売却）:`, components: [new ActionRowBuilder().addComponents(select)], ...EPH });
+
+        if (sub === 'shop') {
+            const itemName = options.getString('item');
+            const sellCount = options.getInteger('amount') || 1;
+            if (!itemName) {
+                const counts = {};
+                for (const item of u.inventory) counts[item.name] = (counts[item.name] || 0) + 1;
+                const select = new StringSelectMenuBuilder()
+                    .setCustomId(`sell_select_${sellCount}`)
+                    .setPlaceholder('売却するアイテムを選択')
+                    .addOptions(Object.entries(counts).slice(0, 25).map(([name, count]) => {
+                        const sellPrice = u.inventory.find(i => i.name === name)?.sellPrice || 0;
+                        return { label: name, description: `所持: ${count}個 | 売却: ${sellPrice.toLocaleString()} 🪙/個`, value: name };
+                    }));
+                return interaction.reply({ content: `🎒 売却するアイテムを選択してください（${sellCount}個）:`, components: [new ActionRowBuilder().addComponents(select)], ...EPH });
+            }
+            return doSellItem(interaction, itemName, sellCount, econ, u);
         }
-        return doSellItem(interaction, itemName, sellCount, econ, u);
+
+        if (sub === 'player') {
+            const itemName = options.getString('item');
+            const priceInput = options.getString('price').trim().toLowerCase();
+            const buyer = options.getUser('buyer');
+            const item = u.inventory.find(i => i.name.toLowerCase() === itemName.toLowerCase());
+            if (!item) return interaction.reply({ content: `❌ **${itemName}** をインベントリに持っていません。`, ...EPH });
+
+            let price;
+            if (priceInput === 'all') price = u.balance;
+            else if (priceInput === 'half') price = Math.floor(u.balance / 2);
+            else price = parseInt(priceInput) || 0;
+            if (price <= 0) return interaction.reply({ content: '❌ 有効な価格を入力してください。', ...EPH });
+
+            if (buyer) {
+                // 直接売却
+                const buyerData = getUser(econ, buyer.id, buyer);
+                if (buyerData.balance < price) return interaction.reply({ content: `❌ **${buyer.username}** の残高が不足しています。（必要: **${price.toLocaleString()}** 🪙）`, ...EPH });
+                const idx = u.inventory.findIndex(i => i.name.toLowerCase() === itemName.toLowerCase());
+                u.inventory.splice(idx, 1);
+                buyerData.balance -= price;
+                u.balance += price;
+                save(ECON_FILE, econ);
+                if (!buyerData.inventory) buyerData.inventory = [];
+                buyerData.inventory.push({ ...item, boughtAt: Date.now() });
+                save(ECON_FILE, econ);
+                const embed = new EmbedBuilder().setTitle('🤝 プレイヤー間取引完了').setColor(0x2ecc71)
+                    .addFields(
+                        { name: '売り手', value: user.username, inline: true },
+                        { name: '買い手', value: buyer.username, inline: true },
+                        { name: 'アイテム', value: itemName, inline: true },
+                        { name: '価格', value: `**${price.toLocaleString()}** 🪙`, inline: true }
+                    );
+                return interaction.reply({ embeds: [embed], components: [delBtn()] });
+            } else {
+                // 出品（確認メッセージ）
+                const embed = new EmbedBuilder().setTitle('📋 出品確認').setColor(0xe67e22)
+                    .setDescription(`**${itemName}** を **${price.toLocaleString()}** 🪙 で出品します。\n相手が `/pay` で支払い、あなたがアイテムを渡す形になります。\n（自動取引はプレイヤー指定時のみ）`)
+                    .setFooter({ text: '相手を指定すると自動取引できます: /sell player buyer:[ユーザー]' });
+                return interaction.reply({ embeds: [embed], components: [delBtn()], ...EPH });
+            }
+        }
     }
 
     if (commandName === 'inventory') {
