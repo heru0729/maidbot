@@ -1,1742 +1,1731 @@
-const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, SlashCommandBuilder, PermissionFlagsBits, MessageFlags, ModalBuilder, TextInputBuilder, TextInputStyle, AttachmentBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, Partials, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, SlashCommandBuilder, REST, Routes, Events, ChannelType, PermissionFlagsBits, ModalBuilder, TextInputBuilder, TextInputStyle, MessageFlags, ChannelSelectMenuBuilder, RoleSelectMenuBuilder, StringSelectMenuBuilder, ActivityType } = require('discord.js');
+const express = require('express');
 const fs = require('fs');
 const path = require('path');
+const setupAuth = require('./auth.js');
+const handleAdminCommands = require('./admin.js');
+const { econCommands, handleEcon, handleEconInteraction, handleEconModal, handleEconSelect } = require('./econ.js');
 
-// canvasが使える場合は画像チャート、使えない場合はテキストチャートにフォールバック
-let buildPriceChart = null;
-try { ({ buildPriceChart } = require('./chart.js')); } catch (e) { /* canvasなし */ }
+const app = express();
+const client = new Client({
+    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildModeration],
+    partials: [Partials.Channel, Partials.Message]
+});
 
-const ECON_FILE  = path.join(__dirname, 'data', 'econ.json');
-const CORP_FILE  = path.join(__dirname, 'data', 'corp.json');
-const SHOP_FILE  = path.join(__dirname, 'data', 'shop.json');
-const EPH = { flags: MessageFlags.Ephemeral };
-const CURRENCY = '🪙';
-const CORP_COST = 10000;
-const FEE_RATE = 0.02; // 売買手数料2%
-const round3 = (x) => Math.round(x * 1000) / 1000;
-const fmtPrice = (x) => Number.isInteger(x) ? x.toLocaleString() : x.toFixed(3).replace(/\.?0+$/, '');
+const TOKEN = process.env.TOKEN;
+const OWNER_IDS = process.env.OWNER_ID ? process.env.OWNER_ID.split(',').map(id => id.trim()) : [];
+const CLIENT_ID = process.env.CLIENT_ID;
+const CLIENT_SECRET = process.env.CLIENT_SECRET;
+const REDIRECT_URI = process.env.REDIRECT_URI;
+const SERVERS_FILE = path.join(__dirname, 'data', 'servers.json');
+const USERS_FILE = path.join(__dirname, 'data', 'users.json');
 
-function load(f) {
+function loadData(f) {
     if (!fs.existsSync(path.dirname(f))) fs.mkdirSync(path.dirname(f), { recursive: true });
     return fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')) : {};
 }
-function save(f, d) { fs.writeFileSync(f, JSON.stringify(d, null, 4)); }
+function saveData(f, d) { fs.writeFileSync(f, JSON.stringify(d, null, 4)); }
+const getNextLevelXP = (lv) => (lv + 1) * 500;
+const xpCooldowns = new Map();
+const messageHistory = new Map();
+const ngwordViolations = new Map();
+const pendingWelcomeChannel = new Map();
+const pendingByeChannel = new Map();
+const kasoCooldowns = new Map();
+const EPH = { flags: MessageFlags.Ephemeral };
+const delBtn = () => new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('delete_reply').setLabel('🗑️ 削除').setStyle(ButtonStyle.Secondary));
+const snipeCache = new Map(); // guildId_channelId -> { content, author, attachmentUrl, timestamp }
+const giveawayTimers = new Map(); // messageId -> timeoutId
+const BOT_START = Date.now();
 
-function getUser(econ, userId, user) {
-    if (!econ[userId]) econ[userId] = { balance: 0, dailyLast: 0, workLast: 0, crimeLast: 0, inventory: [] };
-    if (user) econ[userId].username = user.username;
-    return econ[userId];
+function updateStatus() {
+    const serverCount = client.guilds.cache.size;
+    const ping = client.ws.ping;
+    const pingStr = ping < 0 ? '...' : `${ping}ms`;
+    client.user.setActivity(`/help | ${serverCount} Servers | ${pingStr}`, { type: ActivityType.Watching });
 }
 
-// ==================== 株式チャート ====================
-// チャートを生成（canvas画像 or テキストフォールバック）
-async function makeChart(history, label, color) {
-    if (buildPriceChart && history && history.length >= 2) {
-        try {
-            const buf = buildPriceChart(history, label, color);
-            return { attachment: new AttachmentBuilder(buf, { name: 'chart.png' }), imageUrl: 'attachment://chart.png' };
-        } catch (e) { /* fallthrough */ }
+function replacePlaceholders(t, m) {
+    if (!t) return "";
+    return t.replace(/{user}/g, `<@${m.id}>`).replace(/{server}/g, m.guild.name).replace(/{members}/g, m.guild.memberCount.toString());
+}
+
+async function sendLog(guild, embed) {
+    const s = loadData(SERVERS_FILE);
+    const config = s[guild.id];
+    if (config?.logChannel) {
+        const channel = guild.channels.cache.get(config.logChannel);
+        if (channel) await channel.send({ embeds: [embed] }).catch(console.error);
     }
-    return { attachment: null, imageUrl: null };
 }
 
-function buildStockChart(history) {
-    if (!history || history.length < 2) return null;
-    const h = history.slice(-10);
-    const max = Math.max(...h), min = Math.min(...h);
-    const rows = 5;
-    const chart = Array.from({ length: rows }, () => Array(h.length).fill(' '));
-    h.forEach((v, x) => {
-        const row = max === min ? 0 : Math.floor((max - v) / (max - min) * (rows - 1));
-        chart[row][x] = '█';
-    });
-    const lines = chart.map((row, i) => {
-        const label = (max - (max - min) * i / (rows - 1)).toFixed(0).padStart(6);
-        return `${label} |${row.join('')}`;
-    });
-    return lines.join('\n') + `\n${'─'.repeat(7 + h.length)}`;
+function normalizeText(text) {
+    return text
+        .replace(/[\u200B-\u200D\uFEFF\u00AD\u034F\u2060-\u2064\u2066-\u206F]/g, '')
+        .replace(/[Ａ-Ｚａ-ｚ０-９]/g, s => String.fromCharCode(s.charCodeAt(0) - 0xFEE0))
+        .replace(/　/g, ' ')
+        .replace(/[\u30A1-\u30F6]/g, s => String.fromCharCode(s.charCodeAt(0) - 0x60))
+        .replace(/[ｦ-ﾟ]/g, s => { const map = 'をぁぃぅぇぉゃゅょっーあいうえおかきくけこさしすせそたちつてとなにぬねのはひふへほまみむめもやゆよらりるれろわん゛゜'; const idx = s.charCodeAt(0) - 0xFF66; return idx >= 0 && idx < map.length ? map[idx] : s; })
+        .replace(/[\s\-_\.・。、!！?？~〜ー\/\\|*#@$%^&()（）\[\]【】「」『』{}]/g, '')
+        .replace(/(.)\1{2,}/g, '$1')
+        .toLowerCase();
 }
 
-// ==================== ブラックジャック ====================
-const bjGames = new Map(); // gameKey -> game state
-
-function buildDeck() {
-    const suits = ['♠', '♥', '♦', '♣'];
-    const ranks = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
-    const deck = [];
-    for (const s of suits) for (const r of ranks) deck.push(`${r}${s}`);
-    for (let i = deck.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [deck[i], deck[j]] = [deck[j], deck[i]]; }
-    return deck;
-}
-function drawCard(deck) { return deck.pop(); }
-function cardValue(card) {
-    const r = card.slice(0, -1);
-    if (r === 'A') return 11;
-    if (['J', 'Q', 'K'].includes(r)) return 10;
-    return parseInt(r);
-}
-function calcBJ(cards) {
-    let total = cards.reduce((s, c) => s + cardValue(c), 0);
-    let aces = cards.filter(c => c.startsWith('A')).length;
-    while (total > 21 && aces > 0) { total -= 10; aces--; }
-    return total;
-}
-function buildBJEmbed(game, status, balance, user) {
-    const playerTotal = calcBJ(game.playerCards);
-    const dealerTotal = calcBJ(game.dealerCards);
-    const mention = user ? `<@${user.id}> ` : '';
-    const statusMap = {
-        playing: { title: '🃏 ブラックジャック', color: 0x3498db, desc: '' },
-        win:     { title: '🎉 勝利！', color: 0x57f287, desc: `${mention}**+${game.bet.toLocaleString()}** 🪙 獲得！\n残高: **${balance?.toLocaleString()}** 🪙` },
-        lose:    { title: '😢 負け...', color: 0xff4757, desc: `${mention}**-${game.bet.toLocaleString()}** 🪙\n残高: **${balance?.toLocaleString()}** 🪙` },
-        push:    { title: '🤝 引き分け', color: 0x95a5a6, desc: `${mention}賭け金は返還されました。\n残高: **${balance?.toLocaleString()}** 🪙` },
-        bust:    { title: '💥 バスト！', color: 0xff4757, desc: `${mention}**-${game.bet.toLocaleString()}** 🪙\n残高: **${balance?.toLocaleString()}** 🪙` },
-        bj:      { title: '🃏 ブラックジャック！', color: 0xf1c40f, desc: `${mention}**+${Math.floor(game.bet * 1.5).toLocaleString()}** 🪙 獲得！\n残高: **${balance?.toLocaleString()}** 🪙` },
-    };
-    const s = statusMap[status];
-    const dealerShow = status === 'playing' ? `${game.dealerCards[0]} ??` : game.dealerCards.join(' ');
-    const dealerScore = status === 'playing' ? '?' : dealerTotal;
-    return new EmbedBuilder().setTitle(s.title).setColor(s.color)
-        .addFields(
-            { name: `ディーラー (${dealerScore})`, value: dealerShow, inline: false },
-            { name: `あなた (${playerTotal})`, value: game.playerCards.join(' '), inline: false }
-        )
-        .setDescription(s.desc || `${mention}賭け金: **${game.bet.toLocaleString()}** 🪙　レバレッジ: **${game.leverage || 2}x**`)
-        .setFooter({ text: 'ヒット=カードを引く / スタンド=終了 / ダブル=2倍賭けで1枚引いて終了' });
-}
-function buildBJRows(gameKey) {
-    return [new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(`bj_hit_${gameKey}`).setLabel('ヒット').setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId(`bj_stand_${gameKey}`).setLabel('スタンド').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId(`bj_double_${gameKey}`).setLabel('ダブルダウン').setStyle(ButtonStyle.Danger)
-    )];
+function containsNgWord(text, ngwords) {
+    const normalized = normalizeText(text);
+    for (const word of ngwords) {
+        const nw = normalizeText(word);
+        if (nw && normalized.includes(nw)) return true;
+    }
+    return false;
 }
 
-// 残高が負になったとき差額をローンに自動追加
-function applyDebt(u) {
-    if (u.balance >= 0) return null;
-    const debt = Math.abs(u.balance);
-    u.loan = (u.loan || 0) + debt;
-    u.balance = 0;
-    if (!u.loanDate) u.loanDate = Date.now();
-    if (!u.lastInterestCharge) u.lastInterestCharge = Date.now();
-    return `⚠️ 残高不足のため ${debt.toLocaleString()} 🪙 が自動借入されました（借入合計: ${u.loan.toLocaleString()} 🪙）`;
+function recordMessage(guildId, channelId, authorId) {
+    if (!messageHistory.has(guildId)) messageHistory.set(guildId, []);
+    const arr = messageHistory.get(guildId);
+    arr.push({ channelId, authorId, timestamp: Date.now() });
+    const oneHourAgo = Date.now() - 60 * 60 * 1000;
+    while (arr.length > 0 && arr[0].timestamp < oneHourAgo) arr.shift();
 }
 
-const delBtn = () => new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('delete_reply').setLabel('🗑️ 削除').setStyle(ButtonStyle.Secondary)
-);
+function getHourlyStats(guildId, ignoredChannels = []) {
+    const arr = messageHistory.get(guildId) || [];
+    const oneHourAgo = Date.now() - 60 * 60 * 1000;
+    const recent = arr.filter(m => m.timestamp >= oneHourAgo && !ignoredChannels.includes(m.channelId));
+    const total = recent.length;
+    const userCount = {};
+    for (const m of recent) userCount[m.authorId] = (userCount[m.authorId] || 0) + 1;
+    const topUsers = Object.entries(userCount).sort((a, b) => b[1] - a[1]).slice(0, 3);
+    const channelCount = {};
+    for (const m of recent) channelCount[m.channelId] = (channelCount[m.channelId] || 0) + 1;
+    const topChannels = Object.entries(channelCount).sort((a, b) => b[1] - a[1]).slice(0, 3);
+    let judgment, color;
+    if (total >= 50) { judgment = '🔥 活発'; color = 0x00ff00; }
+    else if (total >= 10) { judgment = '💬 普通'; color = 0xffff00; }
+    else { judgment = '💤 過疎'; color = 0xff4444; }
+    return { total, topUsers, topChannels, judgment, color };
+}
 
-function buildBankPanel(u) {
-    const loan = u.loan || 0;
+function getAllRanking(users) {
+    return Object.entries(users)
+        .filter(([, v]) => typeof v.xp === 'number')
+        .sort((a, b) => b[1].xp - a[1].xp);
+}
+
+function buildRankingEmbed(sorted, page) {
+    const PAGE_SIZE = 10;
+    const totalPages = Math.max(1, Math.ceil(sorted.length / PAGE_SIZE));
+    const safePage = Math.min(Math.max(1, page), totalPages);
+    const start = (safePage - 1) * PAGE_SIZE;
+    const current = sorted.slice(start, start + PAGE_SIZE);
+    const medals = ['🥇', '🥈', '🥉'];
+    const list = current.map((e, i) => {
+        const pos = start + i + 1;
+        const icon = pos <= 3 ? medals[pos - 1] : `**${pos}.**`;
+        const name = e[1].username || `ID:${e[0]}`;
+        return `${icon} ${name} — Lv.${e[1].lv ?? 0} (${e[1].xp} XP)`;
+    }).join('\n');
     const embed = new EmbedBuilder()
-        .setTitle('🏦 銀行')
-        .setColor(0x2ecc71)
-        .addFields(
-            { name: '残高', value: `**${u.balance.toLocaleString()}** ${CURRENCY}`, inline: true },
-            { name: '借入残高', value: `**${loan.toLocaleString()}** ${CURRENCY}`, inline: true },
-            { name: 'ローン上限', value: `**5,000** ${CURRENCY}`, inline: true }
-        )
-        .setDescription('ローンを借りると3時間ごとに5%の利子が加算されます。')
-        .setFooter({ text: '金額は数字・all・halfで指定できます' });
-    const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('bank_loan').setLabel('💸 借りる').setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId('bank_repay').setLabel('💰 返済する').setStyle(ButtonStyle.Success).setDisabled(loan <= 0),
-        new ButtonBuilder().setCustomId('bank_reload').setLabel('🔄 リロード').setStyle(ButtonStyle.Secondary)
+        .setTitle('🏆 レベルランキング')
+        .setDescription(list || 'データなし')
+        .setColor(0xf1c40f)
+        .setFooter({ text: `ページ ${safePage} / ${totalPages}　全 ${sorted.length} ユーザー` });
+    return { embed, safePage, totalPages };
+}
+
+function buildRankingRow(page, totalPages) {
+    return new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`ranking_prev_${page}`).setLabel('◀ 前へ').setStyle(ButtonStyle.Secondary).setDisabled(page <= 1),
+        new ButtonBuilder().setCustomId(`ranking_next_${page}`).setLabel('次へ ▶').setStyle(ButtonStyle.Secondary).setDisabled(page >= totalPages)
     );
-    return { embeds: [embed], components: [row] };
 }
 
-function cdStr(remaining) {
-    if (remaining <= 0) return '✅ 準備完了';
-    const h = Math.floor(remaining / 3600000);
-    const m = Math.floor((remaining % 3600000) / 60000);
-    const s = Math.floor((remaining % 60000) / 1000);
-    if (h > 0) return `⏳ あと${h}時間${m}分`;
-    if (m > 0) return `⏳ あと${m}分${s}秒`;
-    return `⏳ あと${s}秒`;
+function createMainSetRow(s) {
+    return new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('set_menu_log').setLabel('ログ詳細設定').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId('set_menu_kaso').setLabel('過疎調査除外設定').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId('set_lv_toggle').setLabel(`レベル機能: ${s.leveling !== false ? 'ON' : 'OFF'}`).setStyle(s.leveling !== false ? ButtonStyle.Success : ButtonStyle.Danger),
+        new ButtonBuilder().setCustomId('set_menu_lock').setLabel('一括ロック切替').setStyle(ButtonStyle.Danger)
+    );
+}
+function createMainSetRow2() {
+    return new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('set_menu_welcome').setLabel('入室通知設定').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId('set_menu_bye').setLabel('退室通知設定').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId('set_menu_ngword').setLabel('NGワード管理').setStyle(ButtonStyle.Danger)
+    );
+}
+function createLogConfigRows(c) {
+    return [
+        new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('log_toggle_edit').setLabel(`編集: ${c.edit ? 'ON' : 'OFF'}`).setStyle(c.edit ? ButtonStyle.Success : ButtonStyle.Danger),
+            new ButtonBuilder().setCustomId('log_toggle_delete').setLabel(`削除: ${c.delete ? 'ON' : 'OFF'}`).setStyle(c.delete ? ButtonStyle.Success : ButtonStyle.Danger),
+            new ButtonBuilder().setCustomId('log_toggle_join').setLabel(`入室: ${c.join ? 'ON' : 'OFF'}`).setStyle(c.join ? ButtonStyle.Success : ButtonStyle.Danger),
+            new ButtonBuilder().setCustomId('log_toggle_leave').setLabel(`退出: ${c.leave ? 'ON' : 'OFF'}`).setStyle(c.leave ? ButtonStyle.Success : ButtonStyle.Danger)
+        ),
+        new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('log_toggle_message_send').setLabel(`送信: ${c.message_send ? 'ON' : 'OFF'}`).setStyle(c.message_send ? ButtonStyle.Success : ButtonStyle.Danger),
+            new ButtonBuilder().setCustomId('log_toggle_channel').setLabel(`CH作成: ${c.channel ? 'ON' : 'OFF'}`).setStyle(c.channel ? ButtonStyle.Success : ButtonStyle.Danger),
+            new ButtonBuilder().setCustomId('log_toggle_role').setLabel(`ロール: ${c.role ? 'ON' : 'OFF'}`).setStyle(c.role ? ButtonStyle.Success : ButtonStyle.Danger),
+            new ButtonBuilder().setCustomId('log_toggle_timeout').setLabel(`TO: ${c.timeout ? 'ON' : 'OFF'}`).setStyle(c.timeout ? ButtonStyle.Success : ButtonStyle.Danger)
+        ),
+        new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('set_back_main').setLabel('← 戻る').setStyle(ButtonStyle.Secondary)
+        ),
+    ];
+}
+function buildNgwordPanel(s) {
+    const list = s.ngwords?.length > 0 ? s.ngwords.map(w => `\`${w}\``).join('、') : 'なし';
+    const exemptRoles = s.ngwordExemptRoles?.length > 0 ? s.ngwordExemptRoles.map(r => `<@&${r}>`).join('、') : 'なし';
+    const content = `🚫 **NGワード管理**\n\nNGワード: ${list}\n除外ロール: ${exemptRoles}\n連呼罰則: ${s.ngwordViolationLimit || 3}回でタイムアウト ${s.ngwordTimeoutSeconds || 60}秒`;
+    return {
+        content,
+        components: [
+            new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('ngword_add').setLabel('ワード追加').setStyle(ButtonStyle.Success),
+                new ButtonBuilder().setCustomId('ngword_del').setLabel('ワード削除').setStyle(ButtonStyle.Danger),
+                new ButtonBuilder().setCustomId('ngword_exempt_add').setLabel('除外ロール追加').setStyle(ButtonStyle.Primary),
+                new ButtonBuilder().setCustomId('ngword_exempt_del').setLabel('除外ロール削除').setStyle(ButtonStyle.Secondary)
+            ),
+            new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('ngword_timeout_set').setLabel('タイムアウト秒数').setStyle(ButtonStyle.Primary),
+                new ButtonBuilder().setCustomId('ngword_violation_set').setLabel('連呼回数').setStyle(ButtonStyle.Primary),
+                new ButtonBuilder().setCustomId('set_back_main').setLabel('戻る').setStyle(ButtonStyle.Secondary)
+            )
+        ]
+    };
+}
+function createMainSetRow3(s) {
+    return new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('set_menu_mute').setLabel(`ミュートロール: ${s.muteRole ? '✅設定済' : '未設定'}`).setStyle(s.muteRole ? ButtonStyle.Success : ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId('set_menu_serverlock').setLabel('サーバーロック設定').setStyle(ButtonStyle.Danger),
+        new ButtonBuilder().setCustomId('set_menu_autoreply').setLabel(`自動返信 (${(s.autoReplies || []).length}件)`).setStyle(ButtonStyle.Primary)
+    );
+}
+function buildSetPanel(s) {
+    return { content: '⚙️ **サーバー管理設定パネル**\n下のボタンから各機能の設定を行ってください。', components: [createMainSetRow(s), createMainSetRow2(), createMainSetRow3(s)], flags: MessageFlags.Ephemeral };
 }
 
-const econCommands = [
-    new SlashCommandBuilder().setName('balance').setDescription('所持金を確認します').addUserOption(o => o.setName('user').setDescription('対象ユーザー（未指定なら自分）')),
-    new SlashCommandBuilder().setName('earn').setDescription('お金を稼ぐ')
-        .addSubcommand(s => s.setName('daily').setDescription('デイリーボーナスを受け取る'))
-        .addSubcommand(s => s.setName('work').setDescription('働いてコインを稼ぐ（CD: 1時間）'))
-        .addSubcommand(s => s.setName('crime').setDescription('犯罪でコインを稼ぐ（CD: 2時間）'))
-        .addSubcommand(s => s.setName('hunt').setDescription('狩猟してアイテムを入手（CD: 30分）'))
-        .addSubcommand(s => s.setName('fish').setDescription('釣りをしてアイテムを入手（CD: 45分）'))
-        .addSubcommand(s => s.setName('rob').setDescription('他ユーザーから強盗').addStringOption(o => o.setName('target').setDescription('ターゲットのID or メンション').setRequired(true)))
-        .addSubcommand(s => s.setName('flip').setDescription('コインフリップ').addStringOption(o => o.setName('amount').setDescription('金額（数字・all・half）').setRequired(true)).addStringOption(o => o.setName('side').setDescription('omote か ura').setRequired(true)))
-        .addSubcommand(s => s.setName('slots').setDescription('スロット').addStringOption(o => o.setName('amount').setDescription('金額（数字・all・half）').setRequired(true)))
-        .addSubcommand(s => s.setName('bj').setDescription('ブラックジャック').addStringOption(o => o.setName('amount').setDescription('賭け金額（数字・all・half）').setRequired(true)).addIntegerOption(o => o.setName('leverage').setDescription('レバレッジ倍率（2〜10）').setMinValue(2).setMaxValue(10))),
-    new SlashCommandBuilder().setName('pay').setDescription('他のユーザーに送金します').addUserOption(o => o.setName('user').setDescription('送金先ユーザー').setRequired(true)).addStringOption(o => o.setName('amount').setDescription('金額（数字・all・half）').setRequired(true)),
-    new SlashCommandBuilder().setName('dust').setDescription('インベントリのアイテムを捨てます').addStringOption(o => o.setName('item').setDescription('アイテム名（未指定でセレクト）')).addIntegerOption(o => o.setName('amount').setDescription('捨てる数（未指定で1個）').setMinValue(1)),
-    new SlashCommandBuilder().setName('shop').setDescription('ショップ・会社ストアのアイテム一覧を表示します'),
-    new SlashCommandBuilder().setName('buy').setDescription('アイテムを購入します').addStringOption(o => o.setName('item').setDescription('アイテム名（未指定でセレクト）')),
-    new SlashCommandBuilder().setName('sell').setDescription('インベントリのアイテムを売却します')
-        .addSubcommand(sub => sub.setName('shop').setDescription('ショップに売却（規定価格）').addStringOption(o => o.setName('item').setDescription('アイテム名（未指定でセレクト）')).addIntegerOption(o => o.setName('amount').setDescription('個数（未指定で1）').setMinValue(1)))
-        .addSubcommand(sub => sub.setName('player').setDescription('プレイヤーに自由価格で売却').addStringOption(o => o.setName('item').setDescription('アイテム名').setRequired(true)).addStringOption(o => o.setName('price').setDescription('販売価格（数字・all・half）').setRequired(true)).addUserOption(o => o.setName('buyer').setDescription('販売相手（未指定で出品）'))),
-    new SlashCommandBuilder().setName('inventory').setDescription('所持アイテムを確認します').addUserOption(o => o.setName('user').setDescription('対象ユーザー（未指定なら自分）')),
-    new SlashCommandBuilder().setName('econrank').setDescription('所持金ランキングを表示します'),
-    new SlashCommandBuilder().setName('bank').setDescription('銀行メニュー（残高確認・ローン・返済）'),
-    new SlashCommandBuilder().setName('account').setDescription('口座メニュー（入金・出金・利息0.5%/日）'),
-    new SlashCommandBuilder().setName('corp')
-        .setDescription('会社の管理')
-        .addSubcommand(sub => sub.setName('create').setDescription('会社を設立します（1人2社まで・設立費用10,000枚）')
-            .addStringOption(o => o.setName('name').setDescription('会社名').setRequired(true))
-            .addStringOption(o => o.setName('description').setDescription('会社の説明').setRequired(true)))
-        .addSubcommand(sub => sub.setName('setting').setDescription('会社の管理・ストア設定').addStringOption(o => o.setName('corp').setDescription('会社名（未指定でセレクト）')))
-        .addSubcommand(sub => sub.setName('deposit').setDescription('会社にお金を入れます').addStringOption(o => o.setName('amount').setDescription('金額（数字・all・half）').setRequired(true)).addStringOption(o => o.setName('corp').setDescription('会社名（未指定でセレクト）'))),
-    new SlashCommandBuilder().setName('crypto')
-        .setDescription('仮想通貨市場')
-        .addSubcommand(sub => sub.setName('create').setDescription('仮想通貨を発行します（1人1枚）')
-            .addStringOption(o => o.setName('name').setDescription('通貨名').setRequired(true))
-            .addStringOption(o => o.setName('symbol').setDescription('シンボル（例: BTC）').setRequired(true)))
-        .addSubcommand(sub => sub.setName('list').setDescription('仮想通貨一覧を表示します'))
-        .addSubcommand(sub => sub.setName('view').setDescription('チャートと詳細を表示します').addStringOption(o => o.setName('symbol').setDescription('シンボル（未指定でセレクト）')))
-        .addSubcommand(sub => sub.setName('buy').setDescription('仮想通貨を購入します').addStringOption(o => o.setName('amount').setDescription('購入枚数（数字・all）').setRequired(true)).addStringOption(o => o.setName('symbol').setDescription('シンボル（未指定でセレクト）')))
-        .addSubcommand(sub => sub.setName('sell').setDescription('仮想通貨を売却します').addStringOption(o => o.setName('amount').setDescription('売却枚数（数字・all）').setRequired(true)).addStringOption(o => o.setName('symbol').setDescription('シンボル（未指定でセレクト）'))),
-    new SlashCommandBuilder().setName('stock').setDescription('株式市場（会社の株売買・チャート）').addStringOption(o => o.setName('corp').setDescription('会社名（未指定でセレクト表示）')),
-    new SlashCommandBuilder().setName('buystock').setDescription('株を購入します').addStringOption(o => o.setName('amount').setDescription('購入株数（数字・all）').setRequired(true)).addStringOption(o => o.setName('corp').setDescription('会社名（未指定でセレクト表示）')),
-    new SlashCommandBuilder().setName('sellstock').setDescription('株を売却します').addIntegerOption(o => o.setName('amount').setDescription('売却株数').setRequired(true).setMinValue(1)).addStringOption(o => o.setName('corp').setDescription('会社名（未指定でセレクト表示）')),
-];
+function buildAutoReplyPanel(s) {
+    const replies = s.autoReplies || [];
+    let desc = replies.length === 0 ? '設定なし' : replies.map((r, i) => {
+        const modeLabel = r.mode === 'reply' ? '↩️ 返信' : '💬 送信';
+        const matchLabel = r.matchType === 'exact' ? '完全一致' : '含む';
+        const resPreview = r.responses.length === 1 ? r.responses[0] : `${r.responses[0]} 他${r.responses.length - 1}件`;
+        return `**${i + 1}.** トリガー: \`${r.trigger}\`\n返答: ${resPreview.slice(0, 40)}\nモード: ${modeLabel} | 判定: ${matchLabel}`;
+    }).join('\n\n');
+    if (desc.length > 3800) desc = desc.slice(0, 3700) + '\n...(省略)';
+    return {
+        embeds: [new EmbedBuilder().setTitle('💬 自動返信設定').setDescription(desc).setColor(0x3498db).setFooter({ text: '追加: モーダルでトリガー・返答を設定 / 返答は,区切りでランダム' })],
+        components: [
+            new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('autoreply_add').setLabel('➕ 追加').setStyle(ButtonStyle.Success),
+                new ButtonBuilder().setCustomId('autoreply_del').setLabel('🗑️ 削除').setStyle(ButtonStyle.Danger).setDisabled(replies.length === 0),
+                new ButtonBuilder().setCustomId('set_back_main').setLabel('← 戻る').setStyle(ButtonStyle.Secondary)
+            )
+        ],
+        ...{flags: MessageFlags.Ephemeral}
+    };
+}
 
-async function handleEcon(interaction) {
-    const { commandName, options, user, guild } = interaction;
-    const econ = load(ECON_FILE);
+setupAuth(app, loadData, saveData, USERS_FILE, CLIENT_ID, CLIENT_SECRET);
+app.listen(process.env.PORT || 3000, '0.0.0.0', () => console.log('Web Server Ready'));
 
-    if (commandName === 'balance') {
-        const target = options.getUser('user') || user;
-        const u = getUser(econ, target.id, target);
-        const corp = load(CORP_FILE);
-        const ownedCorps = Object.values(corp).filter(c => c.ownerId === target.id);
-        const loan = u.loan || 0;
-        const netBalance = round3(u.balance - loan);
-        const embed = new EmbedBuilder()
-            .setTitle(`${CURRENCY} ${target.username} の所持金`)
-            .setThumbnail(target.displayAvatarURL())
-            .setColor(netBalance < 0 ? 0xff4757 : 0xf1c40f)
-            .addFields(
-                { name: '残高', value: `**${fmtPrice(u.balance)}** ${CURRENCY}`, inline: true },
-                { name: '借入残高', value: loan > 0 ? `**-${fmtPrice(loan)}** ${CURRENCY}` : 'なし', inline: true },
-                { name: '実質残高', value: `**${fmtPrice(netBalance)}** ${CURRENCY}${netBalance < 0 ? ' 🔴' : ''}`, inline: true },
-                { name: '保有会社', value: ownedCorps.length > 0 ? ownedCorps.map(c => c.name).join(', ') : 'なし', inline: true }
-            ).setTimestamp();
-        const isSelf = target.id === user.id;
-        const rows = [delBtn()];
-        if (isSelf) {
-            rows.unshift(new ActionRowBuilder().addComponents(
-                new ButtonBuilder().setCustomId('balance_reload').setLabel('🔄 更新').setStyle(ButtonStyle.Secondary)
-            ));
-        }
-        return interaction.reply({ embeds: [embed], components: rows });
-    }
+client.once(Events.ClientReady, async () => {
+    console.log(`${client.user.tag} としてログインしました。`);
+    setTimeout(updateStatus, 3000);
+    setInterval(updateStatus, 30000);
 
-    if (commandName === 'earn') {
-        const sub = options.getSubcommand();
-        const u = getUser(econ, user.id, user);
+    // ローン利子処理（1時間ごとにチェック、3時間ごとに5%加算）
+    setInterval(() => {
+        const fs = require('fs'), path = require('path');
+        const econPath = path.join(__dirname, 'data', 'econ.json');
+        if (!fs.existsSync(econPath)) return;
+        const econ = JSON.parse(fs.readFileSync(econPath, 'utf8'));
         const now = Date.now();
-
-        if (sub === 'daily') {
-            const jstNow = new Date(now + 9 * 3600000);
-            const todayStr = `${jstNow.getUTCFullYear()}-${String(jstNow.getUTCMonth()+1).padStart(2,'0')}-${String(jstNow.getUTCDate()).padStart(2,'0')}`;
-            if (u.dailyDate === todayStr) {
-                const nextMidnight = new Date(jstNow); nextMidnight.setUTCHours(24, 0, 0, 0);
-                const rem = nextMidnight.getTime() - jstNow.getTime();
-                const h = Math.floor(rem / 3600000), m = Math.floor((rem % 3600000) / 60000);
-                return interaction.reply({ content: `⏳ 今日のデイリーは受け取り済みです。次回: **${h}時間${m}分後**（深夜0時リセット）`, ...EPH });
+        let changed = false;
+        for (const [id, u] of Object.entries(econ)) {
+            if (!u.loan || u.loan <= 0) continue;
+            const lastCharge = u.lastInterestCharge || u.loanDate || now;
+            const periodsPassed = Math.floor((now - lastCharge) / 10800000);
+            if (periodsPassed >= 1) {
+                const interest = Math.ceil(u.loan * 0.05 * periodsPassed);
+                u.loan += interest;
+                u.lastInterestCharge = lastCharge + periodsPassed * 10800000;
+                changed = true;
             }
-            const streak = (u.dailyStreak || 0) + 1;
-            const base = Math.floor(Math.random() * 201) + 200;
-            const bonus = Math.min(streak, 7) * 50;
-            u.balance += base + bonus; u.dailyLast = now; u.dailyStreak = streak; u.dailyDate = todayStr;
-            save(ECON_FILE, econ);
-            const embed = new EmbedBuilder().setTitle('🎁 デイリーボーナス')
-                .setDescription(`<@${user.id}> **+${base + bonus}** ${CURRENCY} を受け取りました！\n残高: **${u.balance.toLocaleString()}** ${CURRENCY}`)
-                .addFields({ name: '内訳', value: `ベース: ${base} + 連続: ${bonus}`, inline: true }, { name: '連続ログイン', value: `${streak}日目 🔥`, inline: true })
-                .setColor(0x57f287).setTimestamp();
-            return interaction.reply({ embeds: [embed], components: [delBtn()], ...EPH });
         }
+        if (changed) fs.writeFileSync(econPath, JSON.stringify(econ, null, 4));
+    }, 3600000);
 
-        if (sub === 'work') {
-            const workRem = 3600000 - (now - (u.workLast || 0));
-            if (workRem > 0) return interaction.reply({ content: `⏳ まだ働けません。${cdStr(workRem)}`, ...EPH });
-            const jobs = [
-                { name: 'プログラマー', desc: 'コードを書きまくった', min: 80, max: 180 },
-                { name: 'シェフ', desc: '料理を作って客に振る舞った', min: 60, max: 150 },
-                { name: 'ゲーム実況者', desc: '配信が大盛況だった', min: 50, max: 200 },
-                { name: '宅配ドライバー', desc: '荷物を時間通りに届けた', min: 70, max: 140 },
-                { name: 'デザイナー', desc: 'クライアントに絶賛された', min: 90, max: 170 },
-                { name: '作家', desc: '原稿を書き上げた', min: 60, max: 160 },
-                { name: '教師', desc: '生徒に感謝された', min: 55, max: 130 },
-                { name: '音楽家', desc: 'ライブが満員だった', min: 80, max: 220 },
-                { name: '漁師', desc: '大漁だった', min: 70, max: 160 },
-                { name: '株トレーダー', desc: 'うまくポジションを取った', min: 30, max: 300 },
-            ];
-            const job = jobs[Math.floor(Math.random() * jobs.length)];
-            const amount = Math.floor(Math.random() * (job.max - job.min + 1)) + job.min;
-            u.balance += amount; u.workLast = now;
-            save(ECON_FILE, econ);
-            const embed = new EmbedBuilder().setTitle(`💼 ${job.name} として働いた`)
-                .setDescription(`<@${user.id}> ${job.desc}！\n**+${amount}** ${CURRENCY} を獲得！\n残高: **${u.balance.toLocaleString()}** ${CURRENCY}`)
-                .setColor(0x3498db).setTimestamp();
-            return interaction.reply({ embeds: [embed], components: [delBtn()], ...EPH });
-        }
+    // 1分ごとの市場自動調整（株式・仮想通貨）
+    setInterval(() => {
+        const fs = require('fs'), path = require('path');
+        const r3 = (x) => Math.round(x * 1000) / 1000;
 
-        if (sub === 'crime') {
-            const crimeRem = 7200000 - (now - (u.crimeLast || 0));
-            if (crimeRem > 0) return interaction.reply({ content: `⏳ まだ犯罪はできません。${cdStr(crimeRem)}`, ...EPH });
-            u.crimeLast = now;
-            const crimes = [
-                { name: '車上荒らし', success: 0.6, gain: [200, 500], fine: [100, 300] },
-                { name: '銀行強盗',   success: 0.3, gain: [800, 2000], fine: [400, 800] },
-                { name: 'スリ',       success: 0.7, gain: [100, 300],  fine: [50, 200] },
-                { name: '詐欺',       success: 0.5, gain: [300, 700],  fine: [200, 500] },
-                { name: '密輸',       success: 0.4, gain: [500, 1200], fine: [300, 600] },
-            ];
-            const crime = crimes[Math.floor(Math.random() * crimes.length)];
-            const success = Math.random() < crime.success;
-            let embed;
-            if (success) {
-                const amount = Math.floor(Math.random() * (crime.gain[1] - crime.gain[0] + 1)) + crime.gain[0];
-                u.balance += amount;
-                embed = new EmbedBuilder().setTitle(`🦹 ${crime.name} 成功！`).setDescription(`<@${user.id}> **+${amount}** ${CURRENCY}！\n残高: **${u.balance.toLocaleString()}** ${CURRENCY}`).setColor(0x57f287);
-            } else {
-                const fine = Math.floor(Math.random() * (crime.fine[1] - crime.fine[0] + 1)) + crime.fine[0];
-                u.balance = Math.max(0, u.balance - fine);
-                embed = new EmbedBuilder().setTitle(`🚔 ${crime.name} 失敗！`).setDescription(`<@${user.id}> 捕まった！**${fine}** ${CURRENCY} 没収。\n残高: **${u.balance.toLocaleString()}** ${CURRENCY}`).setColor(0xff4757);
+        // 株式
+        const corpPath = path.join(__dirname, 'data', 'corp.json');
+        if (fs.existsSync(corpPath)) {
+            const corp = JSON.parse(fs.readFileSync(corpPath, 'utf8'));
+            let changed = false;
+            for (const c of Object.values(corp)) {
+                if (!c.stock) continue;
+                // 流通率に基づく調整（売られてる比率が高いほど下落圧）
+                const circRatio = 1 - c.stock.availableShares / c.stock.totalShares;
+                // circRatio 0=全部売れ残り, 1=全部流通
+                const baseDrift = (circRatio - 0.5) * 0.008; // -0.4%〜+0.4%
+                const noise = (Math.random() - 0.5) * 0.012; // ±0.6%
+                const change = 1 + baseDrift + noise;
+                c.stock.price = r3(Math.max(0.001, c.stock.price * change));
+                c.stock.history = c.stock.history || [];
+                c.stock.history.push(c.stock.price);
+                if (c.stock.history.length > 60) c.stock.history.shift();
+                changed = true;
             }
-            save(ECON_FILE, econ);
-            return interaction.reply({ embeds: [embed], components: [delBtn()], ...EPH });
+            if (changed) fs.writeFileSync(corpPath, JSON.stringify(corp, null, 4));
         }
 
-        if (sub === 'hunt') {
-            const remaining = 1800000 - (now - (u.huntLast || 0));
-            if (remaining > 0) return interaction.reply({ content: `⏳ まだ狩りに行けません。${cdStr(remaining)}`, ...EPH });
-            u.huntLast = now;
-            const hunts = [
-                { name: 'ウサギ',   item: '🐰 ウサギの毛皮',  sell: 80,  rare: false },
-                { name: 'シカ',     item: '🦌 シカの角',      sell: 250, rare: false },
-                { name: 'クマ',     item: '🐻 クマの毛皮',    sell: 500, rare: true  },
-                { name: 'キツネ',   item: '🦊 キツネの毛皮',  sell: 150, rare: false },
-                { name: 'イノシシ', item: '🐗 イノシシの牙',  sell: 200, rare: false },
-                { name: 'オオカミ', item: '🐺 オオカミの毛皮', sell: 400, rare: true  },
+        // 仮想通貨
+        const cryptoPath = path.join(__dirname, 'data', 'crypto.json');
+        if (fs.existsSync(cryptoPath)) {
+            const cryptoData = JSON.parse(fs.readFileSync(cryptoPath, 'utf8'));
+            let changed = false;
+            for (const c of Object.values(cryptoData)) {
+                const circRatio = 1 - c.availableSupply / c.totalSupply;
+                // 流通率10%以上で上昇圧力、それ以下はほぼ中立
+                const baseDrift = circRatio > 0.1 ? (circRatio - 0.1) * 0.02 : (circRatio - 0.5) * 0.004;
+                const noise = (Math.random() - 0.45) * 0.06; // ±3%、わずかに上昇バイアス
+                const change = 1 + baseDrift + noise;
+                c.price = r3(Math.max(0.001, c.price * change));
+                c.history = c.history || [];
+                c.history.push(c.price);
+                if (c.history.length > 60) c.history.shift();
+                changed = true;
+            }
+            if (changed) fs.writeFileSync(cryptoPath, JSON.stringify(cryptoData, null, 4));
+        }
+    }, 60000);
+
+    const commands = [
+        new SlashCommandBuilder().setName('help').setDescription('ボットのコマンド一覧を表示します'),
+        new SlashCommandBuilder().setName('set').setDescription('サーバー管理用設定パネルを開きます').setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+        new SlashCommandBuilder().setName('support').setDescription('サポートサーバーの招待リンクを表示します'),
+        new SlashCommandBuilder().setName('rank').setDescription('現在のレベルとXPを確認します').addUserOption(o => o.setName('user').setDescription('確認したいユーザー')),
+        new SlashCommandBuilder().setName('ranking').setDescription('レベルランキングを表示します'),
+        new SlashCommandBuilder().setName('serverinfo').setDescription('現在のサーバーの詳細情報を表示します'),
+        new SlashCommandBuilder().setName('userinfo').setDescription('ユーザーの詳細情報を表示します').addUserOption(o => o.setName('user').setDescription('対象ユーザー')),
+        new SlashCommandBuilder().setName('clear').setDescription('指定した件数のメッセージを削除します').addIntegerOption(o => o.setName('num').setDescription('件数 (1-100)').setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages),
+        new SlashCommandBuilder().setName('log').setDescription('ログの送信先チャンネルを設定します').addChannelOption(o => o.setName('channel').setDescription('送信先').setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+        new SlashCommandBuilder().setName('authset').setDescription('OAuth2認証用のパネルを設置します').addStringOption(o => o.setName('title').setDescription('埋め込みタイトル').setRequired(true)).addStringOption(o => o.setName('description').setDescription('埋め込み説明').setRequired(true)).addStringOption(o => o.setName('button').setDescription('ボタンのラベル').setRequired(true)).addRoleOption(o => o.setName('role').setDescription('認証後に付与するロール').setRequired(true)).addChannelOption(o => o.setName('channel').setDescription('設置先チャンネル（未指定なら現在）').addChannelTypes(ChannelType.GuildText)).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+        new SlashCommandBuilder().setName('ticket').setDescription('問い合わせチケットパネルを作成します').addStringOption(o => o.setName('title').setDescription('タイトル').setRequired(true)).addStringOption(o => o.setName('description').setDescription('説明').setRequired(true)).addStringOption(o => o.setName('button').setDescription('ボタン名').setRequired(true)).addRoleOption(o => o.setName('mention-role').setDescription('通知先ロール').setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+        new SlashCommandBuilder().setName('gchat').setDescription('グローバルチャットの設定をします').addChannelOption(o => o.setName('channel').setDescription('チャンネルを指定（未指定で解除）').addChannelTypes(ChannelType.GuildText)).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+        new SlashCommandBuilder().setName('chatlock').setDescription('チャンネルを一時的にロックします').addIntegerOption(o => o.setName('seconds').setDescription('秒数').setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+        new SlashCommandBuilder().setName('omikuji').setDescription('今日の運勢を占います'),
+        new SlashCommandBuilder().setName('kaso').setDescription('過去1時間のサーバー稼働調査を表示します（3分クールダウン）'),
+        new SlashCommandBuilder().setName('rp').setDescription('セルフ役職付与パネルを作成します').addSubcommand(sub => {
+            sub.setName('create').setDescription('パネル作成').addStringOption(o => o.setName('title').setDescription('タイトル').setRequired(true)).addStringOption(o => o.setName('description').setDescription('説明').setRequired(true));
+            for (let i = 1; i <= 10; i++) sub.addRoleOption(o => o.setName(`role${i}`).setDescription(`役職${i}`)).addStringOption(o => o.setName(`emoji${i}`).setDescription(`絵文字${i}`));
+            return sub;
+        }).addSubcommand(sub => sub.setName('delete').setDescription('パネルを削除します')).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+        new SlashCommandBuilder().setName('kick').setDescription('ユーザーをサーバーからキックします').addUserOption(o => o.setName('user').setDescription('対象ユーザー').setRequired(true)).addStringOption(o => o.setName('reason').setDescription('理由')).setDefaultMemberPermissions(PermissionFlagsBits.KickMembers),
+        new SlashCommandBuilder().setName('ban').setDescription('ユーザーをサーバーからBANします').addUserOption(o => o.setName('user').setDescription('対象ユーザー').setRequired(true)).addStringOption(o => o.setName('reason').setDescription('理由')).setDefaultMemberPermissions(PermissionFlagsBits.BanMembers),
+        new SlashCommandBuilder().setName('embed').setDescription('Embedメッセージを送信します').addStringOption(o => o.setName('title').setDescription('タイトル').setRequired(true)).addStringOption(o => o.setName('description').setDescription('説明').setRequired(true)).addStringOption(o => o.setName('color').setDescription('カラーコード (例: #ff0000)')).addStringOption(o => o.setName('image').setDescription('画像URL')).addChannelOption(o => o.setName('channel').setDescription('送信先チャンネル（未指定なら現在）').addChannelTypes(ChannelType.GuildText)).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+        new SlashCommandBuilder().setName('mute').setDescription('ユーザーをミュートします').addUserOption(o => o.setName('user').setDescription('対象ユーザー').setRequired(true)).addStringOption(o => o.setName('reason').setDescription('理由')).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+        new SlashCommandBuilder().setName('unmute').setDescription('ユーザーのミュートを解除します').addUserOption(o => o.setName('user').setDescription('対象ユーザー').setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+        new SlashCommandBuilder().setName('serverlock').setDescription('サーバーロックを実行/解除します').addStringOption(o => o.setName('action').setDescription('実行/解除').setRequired(true).addChoices({ name: 'ロック', value: 'lock' }, { name: '解除', value: 'unlock' })).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+        new SlashCommandBuilder().setName('janken').setDescription('Botとじゃんけんをします').addStringOption(o => o.setName('hand').setDescription('グー / チョキ / パー').setRequired(true).addChoices({ name: 'グー ✊', value: 'グー' }, { name: 'チョキ ✌️', value: 'チョキ' }, { name: 'パー ✋', value: 'パー' })),
+        new SlashCommandBuilder().setName('coinflip').setDescription('コインを投げます（表/裏）'),
+        new SlashCommandBuilder().setName('dice').setDescription('サイコロを振ります').addIntegerOption(o => o.setName('sides').setDescription('面数（デフォルト6）').setMinValue(2).setMaxValue(100)),
+        new SlashCommandBuilder().setName('choose').setDescription('選択肢からランダムに1つ選びます').addStringOption(o => o.setName('choices').setDescription('選択肢（カンマ区切り　例: ラーメン,カレー,寿司）').setRequired(true)),
+        new SlashCommandBuilder().setName('botstatus').setDescription('Botの稼働状況を表示します'),
+        new SlashCommandBuilder().setName('channelinfo').setDescription('チャンネルの詳細情報を表示します').addChannelOption(o => o.setName('channel').setDescription('対象チャンネル（未指定なら現在）')),
+        new SlashCommandBuilder().setName('top').setDescription('このチャンネルの最初のメッセージへのリンクを表示します'),
+        new SlashCommandBuilder().setName('snipe').setDescription('直前に削除されたメッセージを表示します'),
+        new SlashCommandBuilder().setName('unban').setDescription('ユーザーのBANを解除します').addStringOption(o => o.setName('user').setDescription('ユーザーID or メンション').setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.BanMembers),
+        new SlashCommandBuilder().setName('giveaway').setDescription('プレゼント抽選を開始します').addStringOption(o => o.setName('prize').setDescription('景品名').setRequired(true)).addIntegerOption(o => o.setName('minutes').setDescription('終了までの時間（分）').setRequired(true).setMinValue(1)).addIntegerOption(o => o.setName('winners').setDescription('当選人数').setRequired(true).setMinValue(1)).addStringOption(o => o.setName('title').setDescription('タイトル（未指定なら「プレゼント抽選」）')).addChannelOption(o => o.setName('channel').setDescription('開催チャンネル（未指定なら現在）').addChannelTypes(ChannelType.GuildText)).setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+        new SlashCommandBuilder().setName('chset').setDescription('チャンネルの設定を変更します').addChannelOption(o => o.setName('channel').setDescription('対象チャンネル（未指定なら現在）').addChannelTypes(ChannelType.GuildText)).setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels),
+        ...econCommands,
+    ].map(cmd => cmd.toJSON());
+
+    const rest = new REST({ version: '10' }).setToken(TOKEN);
+    try {
+        console.log(`コマンド登録開始: ${commands.length}個`);
+        await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
+        console.log(`スラッシュコマンドの再登録に成功しました（${commands.length}個）。`);
+    } catch (error) {
+        console.error('コマンド登録エラー:', error?.message || error);
+        if (error?.rawError) console.error('詳細:', JSON.stringify(error.rawError, null, 2));
+    }
+});
+
+client.on(Events.InteractionCreate, async (interaction) => {
+    const servers = loadData(SERVERS_FILE);
+    const users = loadData(USERS_FILE);
+    const guildId = interaction.guildId;
+
+    if (guildId && !servers[guildId]) {
+        servers[guildId] = { logConfig: { edit: true, delete: true, join: true, leave: true, message_send: true, channel: true, role: true, timeout: true }, ngwords: [], ngwordExemptRoles: [], ngwordTimeoutSeconds: 60, ngwordViolationLimit: 3, locked: false, kasoIgnoreChannels: [], leveling: true, muteRole: null, serverLockExemptRoles: [], serverLockExemptChannels: [] };
+    }
+
+    // ==================== スラッシュコマンド ====================
+    if (interaction.isChatInputCommand()) {
+        const { commandName, options } = interaction;
+
+        if (commandName === 'help') {
+            const helpPages = [
+                {
+                    title: '(1/6) 📊 レベル / 👤 ユーザー / 🏰 サーバー',
+                    fields: [
+                        { name: '📊 レベル', value: '`/rank [user]` — 自分またはユーザーのレベル・XPを確認\n`/ranking` — サーバーのレベルランキングを表示', inline: false },
+                        { name: '👤 ユーザー', value: '`/userinfo [user]` — ユーザーの詳細情報を表示', inline: false },
+                        { name: '🏰 サーバー', value: '`/serverinfo` — サーバーの詳細情報を表示\n`/kaso` — 過疎チャンネルを調査して一覧表示\n`/channelinfo [channel]` — チャンネルの詳細情報を表示', inline: false },
+                    ]
+                },
+                {
+                    title: '(2/6) 🔍 ユーティリティ / ⚙️ 管理 / 🔨 モデレート',
+                    fields: [
+                        { name: '🔍 ユーティリティ', value: '`/botstatus` — Botの稼働状況を表示\n`/snipe` — 直近の削除メッセージを表示\n`/top` — メッセージ数トップユーザーを表示\n`/choose [choices]` — 選択肢からランダムに1つ選ぶ\n`/dice [max]` — サイコロを振る\n`/coinflip` — コインを投げる\n`/janken` — じゃんけんをする\n`/omikuji` — おみくじを引く', inline: false },
+                        { name: '⚙️ 管理', value: '`/set` — サーバー管理設定パネル（ログ・通知・NGワード・自動返信等）\n`/clear [amount]` — 指定数のメッセージを一括削除\n`/log [channel]` — ログ送信先チャンネルを設定\n`/chatlock` — チャンネルのチャットをロック/解除\n`/chset [channel]` — チャンネルの設定を変更', inline: false },
+                        { name: '🔨 モデレート', value: '`/kick [user]` — ユーザーをキック\n`/ban [user]` — ユーザーをBAN\n`/unban [id]` — ユーザーのBANを解除\n`/mute [user] [duration]` — ユーザーをタイムアウト\n`/unmute [user]` — タイムアウトを解除\n`/serverlock` — サーバー全体をロック/解除', inline: false },
+                    ]
+                },
+                {
+                    title: '(3/6) 📢 告知 / 🔐 認証 / 🌐 グローバル / 🏷️ 役職',
+                    fields: [
+                        { name: '📢 告知', value: '`/embed` — カスタムEmbed（告知）を作成・送信', inline: false },
+                        { name: '🔐 認証', value: '`/authset` — OAuth2認証パネルを設置', inline: false },
+                        { name: '🌐 グローバル', value: '`/gchat` — グローバルチャット連携チャンネルを設定', inline: false },
+                        { name: '🏷️ 役職', value: '`/rp create` — 役職パネルを作成\n`/rp delete` — 役職パネルを削除', inline: false },
+                    ]
+                },
+                {
+                    title: '(4/6) 🎁 ギブアウェイ / 🎫 チケット',
+                    fields: [
+                        { name: '🎁 ギブアウェイ', value: '`/giveaway` — ギブアウェイを開始（期間・賞品・当選者数を設定）\nユーザーがボタンで参加し、終了時に自動抽選', inline: false },
+                        { name: '🎫 チケット', value: '`/ticket` — サポートチケットパネルを設置\nユーザーがボタンを押すと専用チャンネルが作成されます', inline: false },
+                    ]
+                },
+                {
+                    title: '(5/6) 🪙 エコノミー',
+                    fields: [
+                        { name: '💰 残高・送金', value: '`/balance [user]` — 所持金・借入・実質残高を確認\n`/pay [user] [amount]` — 他ユーザーに送金（all/half対応）\n`/bank` — ローン借入・返済（3時間毎5%利子）\n`/econrank` — 所持金ランキング', inline: false },
+                        { name: '💸 稼ぐ (サブコマンド)', value: '`/earn daily` — デイリーボーナス（深夜0時リセット）\n`/earn work` — 労働でコインを稼ぐ（CD: 1時間）\n`/earn crime` — 犯罪（CD: 2時間・失敗で罰金）\n`/earn hunt` — 狩猟でアイテムドロップ（CD: 30分）\n`/earn fish` — 釣りで魚をドロップ（CD: 45分）\n`/earn rob [target]` — 他ユーザーから強盗（ID/メンション）\n`/earn flip [amount] [side]` — コインフリップ（omote/ura）\n`/earn slots [amount]` — スロット（最大10倍）\n`/earn bj [amount] [leverage]` — ブラックジャック（レバレッジ2〜10倍）', inline: false },
+                        { name: '🛒 ショップ', value: '`/shop` — 公式ショップ＋会社ストア一覧\n`/buy [item]` — アイテム購入（未指定でセレクト）\n`/sell shop [item]` — ショップに規定価格で売却\n`/sell player [item] [price] [buyer]` — プレイヤーに自由価格で売却\n`/dust [item]` — アイテムを捨てる\n`/inventory [user]` — インベントリ確認', inline: false },
+                        { name: '🏢 会社', value: '`/corp create [name] [desc]` — 会社設立（費用10,000🪙・最大2社）\n`/corp setting [corp]` — 管理画面（商品追加・削除・株式発行等）\n`/corp deposit [corp] [amount]` — 会社に入金（all/half対応）', inline: false },
+                        { name: '📈 株式', value: '`/stock [corp]` — 株式チャート表示・売買\n`/buystock [amount] [corp]` — 株を購入（all対応・手数料2%）\n`/sellstock [amount] [corp]` — 株を売却（手数料2%）\n※1分ごとに市場が自動調整されます', inline: false },
+                        { name: '💹 仮想通貨', value: '`/crypto create [name] [symbol]` — 仮想通貨を発行（1人1枚・初期価格0.005🪙）\n`/crypto list` — 通貨一覧を表示\n`/crypto view [symbol]` — チャート・売買ボタン\n`/crypto buy [amount] [symbol]` — 購入（all対応・手数料2%）\n`/crypto sell [amount] [symbol]` — 売却（手数料2%）', inline: false },
+                    ]
+                },
+                {
+                    title: '(6/6) ❓ その他',
+                    fields: [
+                        { name: '❓ その他', value: '`/help` — このコマンド一覧を表示（◀▶でページ切り替え）\n`/support` — サポートサーバーのリンクを表示', inline: false },
+                        { name: '💡 Tips', value: '`/set` からサーバーの各種設定が可能です\n金額指定は `数字` / `all` / `half` で入力できます\n株式・仮想通貨の売買はそれぞれ手数料2%がかかります', inline: false },
+                    ]
+                },
             ];
-            const wt = hunts.map(h => h.rare ? 1 : 3), wsum = wt.reduce((a,b)=>a+b,0);
-            let wr = Math.random()*wsum, hunt=hunts[0];
-            for(let i=0;i<hunts.length;i++){wr-=wt[i];if(wr<=0){hunt=hunts[i];break;}}
-            if(!u.inventory) u.inventory=[];
-            u.inventory.push({name:hunt.item,boughtAt:now,sellPrice:hunt.sell});
-            save(ECON_FILE,econ);
-            const embed = new EmbedBuilder().setTitle(`🏹 ${hunt.name}を仕留めた！`)
-                .setDescription(`<@${user.id}> **${hunt.item}** を入手！\n売却価格: **${hunt.sell.toLocaleString()}** ${CURRENCY}`)
-                .setColor(hunt.rare ? 0xf1c40f : 0x57f287).setTimestamp();
-            const r = await interaction.reply({ embeds: [embed], fetchReply: true });
-            setTimeout(() => r.delete().catch(()=>{}), 8000);
-            return;
+
+            const buildHelpEmbed = (page) => {
+                const p = helpPages[page];
+                return new EmbedBuilder()
+                    .setTitle(`📖 ${p.title}`)
+                    .setColor(0x3498db)
+                    .addFields(p.fields)
+                    .setFooter({ text: `◀ ▶ でページ切り替え | /set でサーバー設定` });
+            };
+
+            const buildHelpRow = (page) => new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId(`help_prev_${page}`).setLabel('◀ 前へ').setStyle(ButtonStyle.Secondary).setDisabled(page === 0),
+                new ButtonBuilder().setCustomId(`help_next_${page}`).setLabel('次へ ▶').setStyle(ButtonStyle.Secondary).setDisabled(page === helpPages.length - 1)
+            );
+
+            const msg = await interaction.reply({ embeds: [buildHelpEmbed(0)], components: [buildHelpRow(0)], ...EPH, fetchReply: true });
+
+            const collector = msg.createMessageComponentCollector({ time: 120000 });
+            collector.on('collect', async btn => {
+                const [, dir, pageStr] = btn.customId.split('_');
+                let page = parseInt(pageStr);
+                if (dir === 'next') page++;
+                else page--;
+                page = Math.max(0, Math.min(helpPages.length - 1, page));
+                await btn.update({ embeds: [buildHelpEmbed(page)], components: [buildHelpRow(page)] });
+            });
+            collector.on('end', () => {
+                interaction.editReply({ components: [] }).catch(() => {});
+            });
         }
 
-        if (sub === 'fish') {
-            const remaining = 2700000 - (now - (u.fishLast || 0));
-            if (remaining > 0) return interaction.reply({ content: `⏳ まだ釣りに行けません。${cdStr(remaining)}`, ...EPH });
-            u.fishLast = now;
-            const fishes = [
-                { name: 'コイ',     item: '🐟 コイ',       sell: 60,   rare: false, legendary: false },
-                { name: 'サーモン', item: '🐠 サーモン',    sell: 150,  rare: false, legendary: false },
-                { name: 'マグロ',   item: '🐡 マグロ',      sell: 400,  rare: true,  legendary: false },
-                { name: 'フグ',     item: '🐡 フグ',        sell: 300,  rare: true,  legendary: false },
-                { name: 'タコ',     item: '🐙 タコ',        sell: 200,  rare: false, legendary: false },
-                { name: 'ゴミ',     item: '🗑️ ゴミ',       sell: 5,    rare: false, legendary: false },
-                { name: '伝説の魚', item: '✨ 伝説の魚',    sell: 2000, rare: true,  legendary: true  },
-            ];
-            const wt = fishes.map(f => f.legendary ? 0.2 : f.rare ? 1 : 4), wsum = wt.reduce((a,b)=>a+b,0);
-            let wr = Math.random()*wsum, fish=fishes[0];
-            for(let i=0;i<fishes.length;i++){wr-=wt[i];if(wr<=0){fish=fishes[i];break;}}
-            if(!u.inventory) u.inventory=[];
-            u.inventory.push({name:fish.item,boughtAt:now,sellPrice:fish.sell});
-            save(ECON_FILE,econ);
+        if (commandName === 'support') await interaction.reply({ content: 'サポートサーバーはこちら: https://discord.gg/ntdWV5EWT3', ...EPH });
+        if (commandName === 'set') await interaction.reply(buildSetPanel(servers[guildId]));
+
+        if (commandName === 'rank') {
+            const target = options.getUser('user') || interaction.user;
+            const raw = users[target.id] || {};
+            const xp = typeof raw.xp === 'number' ? raw.xp : 0;
+            const lv = typeof raw.lv === 'number' ? raw.lv : 0;
+            const next = getNextLevelXP(lv);
+            const sorted = getAllRanking(users);
+            const rank = sorted.findIndex(e => e[0] === target.id) + 1;
+            const filled = Math.round((xp / next) * 10);
+            const progressBar = '█'.repeat(filled) + '░'.repeat(10 - filled);
             const embed = new EmbedBuilder()
-                .setTitle(fish.legendary ? '🌟 伝説の魚を釣り上げた！！' : `🎣 ${fish.name} を釣った！`)
-                .setDescription(`<@${user.id}> **${fish.item}** を入手！\n売却価格: **${fish.sell.toLocaleString()}** ${CURRENCY}`)
-                .setColor(fish.legendary ? 0xf1c40f : fish.rare ? 0x3498db : 0x95a5a6).setTimestamp();
-            const r = await interaction.reply({ embeds: [embed], fetchReply: true });
-            setTimeout(() => r.delete().catch(()=>{}), fish.legendary ? 30000 : 8000);
-            return;
-        }
-
-        if (sub === 'rob') {
-            const input = options.getString('target').replace(/[<@!>]/g, '');
-            const member = guild ? await guild.members.fetch(input).catch(() => null) : null;
-            let targetId = input, targetName = null;
-            if (member) { targetId = member.user.id; targetName = member.user.username; }
-            else {
-                const found = Object.entries(econ).find(([id,eu])=>id===input||eu.username?.toLowerCase()===input.toLowerCase());
-                if (found) { targetId=found[0]; targetName=found[1].username||`ID:${found[0]}`; }
-                else return interaction.reply({ content: '❌ ユーザーが見つかりません。', ...EPH });
-            }
-            if (targetId === user.id) return interaction.reply({ content: '❌ 自分は強盗できません。', ...EPH });
-            const victim = getUser(econ, targetId, null);
-            if (victim.balance < 100) return interaction.reply({ content: `❌ **${targetName}** の残高が少なすぎます。`, ...EPH });
-            const success = Math.random() < 0.4;
-            let embed;
-            if (success) {
-                const stolen = Math.floor(victim.balance * (0.1 + Math.random() * 0.2));
-                u.balance += stolen; victim.balance -= stolen;
-                embed = new EmbedBuilder().setTitle('🔫 強盗成功！').setDescription(`**${targetName}** から **${stolen.toLocaleString()}** 🪙 を奪った！\n残高: **${u.balance.toLocaleString()}** 🪙`).setColor(0x57f287);
-            } else {
-                const fine = Math.floor(u.balance * 0.1 + 200);
-                u.balance = Math.max(0, u.balance - fine);
-                embed = new EmbedBuilder().setTitle('🚔 強盗失敗！').setDescription(`捕まった！罰金 **${fine.toLocaleString()}** 🪙\n残高: **${u.balance.toLocaleString()}** 🪙`).setColor(0xff4757);
-            }
-            save(ECON_FILE, econ);
-            return interaction.reply({ embeds: [embed], components: [delBtn()], ...EPH });
-        }
-
-        if (sub === 'flip') {
-            const amtInput = options.getString('amount').trim().toLowerCase();
-            const sideInput = options.getString('side').trim().toLowerCase();
-            let amount;
-            if (amtInput === 'all') amount = u.balance;
-            else if (amtInput === 'half') amount = Math.floor(u.balance / 2);
-            else amount = parseInt(amtInput) || 0;
-            const side = (sideInput === 'omote' || sideInput === '表') ? 'heads' : 'tails';
-            if (amount <= 0) return interaction.reply({ content: '❌ 有効な金額を入力してください。', ...EPH });
-            if (u.balance < amount) return interaction.reply({ content: `❌ 残高不足。現在: **${u.balance.toLocaleString()}** 🪙`, ...EPH });
-            const result = Math.random() < 0.5 ? 'heads' : 'tails';
-            const win = result === side;
-            if (win) u.balance += amount; else u.balance -= amount;
-            save(ECON_FILE, econ);
-            const embed = new EmbedBuilder().setTitle(win ? '🎉 勝利！' : '😢 敗北...').setColor(win ? 0x57f287 : 0xff4757)
+                .setTitle(`📊 ${target.username} のステータス`)
+                .setThumbnail(target.displayAvatarURL())
                 .addFields(
-                    { name: '選択', value: side === 'heads' ? '表 🪙' : '裏 🔄', inline: true },
-                    { name: '結果', value: result === 'heads' ? '表 🪙' : '裏 🔄', inline: true },
-                    { name: win ? `+${amount.toLocaleString()} 獲得` : `-${amount.toLocaleString()} 没収`, value: `残高: **${u.balance.toLocaleString()}** 🪙`, inline: false }
-                );
-            return interaction.reply({ embeds: [embed], components: [delBtn()], ...EPH });
+                    { name: 'レベル', value: `Lv.${lv}`, inline: true },
+                    { name: 'ランキング', value: rank > 0 ? `${rank}位` : '--', inline: true },
+                    { name: '\u200b', value: '\u200b', inline: true },
+                    { name: `XP (${xp} / ${next})`, value: `\`${progressBar}\``, inline: false }
+                ).setColor(0x2ecc71);
+            await interaction.reply({ embeds: [embed], components: [delBtn()] });
         }
 
-        if (sub === 'slots') {
-            const amtInput = options.getString('amount').trim().toLowerCase();
-            let amount;
-            if (amtInput === 'all') amount = u.balance;
-            else if (amtInput === 'half') amount = Math.floor(u.balance / 2);
-            else amount = parseInt(amtInput) || 0;
-            if (amount <= 0) return interaction.reply({ content: '❌ 有効な金額を入力してください。', ...EPH });
-            if (u.balance < amount) return interaction.reply({ content: `❌ 残高不足。現在: **${u.balance.toLocaleString()}** 🪙`, ...EPH });
-            const symbols = ['🍒', '🍋', '🍊', '🍇', '⭐', '💎'];
-            const roll = () => symbols[Math.floor(Math.random() * symbols.length)];
-            const s = [roll(), roll(), roll()];
-            let multiplier = 0;
-            if (s[0]===s[1]&&s[1]===s[2]) multiplier = s[0]==='💎'?10:s[0]==='⭐'?5:3;
-            else if (s[0]===s[1]||s[1]===s[2]||s[0]===s[2]) multiplier = 1.5;
-            const win = multiplier > 0;
-            const payout = win ? Math.floor(amount * multiplier) : 0;
-            u.balance += payout - amount;
-            save(ECON_FILE, econ);
-            const embed = new EmbedBuilder().setTitle('🎰 スロット')
-                .setDescription(`**[ ${s.join(' | ')} ]**\n\n${win?`🎉 **${multiplier}x** 当たり！ **+${payout.toLocaleString()}** 🪙`:`💸 ハズレ... **-${amount.toLocaleString()}** 🪙`}`)
-                .setColor(win ? 0xf1c40f : 0x95a5a6)
-                .addFields({ name: '残高', value: `**${u.balance.toLocaleString()}** 🪙`, inline: true });
-            return interaction.reply({ embeds: [embed], components: [delBtn()], ...EPH });
-        }
-
-        if (sub === 'bj') {
-            const amtInput = options.getString('amount').trim().toLowerCase();
-            const leverageRaw = options.getInteger('leverage') || 2;
-            const leverage = Math.min(10, Math.max(2, leverageRaw));
-            let bet;
-            if (amtInput === 'all') bet = u.balance;
-            else if (amtInput === 'half') bet = Math.floor(u.balance / 2);
-            else bet = parseInt(amtInput) || 0;
-            if (bet <= 0) return interaction.reply({ content: '❌ 有効な金額を入力してください。', ...EPH });
-            if (u.balance < bet) return interaction.reply({ content: `❌ 残高不足。現在: **${u.balance.toLocaleString()}** 🪙`, ...EPH });
-            const deck = buildDeck();
-            const playerCards = [drawCard(deck), drawCard(deck)];
-            const dealerCards = [drawCard(deck), drawCard(deck)];
-            const gameKey = `${user.id}_${Date.now()}`;
-            const gameObj = { userId: user.id, bet, leverage, deck, playerCards, dealerCards };
-            if (calcBJ(playerCards) === 21) {
-                u.balance += Math.floor(bet * leverage * 1.5);
-                save(ECON_FILE, econ);
-                return interaction.reply({ embeds: [buildBJEmbed(gameObj, 'bj', u.balance, user)], components: [delBtn()], ...EPH });
-            }
-            bjGames.set(gameKey, gameObj);
-            return interaction.reply({ embeds: [buildBJEmbed(gameObj, 'playing', null, user)], components: buildBJRows(gameKey), ...EPH });
-        }
-        return;
-    }
-
-    if (commandName === 'pay') {
-        const target = options.getUser('user');
-        if (target.id === user.id) return interaction.reply({ content: '❌ 自分自身には送金できません。', ...EPH });
-        if (target.bot) return interaction.reply({ content: '❌ Botには送金できません。', ...EPH });
-        const sender = getUser(econ, user.id, user);
-        const receiver = getUser(econ, target.id, target);
-        const amtInput = options.getString('amount').trim().toLowerCase();
-        let amount;
-        if (amtInput === 'all') amount = sender.balance;
-        else if (amtInput === 'half') amount = Math.floor(sender.balance / 2);
-        else amount = parseInt(amtInput) || 0;
-        if (amount <= 0) return interaction.reply({ content: '❌ 有効な金額を入力してください。', ...EPH });
-        if (sender.balance < amount) return interaction.reply({ content: `❌ 残高不足。現在: **${sender.balance.toLocaleString()}** ${CURRENCY}`, ...EPH });
-        sender.balance -= amount;
-        receiver.balance += amount;
-        save(ECON_FILE, econ);
-        const embed = new EmbedBuilder().setTitle('💸 送金完了').setColor(0x2ecc71)
-            .addFields(
-                { name: '送金元', value: user.username, inline: true },
-                { name: '送金先', value: target.username, inline: true },
-                { name: '金額', value: `**${amount.toLocaleString()}** ${CURRENCY}`, inline: false },
-                { name: '残高', value: `${sender.balance.toLocaleString()} ${CURRENCY}`, inline: true }
-            ).setTimestamp();
-        return interaction.reply({ embeds: [embed], components: [delBtn()] });
-    }
-
-    if (commandName === 'dust') {
-        const u = getUser(econ, user.id, user);
-        if (!u.inventory || u.inventory.length === 0) return interaction.reply({ content: '❌ インベントリが空です。', ...EPH });
-        const itemName = options.getString('item');
-        const dustCount = options.getInteger('amount') || 1;
-        if (!itemName) {
-            const counts = {};
-            for (const item of u.inventory) counts[item.name] = (counts[item.name] || 0) + 1;
-            const select = new StringSelectMenuBuilder()
-                .setCustomId(`dust_select_${dustCount}`)
-                .setPlaceholder('捨てるアイテムを選択')
-                .addOptions(Object.entries(counts).slice(0, 25).map(([name, count]) => ({
-                    label: name, description: `所持: ${count}個`, value: name
-                })));
-            return interaction.reply({ content: `🗑️ 捨てるアイテムを選択してください（${dustCount}個捨てます）:`, components: [new ActionRowBuilder().addComponents(select)], ...EPH });
-        }
-        return doDustItem(interaction, itemName, dustCount, econ, u);
-    }
-
-    if (commandName === 'shop') {
-        const shop = load(SHOP_FILE);
-        const corpData = load(CORP_FILE);
-        const shopItems = Object.values(shop);
-        const corps = Object.values(corpData).filter(c => c.items && c.items.length > 0);
-
-        if (shopItems.length === 0 && corps.length === 0) {
-            return interaction.reply({ content: '🛒 現在ショップにアイテムがありません。', ...EPH });
-        }
-
-        const embed = new EmbedBuilder().setTitle('🛒 ショップ').setColor(0xe67e22);
-
-        if (shopItems.length > 0) {
-            embed.addFields({
-                name: '📦 公式ショップ',
-                value: shopItems.map((item, i) =>
-                    `**${i + 1}. ${item.name}**${item.roleId ? ' 🏷️' : ''}\n💰 **${item.price.toLocaleString()}** 🪙　↩️ 売却: **${Math.floor(item.price * 0.5).toLocaleString()}** 🪙\n${item.description}`
-                ).join('\n\n'),
-                inline: false
-            });
-        }
-
-        for (const corp of corps) {
-            embed.addFields({
-                name: `🏪 ${corp.name}（オーナー: ${corp.ownerName}）`,
-                value: corp.items.map((item, i) =>
-                    `**${i + 1}. ${item.name}**\n💰 **${item.price.toLocaleString()}** 🪙　${item.description}`
-                ).join('\n\n'),
-                inline: false
-            });
-        }
-
-        embed.setDescription('`/buy` で購入　`/sell shop` でショップ売却　`/sell player` でプレイヤー販売')
-            .setFooter({ text: `公式${shopItems.length}件 + 会社ストア${corps.reduce((a,c)=>a+c.items.length,0)}件` });
-
-        return interaction.reply({ embeds: [embed], components: [delBtn()] });
-    }
-
-    if (commandName === 'buy') {
-        const shop = load(SHOP_FILE);
-        const items = Object.values(shop);
-        if (items.length === 0) return interaction.reply({ content: '🛒 現在ショップにアイテムがありません。', ...EPH });
-        const itemName = options.getString('item');
-        if (!itemName) {
-            // セレクトメニュー
-            const select = new StringSelectMenuBuilder()
-                .setCustomId('buy_select')
-                .setPlaceholder('購入するアイテムを選択')
-                .addOptions(items.slice(0, 25).map(item => ({
-                    label: item.name,
-                    description: `${item.price.toLocaleString()} 🪙${item.roleId ? ' | ロール付与' : ''}`,
-                    value: item.name
-                })));
-            return interaction.reply({ content: '🛒 購入するアイテムを選択してください:', components: [new ActionRowBuilder().addComponents(select)], ...EPH });
-        }
-        return doBuyItem(interaction, itemName, econ, user, guild, shop);
-    }
-
-    if (commandName === 'sell') {
-        const sub = options.getSubcommand();
-        const u = getUser(econ, user.id, user);
-        if (!u.inventory || u.inventory.length === 0) return interaction.reply({ content: '❌ インベントリが空です。', ...EPH });
-
-        if (sub === 'shop') {
-            const itemName = options.getString('item');
-            const sellCount = options.getInteger('amount') || 1;
-            if (!itemName) {
-                const counts = {};
-                for (const item of u.inventory) counts[item.name] = (counts[item.name] || 0) + 1;
-                const select = new StringSelectMenuBuilder()
-                    .setCustomId(`sell_select_${sellCount}`)
-                    .setPlaceholder('売却するアイテムを選択')
-                    .addOptions(Object.entries(counts).slice(0, 25).map(([name, count]) => {
-                        const sellPrice = u.inventory.find(i => i.name === name)?.sellPrice || 0;
-                        return { label: name, description: `所持: ${count}個 | 売却: ${sellPrice.toLocaleString()} 🪙/個`, value: name };
-                    }));
-                return interaction.reply({ content: `🎒 売却するアイテムを選択してください（${sellCount}個）:`, components: [new ActionRowBuilder().addComponents(select)], ...EPH });
-            }
-            return doSellItem(interaction, itemName, sellCount, econ, u);
-        }
-
-        if (sub === 'player') {
-            const itemName = options.getString('item');
-            const priceInput = options.getString('price').trim().toLowerCase();
-            const buyer = options.getUser('buyer');
-            const item = u.inventory.find(i => i.name.toLowerCase() === itemName.toLowerCase());
-            if (!item) return interaction.reply({ content: `❌ **${itemName}** をインベントリに持っていません。`, ...EPH });
-
-            let price;
-            if (priceInput === 'all') price = u.balance;
-            else if (priceInput === 'half') price = Math.floor(u.balance / 2);
-            else price = parseInt(priceInput) || 0;
-            if (price <= 0) return interaction.reply({ content: '❌ 有効な価格を入力してください。', ...EPH });
-
-            if (buyer) {
-                // 直接売却
-                const buyerData = getUser(econ, buyer.id, buyer);
-                if (buyerData.balance < price) return interaction.reply({ content: `❌ **${buyer.username}** の残高が不足しています。（必要: **${price.toLocaleString()}** 🪙）`, ...EPH });
-                const idx = u.inventory.findIndex(i => i.name.toLowerCase() === itemName.toLowerCase());
-                u.inventory.splice(idx, 1);
-                buyerData.balance -= price;
-                u.balance += price;
-                save(ECON_FILE, econ);
-                if (!buyerData.inventory) buyerData.inventory = [];
-                buyerData.inventory.push({ ...item, boughtAt: Date.now() });
-                save(ECON_FILE, econ);
-                const embed = new EmbedBuilder().setTitle('🤝 プレイヤー間取引完了').setColor(0x2ecc71)
-                    .addFields(
-                        { name: '売り手', value: user.username, inline: true },
-                        { name: '買い手', value: buyer.username, inline: true },
-                        { name: 'アイテム', value: itemName, inline: true },
-                        { name: '価格', value: `**${price.toLocaleString()}** 🪙`, inline: true }
-                    );
-                return interaction.reply({ embeds: [embed], components: [delBtn()] });
-            } else {
-                // 出品（確認メッセージ）
-                const embed = new EmbedBuilder().setTitle('📋 出品確認').setColor(0xe67e22)
-                    .setDescription(`**${itemName}** を **${price.toLocaleString()}** 🪙 で出品します。\n相手が `/pay` で支払い、あなたがアイテムを渡す形になります。\n（自動取引はプレイヤー指定時のみ）`)
-                    .setFooter({ text: '相手を指定すると自動取引できます: /sell player buyer:[ユーザー]' });
-                return interaction.reply({ embeds: [embed], components: [delBtn()], ...EPH });
-            }
-        }
-    }
-
-    if (commandName === 'inventory') {
-        const target = options.getUser('user') || user;
-        const u = getUser(econ, target.id, target);
-        const inv = u.inventory || [];
-        const embed = new EmbedBuilder().setTitle(`🎒 ${target.username} のインベントリ`).setThumbnail(target.displayAvatarURL()).setColor(0x9b59b6);
-        if (inv.length === 0) embed.setDescription('アイテムを所持していません。');
-        else {
-            const counts = {};
-            for (const item of inv) counts[item.name] = (counts[item.name] || 0) + 1;
-            embed.setDescription(Object.entries(counts).map(([name, count]) => `• **${name}** × ${count}`).join('\n'));
-        }
-        return interaction.reply({ embeds: [embed], components: [delBtn()] });
-    }
-
-    if (commandName === 'econrank') {
-        const sorted = Object.entries(econ).map(([id, u]) => ({ id, balance: u.balance || 0 })).sort((a, b) => b.balance - a.balance).slice(0, 10);
-        if (sorted.length === 0) return interaction.reply({ content: 'まだデータがありません。', ...EPH });
-        await interaction.deferReply();
-        const medals = ['🥇', '🥈', '🥉'];
-        const lines = await Promise.all(sorted.map(async (u, i) => {
-            let name = econ[u.id]?.username;
-            if (!name) {
-                const member = await guild?.members.fetch(u.id).catch(() => null);
-                if (member) { name = member.user.username; econ[u.id].username = name; } else name = `ID:${u.id}`;
-            }
-            return `${medals[i] || `**${i + 1}.**`} ${name} — **${u.balance.toLocaleString()}** ${CURRENCY}`;
-        }));
-        save(ECON_FILE, econ);
-        const embed = new EmbedBuilder().setTitle(`${CURRENCY} 所持金ランキング`).setColor(0xf1c40f).setDescription(lines.join('\n')).setTimestamp();
-        return interaction.editReply({ embeds: [embed], components: [delBtn()] });
-    }
-
-    if (commandName === 'corp') {
-        const sub = options.getSubcommand();
-        const corpData = load(CORP_FILE);
-
-        if (sub === 'create') {
-            const corpName = options.getString('name').trim();
-            const corpDesc = options.getString('description').trim();
-            const u = getUser(econ, user.id, user);
-            const owned = Object.values(corpData).filter(c => c.ownerId === user.id);
-            if (owned.length >= 2) return interaction.reply({ content: '❌ 1人につき最大2社まで設立できます。', ...EPH });
-            if (Object.values(corpData).some(c => c.name.toLowerCase() === corpName.toLowerCase())) return interaction.reply({ content: `❌ **${corpName}** という会社はすでに存在します。`, ...EPH });
-            if (u.balance < CORP_COST) return interaction.reply({ content: `❌ 設立費用不足。必要: **${CORP_COST.toLocaleString()}** ${CURRENCY}　現在: **${u.balance.toLocaleString()}** ${CURRENCY}`, ...EPH });
-            u.balance -= CORP_COST;
-            const corpId = `corp_${Date.now()}_${user.id}`;
-            corpData[corpId] = { id: corpId, name: corpName, description: corpDesc, ownerId: user.id, ownerName: user.username, createdAt: Date.now(), balance: 0, items: [], employees: [] };
-            save(ECON_FILE, econ);
-            save(CORP_FILE, corpData);
-            const embed = new EmbedBuilder().setTitle('🏢 会社設立完了').setColor(0x3498db)
-                .addFields(
-                    { name: '会社名', value: corpName, inline: true },
-                    { name: 'オーナー', value: user.username, inline: true },
-                    { name: '設立費用', value: `${CORP_COST.toLocaleString()} ${CURRENCY}`, inline: true },
-                    { name: '説明', value: corpDesc, inline: false }
-                ).setTimestamp();
-            return interaction.reply({ embeds: [embed], components: [delBtn()], ...EPH });
-        }
-
-        if (sub === 'setting') {
-            const corpName = options.getString('corp');
-            if (corpName) {
-                const c = Object.values(corpData).find(c => c.name.toLowerCase() === corpName.toLowerCase());
-                if (!c) return interaction.reply({ content: `❌ **${corpName}** という会社は存在しません。`, ...EPH });
-                if (c.ownerId !== user.id) return showStore(interaction, c, user);
-                return showStoreManage(interaction, c, corpData, user);
-            }
-            const owned = Object.values(corpData).filter(c => c.ownerId === user.id);
-            const all = Object.values(corpData);
-            if (all.length === 0) return interaction.reply({ content: '現在登録されている会社はありません。`/corp create` で設立できます。', ...EPH });
-            if (owned.length === 0) {
-                if (all.length === 1) return showStore(interaction, all[0], user);
-                const select = new StringSelectMenuBuilder().setCustomId('store_select_view').setPlaceholder('見たい会社を選択')
-                    .addOptions(all.map(c => ({ label: c.name, description: `${c.ownerName} | 商品数: ${c.items.length}件`, value: c.id })));
-                return interaction.reply({ content: '🏪 **ストア** — 会社を選択してください', components: [new ActionRowBuilder().addComponents(select)], ...EPH });
-            }
-            if (owned.length === 1 && all.length === 1) return showStoreManage(interaction, owned[0], corpData, user);
-            const selectOptions = owned.map(c => ({ label: `⚙️ ${c.name} (管理)`, description: '管理画面を開く', value: `manage_${c.id}` }));
-            const viewOptions = all.filter(c => c.ownerId !== user.id).map(c => ({ label: `🏪 ${c.name} (閲覧)`, description: `${c.ownerName} | 商品数: ${c.items.length}件`, value: `view_${c.id}` }));
-            const select = new StringSelectMenuBuilder().setCustomId('store_select_mixed').setPlaceholder('会社を選択')
-                .addOptions([...selectOptions, ...viewOptions].slice(0, 25));
-            return interaction.reply({ content: '🏢 **ストア** — 会社を選択してください', components: [new ActionRowBuilder().addComponents(select)], ...EPH });
-        }
-
-        if (sub === 'deposit') {
-            const corpName = options.getString('corp');
-            const amtInput = (options.getString('amount') || '0').trim().toLowerCase();
-            const u = getUser(econ, user.id, user);
-            let c;
-            if (corpName) {
-                c = Object.values(corpData).find(c => c.name.toLowerCase() === corpName.toLowerCase());
-                if (!c) return interaction.reply({ content: `❌ **${corpName}** という会社は存在しません。`, ...EPH });
-            } else {
-                const owned = Object.values(corpData).filter(co => co.ownerId === user.id);
-                if (owned.length === 0) return interaction.reply({ content: '❌ 会社を所有していません。', ...EPH });
-                if (owned.length === 1) { c = owned[0]; }
-                else {
-                    const select = new StringSelectMenuBuilder().setCustomId(`corp_deposit_select_${amtInput}`).setPlaceholder('入金する会社を選択')
-                        .addOptions(owned.map(co => ({ label: co.name, description: `会社残高: ${(co.balance || 0).toLocaleString()} 🪙`, value: co.id })));
-                    return interaction.reply({ content: '入金する会社を選択してください:', components: [new ActionRowBuilder().addComponents(select)], ...EPH });
+        if (commandName === 'ranking') {
+            const sorted = getAllRanking(users);
+            if (sorted.length === 0) return interaction.reply({ content: 'まだランキングデータがありません。', ...EPH });
+            await interaction.deferReply();
+            // usernameがない場合はguildからfetch
+            for (const [id, data] of sorted) {
+                if (!data.username) {
+                    const member = await interaction.guild.members.fetch(id).catch(() => null);
+                    if (member) {
+                        data.username = member.user.username;
+                        users[id] = users[id] || {};
+                        users[id].username = member.user.username;
+                    }
                 }
             }
-            let amount;
-            if (amtInput === 'all') amount = u.balance;
-            else if (amtInput === 'half') amount = Math.floor(u.balance / 2);
-            else amount = parseInt(amtInput) || 0;
-            if (amount <= 0) return interaction.reply({ content: '❌ 有効な金額を入力してください。', ...EPH });
-            if (u.balance < amount) return interaction.reply({ content: `❌ 残高不足。現在: **${u.balance.toLocaleString()}** ${CURRENCY}`, ...EPH });
-            u.balance -= amount;
-            c.balance = (c.balance || 0) + amount;
-            save(ECON_FILE, econ);
-            save(CORP_FILE, corpData);
-            return interaction.reply({ content: `✅ **${c.name}** に **${amount.toLocaleString()}** ${CURRENCY} を入金しました。\n会社残高: **${c.balance.toLocaleString()}** ${CURRENCY}`, ...EPH });
+            saveData(USERS_FILE, users);
+            const { embed, safePage, totalPages } = buildRankingEmbed(sorted, 1);
+            await interaction.editReply({ embeds: [embed], components: totalPages > 1 ? [buildRankingRow(safePage, totalPages), delBtn()] : [delBtn()] });
         }
-    }
 
-    // ==================== /bank ====================
-    if (commandName === 'bank') {
-        const u = getUser(econ, user.id, user);
-        return interaction.reply(buildBankPanel(u));
-    }
+        if (commandName === 'serverinfo') {
+            const g = interaction.guild;
+            const verificationLevels = ['なし', '低', '中', '高', '最高'];
+            const embed = new EmbedBuilder().setTitle(`🏰 ${g.name} サーバー詳細`).setThumbnail(g.iconURL()).addFields(
+                { name: 'サーバーID', value: `\`${g.id}\``, inline: true },
+                { name: 'オーナー', value: `<@${g.ownerId}>`, inline: true },
+                { name: 'メンバー数', value: `${g.memberCount}人`, inline: true },
+                { name: '作成日', value: `<t:${Math.floor(g.createdTimestamp / 1000)}:F>`, inline: true },
+                { name: 'ブーストレベル', value: `Lv.${g.premiumTier} (${g.premiumSubscriptionCount || 0}本)`, inline: true },
+                { name: '認証レベル', value: verificationLevels[g.verificationLevel] || '不明', inline: true },
+                { name: 'チャンネル数', value: `テキスト: ${g.channels.cache.filter(c => c.type === ChannelType.GuildText).size} / VC: ${g.channels.cache.filter(c => c.type === ChannelType.GuildVoice).size}`, inline: true },
+                { name: 'ロール数', value: `${g.roles.cache.size}`, inline: true },
+                { name: '絵文字数', value: `${g.emojis.cache.size}`, inline: true }
+            ).setColor(0x3498db);
+            await interaction.reply({ embeds: [embed], components: [delBtn()] });
+        }
 
-    // ==================== /stock ====================
-    // ==================== /crypto ====================
-    if (commandName === 'crypto') {
-        const sub = options.getSubcommand();
-        const CRYPTO_FILE = path.join(__dirname, 'data', 'crypto.json');
-        const cryptoData = load(CRYPTO_FILE);
-
-        if (sub === 'create') {
-            const name = options.getString('name').trim();
-            const symbol = options.getString('symbol').trim().toUpperCase();
-            const owned = Object.values(cryptoData).filter(c => c.ownerId === user.id);
-            if (owned.length >= 1) return interaction.reply({ content: '❌ 仮想通貨は1人1枚までです。', ...EPH });
-            if (Object.values(cryptoData).some(c => c.symbol === symbol)) return interaction.reply({ content: `❌ シンボル **${symbol}** はすでに使用されています。`, ...EPH });
-            const coinId = `coin_${Date.now()}_${user.id}`;
-            const TOTAL_SUPPLY = 1000000;
-            cryptoData[coinId] = {
-                id: coinId, name, symbol,
-                ownerId: user.id, ownerName: user.username,
-                createdAt: Date.now(),
-                price: 0.005,
-                totalSupply: TOTAL_SUPPLY,
-                availableSupply: TOTAL_SUPPLY,
-                history: [0.005],
-                marketCap: round3(0.005 * TOTAL_SUPPLY),
-            };
-            save(CRYPTO_FILE, cryptoData);
-            const embed = new EmbedBuilder().setTitle('🪙 仮想通貨発行完了').setColor(0xf1c40f)
+        if (commandName === 'userinfo') {
+            const user = options.getUser('user') || interaction.user;
+            const member = await interaction.guild.members.fetch(user.id).catch(() => null);
+            const createdTs = Math.floor(user.createdTimestamp / 1000);
+            const joinedTs = member ? Math.floor(member.joinedTimestamp / 1000) : null;
+            const ageMs = Date.now() - user.createdTimestamp;
+            const ageDays = Math.floor(ageMs / 86400000);
+            const ageYears = Math.floor(ageDays / 365);
+            const ageMonths = Math.floor((ageDays % 365) / 30);
+            const ageStr = ageYears > 0 ? `${ageYears}年${ageMonths}ヶ月` : `${Math.floor(ageDays / 30)}ヶ月${ageDays % 30}日`;
+            const roles = member ? member.roles.cache.filter(r => r.id !== interaction.guild.id).sort((a, b) => b.position - a.position).map(r => `${r}`).slice(0, 10).join(' ') || 'なし' : 'なし';
+            const embed = new EmbedBuilder()
+                .setTitle(`👤 ${user.tag}`)
+                .setThumbnail(user.displayAvatarURL({ size: 256 }))
                 .addFields(
-                    { name: '通貨名', value: name, inline: true },
-                    { name: 'シンボル', value: symbol, inline: true },
-                    { name: '発行枚数', value: `${TOTAL_SUPPLY.toLocaleString()} 枚`, inline: true },
-                    { name: '初期価格', value: `0.005 🪙`, inline: true }
+                    { name: 'ユーザーID', value: `\`${user.id}\``, inline: true },
+                    { name: 'ボット', value: user.bot ? 'はい' : 'いいえ', inline: true },
+                    { name: '\u200b', value: '\u200b', inline: true },
+                    { name: 'アカウント作成日', value: `<t:${createdTs}:F>\n<t:${createdTs}:R>\n経過: **${ageStr}**`, inline: false },
+                    { name: 'サーバー参加日', value: joinedTs ? `<t:${joinedTs}:F>\n<t:${joinedTs}:R>` : '取得不可', inline: false },
+                    { name: '最上位ロール', value: member ? `${member.roles.highest}` : 'なし', inline: true },
+                    { name: 'ニックネーム', value: member?.nickname || 'なし', inline: true },
+                    { name: '\u200b', value: '\u200b', inline: true },
+                    { name: `ロール (${member?.roles.cache.size ? member.roles.cache.size - 1 : 0}個)`, value: roles, inline: false }
+                ).setColor(member?.displayHexColor || 0x9b59b6);
+            await interaction.reply({ embeds: [embed], components: [delBtn()] });
+        }
+
+        if (commandName === 'clear') {
+            const num = options.getInteger('num');
+            if (num < 1 || num > 100) return interaction.reply({ content: '1〜100の間で指定してください。', ...EPH });
+            const deleted = await interaction.channel.bulkDelete(num, true);
+            await interaction.reply({ content: `✅ ${deleted.size}件のメッセージを削除しました。`, ...EPH });
+        }
+
+        if (commandName === 'log') {
+            const channel = options.getChannel('channel');
+            servers[guildId].logChannel = channel.id;
+            saveData(SERVERS_FILE, servers);
+            await interaction.reply(`ログ送信先を ${channel} に設定しました。`);
+        }
+
+        if (commandName === 'authset') {
+            const role = options.getRole('role');
+            const targetChannel = options.getChannel('channel') || interaction.channel;
+            const embed = new EmbedBuilder().setTitle(options.getString('title')).setDescription(options.getString('description')).setColor(0x00ae86);
+            const authUrl = `https://discord.com/api/oauth2/authorize?client_id=${CLIENT_ID}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&response_type=code&scope=identify%20guilds.join&state=${guildId}_${role.id}`;
+            const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setLabel(options.getString('button')).setURL(authUrl).setStyle(ButtonStyle.Link));
+            await targetChannel.send({ embeds: [embed], components: [row] });
+            await interaction.reply({ content: 'パネルを設置しました。', ...EPH });
+        }
+
+        if (commandName === 'ticket') {
+            const mid = options.getRole('mention-role').id;
+            const embed = new EmbedBuilder().setTitle(options.getString('title')).setDescription(options.getString('description')).setColor(0x5865f2);
+            const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`ticket_open_${mid}`).setLabel(options.getString('button')).setStyle(ButtonStyle.Primary));
+            await interaction.reply({ embeds: [embed], components: [row] });
+        }
+
+        if (commandName === 'gchat') {
+            const ch = options.getChannel('channel');
+            if (ch) {
+                servers[guildId].gChatChannel = ch.id;
+                saveData(SERVERS_FILE, servers);
+                await interaction.reply(`✅ グローバルチャットを <#${ch.id}> に設定しました。`);
+            } else {
+                delete servers[guildId].gChatChannel;
+                saveData(SERVERS_FILE, servers);
+                await interaction.reply('✅ グローバルチャットを解除しました。');
+            }
+        }
+
+        if (commandName === 'chatlock') {
+            const sec = options.getInteger('seconds');
+            await interaction.channel.permissionOverwrites.edit(interaction.guild.roles.everyone, { SendMessages: false });
+            await interaction.reply(`${sec}秒間、このチャンネルをロックします。`);
+            setTimeout(async () => { await interaction.channel.permissionOverwrites.edit(interaction.guild.roles.everyone, { SendMessages: null }); await interaction.channel.send('ロックが解除されました。'); }, sec * 1000);
+        }
+
+        if (commandName === 'omikuji') {
+            const results = [
+                { label: '大吉 🎊', color: 0xFFD700, msg: '最高の一日になるでしょう！' },
+                { label: '中吉 🎉', color: 0x00FF7F, msg: '良いことが起きそうです。' },
+                { label: '小吉 🙂', color: 0x7FFFD4, msg: 'まずまずの運勢です。' },
+                { label: '吉 😊', color: 0x87CEEB, msg: '穏やかな一日を過ごせそうです。' },
+                { label: '末吉 😐', color: 0xD3D3D3, msg: '慎重に行動すると良いでしょう。' },
+                { label: '凶 😟', color: 0xFFA07A, msg: '注意が必要な日です。' },
+                { label: '大凶 😱', color: 0xFF4500, msg: '今日は無理をしない方が良いかも...' },
+            ];
+            const r = results[Math.floor(Math.random() * results.length)];
+            const embed = new EmbedBuilder().setTitle(`🎴 おみくじ結果: **${r.label}**`).setDescription(r.msg).setColor(r.color).setTimestamp();
+            await interaction.reply({ embeds: [embed], components: [delBtn()] });
+        }
+
+        if (commandName === 'kaso') {
+            const KASO_COOLDOWN = 3 * 60 * 1000;
+            const now = Date.now();
+            const lastUsed = kasoCooldowns.get(guildId) || 0;
+            const remaining = KASO_COOLDOWN - (now - lastUsed);
+            if (remaining > 0) {
+                const sec = Math.ceil(remaining / 1000);
+                const min = Math.floor(sec / 60);
+                const s = sec % 60;
+                return interaction.reply({ content: `⏳ クールダウン中です。あと **${min}分${s}秒** お待ちください。`, ...EPH });
+            }
+            kasoCooldowns.set(guildId, now);
+            await interaction.deferReply();
+            const ignoredChannels = servers[guildId]?.kasoIgnoreChannels || [];
+            const stats = getHourlyStats(guildId, ignoredChannels);
+            const topUserLines = [];
+            for (const [uid, count] of stats.topUsers) {
+                let name;
+                try { const member = await interaction.guild.members.fetch(uid); name = member.displayName; } catch { name = `<@${uid}>`; }
+                topUserLines.push(`**${name}** (${count}回)`);
+            }
+            const topChannelLines = stats.topChannels.map(([cid, count]) => `<#${cid}> (${count}回)`);
+            const embed = new EmbedBuilder().setTitle('📊 過去1時間のサーバー稼働調査').setColor(stats.color).addFields(
+                { name: '総メッセージ数', value: `${stats.total} 件`, inline: false },
+                { name: '判定結果', value: stats.judgment, inline: false },
+                { name: '活発なユーザー TOP3', value: topUserLines.length > 0 ? topUserLines.join('\n') : 'データなし', inline: true },
+                { name: '活発なチャンネル TOP3', value: topChannelLines.length > 0 ? topChannelLines.join('\n') : 'データなし', inline: true }
+            ).setFooter({ text: '直近60分間 / Bot除外 / ticket-チャンネル除外' }).setTimestamp();
+            await interaction.editReply({ embeds: [embed], components: [delBtn()] });
+        }
+
+        if (commandName === 'rp' && options.getSubcommand() === 'create') {
+            const embed = new EmbedBuilder().setTitle(options.getString('title')).setDescription(options.getString('description')).setColor(0x34495e);
+            const row = new ActionRowBuilder();
+            let count = 0;
+            for (let i = 1; i <= 10; i++) {
+                const r = options.getRole(`role${i}`);
+                const e = options.getString(`emoji${i}`);
+                if (r) { row.addComponents(new ButtonBuilder().setCustomId(`rp_${r.id}`).setLabel(r.name).setEmoji(e || '🏷️').setStyle(ButtonStyle.Secondary)); count++; }
+            }
+            if (count === 0) return interaction.reply({ content: '最低1つの役職を指定してください。', ...EPH });
+            await interaction.reply({ embeds: [embed], components: [row] });
+        }
+
+        if (commandName === 'rp' && options.getSubcommand() === 'delete') {
+            const embed = new EmbedBuilder().setTitle('🗑️ 役職パネル削除').setDescription('下のボタンを押すと、このチャンネル内の最近の役職パネルを削除できます。').setColor(0xe74c3c);
+            const row = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('rp_delete_panel').setLabel('最新パネルを削除').setStyle(ButtonStyle.Danger)
+            );
+            await interaction.reply({ embeds: [embed], components: [row], ...EPH });
+        }
+
+        if (commandName === 'janken') {
+            const hands = ['グー', 'チョキ', 'パー'], emojis = { 'グー': '✊', 'チョキ': '✌️', 'パー': '✋' }, userHand = options.getString('hand'), botHand = hands[Math.floor(Math.random() * 3)];
+            let result, color;
+            if (userHand === botHand) { result = '引き分け 🤝'; color = 0xFFFF00; }
+            else if ((userHand === 'グー' && botHand === 'チョキ') || (userHand === 'チョキ' && botHand === 'パー') || (userHand === 'パー' && botHand === 'グー')) { result = 'あなたの勝ち 🎉'; color = 0x00FF00; }
+            else { result = 'Botの勝ち 😈'; color = 0xFF0000; }
+            const embed = new EmbedBuilder().setTitle('✊✌️✋ じゃんけん！').setColor(color).addFields({ name: 'あなた', value: `${emojis[userHand]} ${userHand}`, inline: true }, { name: 'Bot', value: `${emojis[botHand]} ${botHand}`, inline: true }, { name: '結果', value: result, inline: false });
+            await interaction.reply({ embeds: [embed], components: [delBtn()] });
+        }
+
+        if (commandName === 'coinflip') {
+            const result = Math.random() < 0.5 ? '表 🪙' : '裏 🔄';
+            const embed = new EmbedBuilder().setTitle('🪙 コインフリップ').setDescription(`**${result}** が出ました！`).setColor(0xf1c40f);
+            await interaction.reply({ embeds: [embed], components: [delBtn()] });
+        }
+
+        if (commandName === 'dice') {
+            const sides = options.getInteger('sides') || 6, result = Math.floor(Math.random() * sides) + 1;
+            const embed = new EmbedBuilder().setTitle('🎲 ダイスロール').setColor(0x9b59b6).addFields({ name: `d${sides}`, value: `**${result}**`, inline: true });
+            await interaction.reply({ embeds: [embed], components: [delBtn()] });
+        }
+
+        if (commandName === 'choose') {
+            const choices = options.getString('choices').split(',').map(c => c.trim()).filter(Boolean);
+            if (choices.length < 2) return interaction.reply({ content: '❌ 選択肢を2つ以上入力してください。', ...EPH });
+            const chosen = choices[Math.floor(Math.random() * choices.length)];
+            const embed = new EmbedBuilder().setTitle('🎯 選択結果').setColor(0x1abc9c).setDescription(`**${chosen}**`).setFooter({ text: `${choices.length}個の選択肢から選びました` });
+            await interaction.reply({ embeds: [embed], components: [delBtn()] });
+        }
+
+        if (commandName === 'botstatus') {
+            const uptimeMs = Date.now() - BOT_START;
+            const d = Math.floor(uptimeMs / 86400000);
+            const h = Math.floor((uptimeMs % 86400000) / 3600000);
+            const m = Math.floor((uptimeMs % 3600000) / 60000);
+            const s = Math.floor((uptimeMs % 60000) / 1000);
+            const mem = process.memoryUsage();
+            const ping = client.ws.ping;
+            const embed = new EmbedBuilder()
+                .setTitle('🤖 Bot ステータス')
+                .setThumbnail(client.user.displayAvatarURL())
+                .setColor(0x5865f2)
+                .addFields(
+                    { name: '⏱ 稼働時間', value: `${d}日 ${h}時間 ${m}分 ${s}秒`, inline: true },
+                    { name: '📡 Ping', value: `${ping < 0 ? '...' : ping + 'ms'}`, inline: true },
+                    { name: '🏰 サーバー数', value: `${client.guilds.cache.size}`, inline: true },
+                    { name: '💾 メモリ使用量', value: `${(mem.heapUsed / 1024 / 1024).toFixed(1)} MB / ${(mem.heapTotal / 1024 / 1024).toFixed(1)} MB`, inline: true },
+                    { name: '👥 総ユーザー数', value: `${client.guilds.cache.reduce((a, g) => a + g.memberCount, 0)}`, inline: true },
+                    { name: '📅 起動日時', value: `<t:${Math.floor((Date.now() - uptimeMs) / 1000)}:F>`, inline: true }
                 ).setTimestamp();
-            return interaction.reply({ embeds: [embed], components: [delBtn()], ...EPH });
+            await interaction.reply({ embeds: [embed], components: [delBtn()] });
         }
 
-        if (sub === 'list') {
-            const coins = Object.values(cryptoData);
-            if (coins.length === 0) return interaction.reply({ content: '現在発行されている仮想通貨はありません。`/crypto create` で作れます。', ...EPH });
-            const embed = new EmbedBuilder().setTitle('💹 仮想通貨市場').setColor(0xf1c40f)
-                .setDescription(coins.map((c, i) => {
-                    const prev = c.history?.slice(-2)[0] || c.price;
-                    const arrow = c.price > prev ? '📈' : c.price < prev ? '📉' : '➡️';
-                    return `${arrow} **${c.name}** (${c.symbol})\n価格: **${fmtPrice(c.price)}** 🪙　時価総額: **${fmtPrice(round3(c.price * c.totalSupply))}** 🪙`;
-                }).join('\n\n'))
-                .setFooter({ text: '/crypto view [symbol] で詳細 | 手数料2%' });
-            return interaction.reply({ embeds: [embed], components: [delBtn()], ...EPH });
+        if (commandName === 'channelinfo') {
+            const ch = options.getChannel('channel') || interaction.channel;
+            const channel = interaction.guild.channels.cache.get(ch.id);
+            if (!channel) return interaction.reply({ content: '❌ チャンネルが見つかりません。', ...EPH });
+            const typeMap = { 0: 'テキスト', 2: 'ボイス', 4: 'カテゴリ', 5: 'アナウンス', 15: 'フォーラム', 13: 'ステージ' };
+            const embed = new EmbedBuilder()
+                .setTitle(`📋 #${channel.name}`)
+                .setColor(0x3498db)
+                .addFields(
+                    { name: 'チャンネルID', value: `\`${channel.id}\``, inline: true },
+                    { name: '種類', value: typeMap[channel.type] || 'その他', inline: true },
+                    { name: 'カテゴリ', value: channel.parent?.name || 'なし', inline: true },
+                    { name: '作成日', value: `<t:${Math.floor(channel.createdTimestamp / 1000)}:F>`, inline: true },
+                    { name: 'NSFW', value: channel.nsfw ? 'はい' : 'いいえ', inline: true },
+                    { name: '低速モード', value: channel.rateLimitPerUser > 0 ? `${channel.rateLimitPerUser}秒` : 'なし', inline: true },
+                    { name: 'トピック', value: channel.topic || 'なし', inline: false }
+                ).setTimestamp();
+            await interaction.reply({ embeds: [embed], components: [delBtn()] });
         }
 
-        if (sub === 'view') {
-            const sym = options.getString('symbol')?.toUpperCase();
-            if (!sym) {
-                const coins = Object.values(cryptoData);
-                if (coins.length === 0) return interaction.reply({ content: '仮想通貨がまだありません。', ...EPH });
-                if (coins.length === 1) return showCryptoDetail(interaction, coins[0], econ, user, CRYPTO_FILE);
-                const select = new StringSelectMenuBuilder().setCustomId('crypto_view_select').setPlaceholder('通貨を選択')
-                    .addOptions(coins.map(c => ({ label: `${c.name} (${c.symbol})`, description: `価格: ${fmtPrice(c.price)} 🪙`, value: c.id })));
-                return interaction.reply({ content: '💹 通貨を選択:', components: [new ActionRowBuilder().addComponents(select)], ...EPH });
+        if (commandName === 'top') {
+            await interaction.deferReply();
+            const msgs = await interaction.channel.messages.fetch({ limit: 1, after: '0' });
+            const first = msgs.first();
+            if (!first) return interaction.editReply('❌ メッセージが見つかりませんでした。');
+            const embed = new EmbedBuilder()
+                .setTitle('📜 最初のメッセージ')
+                .setColor(0x9b59b6)
+                .setDescription(`[ここをクリックしてジャンプ](${first.url})`)
+                .addFields(
+                    { name: '送信者', value: `<@${first.author.id}>`, inline: true },
+                    { name: '送信日時', value: `<t:${Math.floor(first.createdTimestamp / 1000)}:F>`, inline: true },
+                    { name: '内容', value: first.content?.slice(0, 200) || '(内容なし)', inline: false }
+                );
+            await interaction.editReply({ embeds: [embed], components: [delBtn()] });
+        }
+
+        if (commandName === 'snipe') {
+            const key = `${guildId}_${interaction.channelId}`;
+            const cached = snipeCache.get(key);
+            if (!cached) return interaction.reply({ content: '❌ このチャンネルに削除されたメッセージのキャッシュがありません。', ...EPH });
+            const embed = new EmbedBuilder()
+                .setTitle('🗑️ 直前の削除メッセージ')
+                .setColor(0xff6b35)
+                .setDescription(cached.content || '(内容なし)')
+                .setAuthor({ name: cached.authorTag, iconURL: cached.authorAvatar })
+                .setFooter({ text: `削除: ${new Date(cached.timestamp).toLocaleString('ja-JP')}` });
+            if (cached.attachmentUrl) embed.setImage(cached.attachmentUrl);
+            await interaction.reply({ embeds: [embed], components: [delBtn()] });
+        }
+
+        if (commandName === 'unban') {
+            const input = options.getString('user').replace(/[<@!>]/g, '');
+            try {
+                const banned = await interaction.guild.bans.fetch(input).catch(() => null);
+                if (!banned) return interaction.reply({ content: '❌ そのユーザーはBANされていません。', ...EPH });
+                await interaction.guild.members.unban(input);
+                const embed = new EmbedBuilder().setTitle('🔓 BAN解除').setColor(0x57f287).addFields({ name: '対象', value: `${banned.user.tag} (\`${input}\`)` }).setTimestamp();
+                await interaction.reply({ embeds: [embed] });
+            } catch (e) {
+                await interaction.reply({ content: `❌ BAN解除に失敗しました: ${e.message}`, ...EPH });
             }
-            const coin = Object.values(cryptoData).find(c => c.symbol === sym);
-            if (!coin) return interaction.reply({ content: `❌ **${sym}** という通貨は存在しません。`, ...EPH });
-            return showCryptoDetail(interaction, coin, econ, user, CRYPTO_FILE);
         }
 
-        if (sub === 'buy') {
-            const sym = options.getString('symbol')?.toUpperCase();
-            const amtInput = options.getString('amount').trim().toLowerCase();
-            const u = getUser(econ, user.id, user);
-            if (!sym) {
-                const coins = Object.values(cryptoData).filter(c => c.availableSupply > 0);
-                if (coins.length === 0) return interaction.reply({ content: '現在購入できる仮想通貨はありません。', ...EPH });
-                if (coins.length === 1) return doBuyCrypto(interaction, coins[0], amtInput, econ, u, cryptoData, CRYPTO_FILE);
-                const select = new StringSelectMenuBuilder().setCustomId(`crypto_buyselect_${amtInput}`).setPlaceholder('購入する通貨を選択')
-                    .addOptions(coins.map(c => ({ label: `${c.name} (${c.symbol})`, description: `価格: ${fmtPrice(c.price)} 🪙　残: ${c.availableSupply.toLocaleString()}枚`, value: c.id })));
-                return interaction.reply({ content: '💹 購入する通貨を選択:', components: [new ActionRowBuilder().addComponents(select)], ...EPH });
+        if (commandName === 'giveaway') {
+            const prize = options.getString('prize');
+            const title = options.getString('title') || '🎁 プレゼント抽選';
+            const minutes = options.getInteger('minutes');
+            const winnersCount = options.getInteger('winners');
+            const targetChannel = options.getChannel('channel') || interaction.channel;
+            const endTime = Math.floor((Date.now() + minutes * 60 * 1000) / 1000);
+            const embed = new EmbedBuilder()
+                .setTitle(title)
+                .setDescription(`**景品:** ${prize}\n\n🎉 に反応して参加しよう！\n\n**終了:** <t:${endTime}:R>\n**当選人数:** ${winnersCount}人`)
+                .setColor(0xf1c40f)
+                .setFooter({ text: `終了: ${new Date(endTime * 1000).toLocaleString('ja-JP')}` });
+            const msg = await targetChannel.send({ embeds: [embed] });
+            await msg.react('🎉');
+            await interaction.reply({ content: `✅ <#${targetChannel.id}> でギブアウェイを開始しました！`, ...EPH });
+
+            const timer = setTimeout(async () => {
+                const fetchedMsg = await targetChannel.messages.fetch(msg.id).catch(() => null);
+                if (!fetchedMsg) return;
+                const reaction = fetchedMsg.reactions.cache.get('🎉');
+                const users = reaction ? (await reaction.users.fetch()).filter(u => !u.bot) : new Map();
+                const endEmbed = new EmbedBuilder().setTitle('🎁 プレゼント抽選 — 終了').setColor(0x95a5a6);
+                if (users.size === 0) {
+                    endEmbed.setDescription(`**景品:** ${prize}\n\n参加者がいなかったため抽選できませんでした。`);
+                    await fetchedMsg.edit({ embeds: [endEmbed] });
+                    await targetChannel.send('😢 参加者がいなかったため当選者なしです。');
+                } else {
+                    const shuffled = [...users.values()].sort(() => Math.random() - 0.5);
+                    const winners = shuffled.slice(0, Math.min(winnersCount, shuffled.length));
+                    endEmbed.setDescription(`**景品:** ${prize}\n\n**当選者:** ${winners.map(u => `<@${u.id}>`).join(' ')}`);
+                    await fetchedMsg.edit({ embeds: [endEmbed] });
+                    await targetChannel.send(`🎉 おめでとうございます！ ${winners.map(u => `<@${u.id}>`).join(' ')} が **${prize}** に当選しました！`);
+                }
+                giveawayTimers.delete(msg.id);
+            }, minutes * 60 * 1000);
+            giveawayTimers.set(msg.id, timer);
+        }
+
+
+        if (commandName === 'kick') {
+            const target = options.getUser('user');
+            const reason = options.getString('reason') || '理由なし';
+            const member = await interaction.guild.members.fetch(target.id).catch(() => null);
+            if (!member) return interaction.reply({ content: '❌ サーバーにいないユーザーです。', ...EPH });
+            if (!member.kickable) return interaction.reply({ content: '❌ このユーザーをキックできません。（権限不足）', ...EPH });
+            await member.kick(reason);
+            const embed = new EmbedBuilder().setTitle('👢 キック').setColor(0xff6b35).addFields({ name: '対象', value: `${target.tag} (${target.id})`, inline: true }, { name: '理由', value: reason, inline: true }).setTimestamp();
+            await interaction.reply({ embeds: [embed] });
+        }
+
+        if (commandName === 'ban') {
+            const target = options.getUser('user');
+            const reason = options.getString('reason') || '理由なし';
+            const member = await interaction.guild.members.fetch(target.id).catch(() => null);
+            if (member && !member.bannable) return interaction.reply({ content: '❌ このユーザーをBANできません。（権限不足）', ...EPH });
+            await interaction.guild.members.ban(target.id, { reason });
+            const embed = new EmbedBuilder().setTitle('🔨 BAN').setColor(0xff0000).addFields({ name: '対象', value: `${target.tag} (${target.id})`, inline: true }, { name: '理由', value: reason, inline: true }).setTimestamp();
+            await interaction.reply({ embeds: [embed] });
+        }
+
+        if (commandName === 'embed') {
+            const targetChannel = options.getChannel('channel') || interaction.channel;
+            const colorStr = options.getString('color');
+            let color = 0x5865f2;
+            if (colorStr) {
+                const parsed = parseInt(colorStr.replace('#', ''), 16);
+                if (!isNaN(parsed)) color = parsed;
             }
-            const coin = Object.values(cryptoData).find(c => c.symbol === sym);
-            if (!coin) return interaction.reply({ content: `❌ **${sym}** は存在しません。`, ...EPH });
-            return doBuyCrypto(interaction, coin, amtInput, econ, u, cryptoData, CRYPTO_FILE);
+            const embed = new EmbedBuilder().setTitle(options.getString('title')).setDescription(options.getString('description')).setColor(color).setTimestamp();
+            const imageUrl = options.getString('image');
+            if (imageUrl) embed.setImage(imageUrl);
+            await targetChannel.send({ embeds: [embed] });
+            await interaction.reply({ content: `✅ <#${targetChannel.id}> にEmbedを送信しました。`, ...EPH });
         }
 
-        if (sub === 'sell') {
-            const sym = options.getString('symbol')?.toUpperCase();
-            const amtInput = options.getString('amount').trim().toLowerCase();
-            const u = getUser(econ, user.id, user);
-            if (!sym) {
-                const heldCoins = Object.values(cryptoData).filter(c => (u.crypto || {})[c.id] > 0);
-                if (heldCoins.length === 0) return interaction.reply({ content: '保有している仮想通貨がありません。', ...EPH });
-                if (heldCoins.length === 1) return doSellCrypto(interaction, heldCoins[0], amtInput, econ, u, cryptoData, CRYPTO_FILE);
-                const select = new StringSelectMenuBuilder().setCustomId(`crypto_sellselect_${amtInput}`).setPlaceholder('売却する通貨を選択')
-                    .addOptions(heldCoins.map(c => ({ label: `${c.name} (${c.symbol})`, description: `価格: ${fmtPrice(c.price)} 🪙　保有: ${(u.crypto || {})[c.id].toLocaleString()}枚`, value: c.id })));
-                return interaction.reply({ content: '💹 売却する通貨を選択:', components: [new ActionRowBuilder().addComponents(select)], ...EPH });
-            }
-            const coin = Object.values(cryptoData).find(c => c.symbol === sym);
-            if (!coin) return interaction.reply({ content: `❌ **${sym}** は存在しません。`, ...EPH });
-            return doSellCrypto(interaction, coin, amtInput, econ, u, cryptoData, CRYPTO_FILE);
+        if (commandName === 'mute') {
+            const target = options.getUser('user');
+            const reason = options.getString('reason') || '理由なし';
+            const muteRoleId = servers[guildId]?.muteRole;
+            if (!muteRoleId) return interaction.reply({ content: '❌ ミュートロールが設定されていません。`/set` から設定してください。', ...EPH });
+            const member = await interaction.guild.members.fetch(target.id).catch(() => null);
+            if (!member) return interaction.reply({ content: '❌ サーバーにいないユーザーです。', ...EPH });
+            if (member.roles.cache.has(muteRoleId)) return interaction.reply({ content: '⚠️ 既にミュートされています。', ...EPH });
+            await member.roles.add(muteRoleId, reason);
+            const embed = new EmbedBuilder().setTitle('🔇 ミュート').setColor(0xff6b35).addFields({ name: '対象', value: `${target.tag} (${target.id})`, inline: true }, { name: '理由', value: reason, inline: true }).setTimestamp();
+            await interaction.reply({ embeds: [embed] });
         }
-    }
 
-    if (commandName === 'stock') {
-        const corpData = load(CORP_FILE);
-        const corpName = options.getString('corp');
-        if (!corpName) {
-            const stockCorps = Object.values(corpData).filter(c => c.stock);
-            const allCorps = Object.values(corpData);
-            if (allCorps.length === 0) return interaction.reply({ content: '現在登録されている会社はありません。', ...EPH });
-            if (stockCorps.length === 0) {
-                // 株未発行の一覧を表示
-                const embed = new EmbedBuilder().setTitle('📊 株式市場').setColor(0x3498db)
-                    .setDescription(allCorps.map((c, i) => `**${i + 1}. ${c.name}**\n${c.stock ? `株価: **${c.stock.price.toLocaleString()}** ${CURRENCY}` : '株式未発行'}`).join('\n'))
-                    .setFooter({ text: 'まだ株式を発行している会社はありません' });
-                return interaction.reply({ embeds: [embed], components: [delBtn()], ...EPH });
-            }
-            if (stockCorps.length === 1) {
-                // 1社しかなければ直接表示
-                const c = stockCorps[0];
-                return showStockDetail(interaction, c, econ, user);
-            }
-            // セレクトメニュー
-            const select = new StringSelectMenuBuilder()
-                .setCustomId('stock_select_view')
-                .setPlaceholder('会社を選択')
-                .addOptions(stockCorps.map(c => {
-                    const prev = c.stock.history?.slice(-2)[0] || c.stock.price;
-                    const arrow = c.stock.price > prev ? '📈' : c.stock.price < prev ? '📉' : '➡️';
-                    return { label: `${arrow} ${c.name}`, description: `株価: ${c.stock.price.toLocaleString()} 🪙`, value: c.id };
-                }));
-            return interaction.reply({ content: '📊 **株式市場** — 会社を選択してください', components: [new ActionRowBuilder().addComponents(select)], ...EPH });
+        if (commandName === 'unmute') {
+            const target = options.getUser('user');
+            const muteRoleId = servers[guildId]?.muteRole;
+            if (!muteRoleId) return interaction.reply({ content: '❌ ミュートロールが設定されていません。`/set` から設定してください。', ...EPH });
+            const member = await interaction.guild.members.fetch(target.id).catch(() => null);
+            if (!member) return interaction.reply({ content: '❌ サーバーにいないユーザーです。', ...EPH });
+            if (!member.roles.cache.has(muteRoleId)) return interaction.reply({ content: '⚠️ このユーザーはミュートされていません。', ...EPH });
+            await member.roles.remove(muteRoleId);
+            const embed = new EmbedBuilder().setTitle('🔊 ミュート解除').setColor(0x57f287).addFields({ name: '対象', value: `${target.tag} (${target.id})` }).setTimestamp();
+            await interaction.reply({ embeds: [embed] });
         }
-        const c = Object.values(corpData).find(c => c.name.toLowerCase() === corpName.toLowerCase());
-        if (!c) return interaction.reply({ content: `❌ **${corpName}** という会社は存在しません。`, ...EPH });
-        if (!c.stock) return interaction.reply({ content: `❌ **${c.name}** はまだ株式を発行していません。`, ...EPH });
-        return showStockDetail(interaction, c, econ, user);
-    }
 
-    // ==================== /buystock ====================
-    if (commandName === 'buystock') {
-        const corpData = load(CORP_FILE);
-        const corpName = options.getString('corp');
-        const amtInput = (options.getString('amount') || '1').trim().toLowerCase();
-        const u = getUser(econ, user.id, user);
-        const resolveAmount = (c) => {
-            if (amtInput === 'all') return Math.min(Math.floor(u.balance / c.stock.price), c.stock.availableShares);
-            return parseInt(amtInput) || 1;
-        };
-        if (!corpName) {
-            const stockCorps = Object.values(corpData).filter(c => c.stock && c.stock.availableShares > 0);
-            if (stockCorps.length === 0) return interaction.reply({ content: '📊 現在購入できる株式はありません。', ...EPH });
-            if (stockCorps.length === 1) { const amt = resolveAmount(stockCorps[0]); return doBuyStock(interaction, stockCorps[0], amt, econ, user, corpData); }
-            const select = new StringSelectMenuBuilder()
-                .setCustomId(`stock_buyselect_${amtInput}`)
-                .setPlaceholder('購入する会社を選択')
-                .addOptions(stockCorps.map(c => ({ label: c.name, description: `株価: ${c.stock.price.toLocaleString()} 🪙　残: ${c.stock.availableShares}株`, value: c.id })));
-            return interaction.reply({ content: `📈 購入する会社を選択してください`, components: [new ActionRowBuilder().addComponents(select)], ...EPH });
-        }
-        const c = Object.values(corpData).find(c => c.name.toLowerCase() === corpName.toLowerCase());
-        if (!c) return interaction.reply({ content: `❌ **${corpName}** という会社は存在しません。`, ...EPH });
-        if (!c.stock) return interaction.reply({ content: `❌ **${c.name}** はまだ株式を発行していません。`, ...EPH });
-        const amt = resolveAmount(c);
-        if (amt <= 0) return interaction.reply({ content: '❌ 購入できる株数がありません。残高不足か在庫不足です。', ...EPH });
-        return doBuyStock(interaction, c, amt, econ, user, corpData);
-    }
-
-    if (commandName === 'sellstock') {
-        const corpData = load(CORP_FILE);
-        const corpName = options.getString('corp');
-        const amount = options.getInteger('amount');
-        const u = getUser(econ, user.id, user);
-        if (!corpName) {
-            const heldCorps = Object.values(corpData).filter(c => c.stock && (u.stocks || {})[c.id] > 0);
-            if (heldCorps.length === 0) return interaction.reply({ content: '📊 保有している株がありません。', ...EPH });
-            if (heldCorps.length === 1) return doSellStock(interaction, heldCorps[0], amount, econ, u, corpData);
-            const select = new StringSelectMenuBuilder()
-                .setCustomId(`stock_sellselect_${amount}`)
-                .setPlaceholder('売却する会社を選択')
-                .addOptions(heldCorps.map(c => ({ label: c.name, description: `株価: ${c.stock.price.toLocaleString()} 🪙　保有: ${(u.stocks || {})[c.id]}株`, value: c.id })));
-            return interaction.reply({ content: `📉 **${amount}株** 売却する会社を選択してください`, components: [new ActionRowBuilder().addComponents(select)], ...EPH });
-        }
-        const c = Object.values(corpData).find(c => c.name.toLowerCase() === corpName.toLowerCase());
-        if (!c) return interaction.reply({ content: `❌ **${corpName}** という会社は存在しません。`, ...EPH });
-        if (!c.stock) return interaction.reply({ content: `❌ **${c.name}** は株式を発行していません。`, ...EPH });
-        return doSellStock(interaction, c, amount, econ, u, corpData);
-    }
-}
-
-async function doDustItem(interaction, itemName, dustCount, econ, u) {
-    const indices = [];
-    for (let i = 0; i < u.inventory.length && indices.length < dustCount; i++) {
-        if (u.inventory[i].name.toLowerCase() === itemName.toLowerCase()) indices.push(i);
-    }
-    if (indices.length === 0) return interaction.reply({ content: `❌ **${itemName}** をインベントリに持っていません。`, ...EPH });
-    if (indices.length < dustCount) return interaction.reply({ content: `❌ **${itemName}** は ${indices.length} 個しか持っていません。`, ...EPH });
-    for (const i of [...indices].reverse()) u.inventory.splice(i, 1);
-    save(ECON_FILE, econ);
-    return interaction.reply({ content: `🗑️ **${itemName}** × ${dustCount} を捨てました。`, ...EPH });
-}
-
-async function doBuyItem(interaction, itemName, econ, user, guild, shop) {
-    const item = Object.values(shop || load(SHOP_FILE)).find(i => i.name.toLowerCase() === itemName.toLowerCase());
-    if (!item) return interaction.reply({ content: `❌ **${itemName}** は存在しません。`, ...EPH });
-    const u = getUser(econ, user.id, user);
-    if (u.balance < item.price) return interaction.reply({ content: `❌ 残高不足。必要: **${item.price.toLocaleString()}** / 現在: **${u.balance.toLocaleString()}** 🪙`, ...EPH });
-    u.balance -= item.price;
-    if (!u.inventory) u.inventory = [];
-    u.inventory.push({ name: item.name, boughtAt: Date.now(), sellPrice: Math.floor(item.price * 0.5) });
-    save(ECON_FILE, econ);
-    if (item.roleId && guild) {
-        const member = await guild.members.fetch(user.id).catch(() => null);
-        if (member) await member.roles.add(item.roleId).catch(() => {});
-    }
-    const embed = new EmbedBuilder().setTitle('✅ 購入完了').setColor(0x57f287)
-        .setDescription(`**${item.name}** を購入しました！\n残高: **${u.balance.toLocaleString()}** 🪙${item.roleId ? '\n🏷️ ロールが付与されました。' : ''}`).setTimestamp();
-    return interaction.reply({ embeds: [embed], components: [delBtn()], ...EPH });
-}
-
-async function doSellItem(interaction, itemName, sellCount, econ, u) {
-    if (!u.inventory) u.inventory = [];
-    const indices = [];
-    for (let i = 0; i < u.inventory.length && indices.length < sellCount; i++) {
-        if (u.inventory[i].name.toLowerCase() === itemName.toLowerCase()) indices.push(i);
-    }
-    if (indices.length === 0) return interaction.reply({ content: `❌ **${itemName}** をインベントリに持っていません。`, ...EPH });
-    if (indices.length < sellCount) return interaction.reply({ content: `❌ **${itemName}** は ${indices.length} 個しか持っていません。`, ...EPH });
-    const totalPrice = indices.reduce((sum, i) => sum + (u.inventory[i].sellPrice || 0), 0);
-    for (const i of [...indices].reverse()) u.inventory.splice(i, 1);
-    u.balance += totalPrice;
-    save(ECON_FILE, econ);
-    return interaction.reply({ content: `✅ **${itemName}** × ${sellCount} を **${totalPrice.toLocaleString()}** 🪙 で売却しました。\n残高: **${u.balance.toLocaleString()}** 🪙`, components: [delBtn()], ...EPH });
-}
-
-async function showStockDetail(interaction, c, econ, user) {
-    const u = getUser(econ, user.id, user);
-    const price = c.stock.price;
-    const history = c.stock.history || [];
-    const userShares = (u.stocks || {})[c.id] || 0;
-    const prev = history[history.length - 2] || price;
-    const accentColor = price > prev ? 0x57f287 : price < prev ? 0xff4757 : 0x3498db;
-    const { attachment, imageUrl } = await makeChart(history, `${c.name} 株式`, price > prev ? '#57f287' : price < prev ? '#ff4757' : '#5865f2');
-    const embed = new EmbedBuilder()
-        .setTitle(`📈 ${c.name} 株式情報`)
-        .setColor(accentColor)
-        .addFields(
-            { name: '現在株価', value: `**${fmtPrice(price)}** 🪙`, inline: true },
-            { name: '発行株数', value: `**${c.stock.totalShares.toLocaleString()}** 株`, inline: true },
-            { name: '保有株数', value: `**${userShares}** 株`, inline: true },
-            { name: '購入可能', value: `**${c.stock.availableShares}** 株`, inline: true },
-            { name: '時価総額', value: `**${fmtPrice(round3(price * c.stock.totalShares))}** 🪙`, inline: true },
-            { name: '手数料', value: '売買各2%', inline: true }
-        );
-    if (imageUrl) embed.setImage(imageUrl);
-    else { const chartStr = buildStockChart(history); if (chartStr) embed.setDescription(`\`\`\`\n${chartStr}\n\`\`\``); }
-    const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(`stock_buy_${c.id}`).setLabel('📈 買う').setStyle(ButtonStyle.Success).setDisabled(c.stock.availableShares <= 0),
-        new ButtonBuilder().setCustomId(`stock_sell_${c.id}`).setLabel('📉 売る').setStyle(ButtonStyle.Danger).setDisabled(userShares <= 0),
-        new ButtonBuilder().setCustomId(`stock_refresh_${c.id}`).setLabel('🔄 更新').setStyle(ButtonStyle.Secondary)
-    );
-    const files = attachment ? [attachment] : [];
-    return interaction.reply({ embeds: [embed], components: [row, delBtn()], files, ...EPH });
-}
-
-async function showStockDetailUpdate(interaction, c, econ, user) {
-    const u = getUser(econ, user.id, user);
-    const price = c.stock.price;
-    const history = c.stock.history || [];
-    const userShares = (u.stocks || {})[c.id] || 0;
-    const prev = history[history.length - 2] || price;
-    const accentColor = price > prev ? 0x57f287 : price < prev ? 0xff4757 : 0x3498db;
-    const { attachment, imageUrl } = await makeChart(history, `${c.name} 株式`, price > prev ? '#57f287' : price < prev ? '#ff4757' : '#5865f2');
-    const embed = new EmbedBuilder()
-        .setTitle(`📈 ${c.name} 株式情報`)
-        .setColor(accentColor)
-        .addFields(
-            { name: '現在株価', value: `**${fmtPrice(price)}** 🪙`, inline: true },
-            { name: '発行株数', value: `**${c.stock.totalShares.toLocaleString()}** 株`, inline: true },
-            { name: '保有株数', value: `**${userShares}** 株`, inline: true },
-            { name: '購入可能', value: `**${c.stock.availableShares}** 株`, inline: true },
-            { name: '時価総額', value: `**${fmtPrice(round3(price * c.stock.totalShares))}** 🪙`, inline: true },
-            { name: '手数料', value: '売買各2%', inline: true }
-        );
-    if (imageUrl) embed.setImage(imageUrl);
-    else { const chartStr = buildStockChart(history); if (chartStr) embed.setDescription(`\`\`\`\n${chartStr}\n\`\`\``); }
-    const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(`stock_buy_${c.id}`).setLabel('📈 買う').setStyle(ButtonStyle.Success).setDisabled(c.stock.availableShares <= 0),
-        new ButtonBuilder().setCustomId(`stock_sell_${c.id}`).setLabel('📉 売る').setStyle(ButtonStyle.Danger).setDisabled(userShares <= 0),
-        new ButtonBuilder().setCustomId(`stock_refresh_${c.id}`).setLabel('🔄 更新').setStyle(ButtonStyle.Secondary)
-    );
-    const files = attachment ? [attachment] : [];
-    return interaction.update({ embeds: [embed], components: [row, delBtn()], files });
-}
-
-async function doBuyStock(interaction, c, amount, econ, user, corpData) {
-    const u = getUser(econ, user.id, user);
-    const price = c.stock.price;
-    const subtotal = round3(price * amount);
-    const fee = round3(subtotal * FEE_RATE);
-    const total = round3(subtotal + fee);
-    if (u.balance < total) return interaction.reply({ content: `❌ 残高不足。必要: **${fmtPrice(total)}** 🪙 (手数料${fmtPrice(fee)}含)\n現在: **${fmtPrice(u.balance)}** 🪙`, ...EPH });
-    if (c.stock.availableShares < amount) return interaction.reply({ content: `❌ 購入可能株数が不足。現在: **${c.stock.availableShares}** 株`, ...EPH });
-    u.balance = round3(u.balance - total);
-    if (!u.stocks) u.stocks = {};
-    u.stocks[c.id] = (u.stocks[c.id] || 0) + amount;
-    c.stock.availableShares -= amount;
-    c.balance = round3((c.balance || 0) + subtotal);
-    // 需要による価格上昇（小数点対応）
-    const ratio = 1 + 0.01 * Math.min(amount, 10);
-    c.stock.price = round3(price * ratio);
-    if (!c.stock.history) c.stock.history = [];
-    c.stock.history.push(c.stock.price);
-    if (c.stock.history.length > 30) c.stock.history.shift();
-    save(ECON_FILE, econ);
-    save(CORP_FILE, corpData);
-    return interaction.reply({ content: `✅ **${c.name}** の株を **${amount}** 株 購入！\n小計: ${fmtPrice(subtotal)} 🪙 + 手数料: ${fmtPrice(fee)} 🪙\n現在株価: **${fmtPrice(c.stock.price)}** 🪙`, components: [delBtn()], ...EPH });
-}
-
-async function doSellStock(interaction, c, amount, econ, u, corpData) {
-    const held = (u.stocks || {})[c.id] || 0;
-    if (held < amount) return interaction.reply({ content: `❌ 保有株数不足。現在: **${held}** 株`, ...EPH });
-    const price = c.stock.price;
-    const subtotal = round3(price * amount);
-    const fee = round3(subtotal * FEE_RATE);
-    const total = round3(subtotal - fee);
-    u.balance = round3(u.balance + total);
-    u.stocks[c.id] -= amount;
-    c.stock.availableShares += amount;
-    // 供給による価格下落（小数点対応）
-    const ratio = 1 - 0.008 * Math.min(amount, 10);
-    c.stock.price = round3(Math.max(0.001, price * ratio));
-    if (!c.stock.history) c.stock.history = [];
-    c.stock.history.push(c.stock.price);
-    if (c.stock.history.length > 30) c.stock.history.shift();
-    save(ECON_FILE, econ);
-    save(CORP_FILE, corpData);
-    return interaction.reply({ content: `✅ **${c.name}** の株を **${amount}** 株 売却！\n小計: ${fmtPrice(subtotal)} 🪙 - 手数料: ${fmtPrice(fee)} 🪙 = **${fmtPrice(total)}** 🪙\n現在株価: **${fmtPrice(c.stock.price)}** 🪙`, components: [delBtn()], ...EPH });
-}
-
-async function showStore(interaction, c, user) {
-    const embed = new EmbedBuilder().setTitle(`🏪 ${c.name}`).setDescription(c.description).setColor(0xe67e22)
-        .addFields(
-            { name: 'オーナー', value: c.ownerName, inline: true },
-            { name: '商品数', value: `${c.items.length}件`, inline: true }
-        );
-    if (c.items.length > 0) embed.addFields({ name: '商品一覧', value: c.items.map((item, i) => `**${i + 1}. ${item.name}** — **${item.price.toLocaleString()}** 🪙\n${item.description}`).join('\n\n'), inline: false });
-    else embed.addFields({ name: '商品一覧', value: '商品がまだありません。', inline: false });
-    const rows = [];
-    if (c.items.length > 0 && c.ownerId !== user.id) {
-        const select = new StringSelectMenuBuilder().setCustomId(`store_buy_${c.id}`).setPlaceholder('購入する商品を選択')
-            .addOptions(c.items.map(item => ({ label: item.name, description: `${item.price.toLocaleString()} 🪙`, value: item.name })));
-        rows.push(new ActionRowBuilder().addComponents(select));
-    }
-    rows.push(delBtn());
-    return interaction.reply({ embeds: [embed], components: rows, ...EPH });
-}
-
-async function showCryptoDetail(interaction, coin, econ, user, CRYPTO_FILE, isUpdate = false) {
-    const u = getUser(econ, user.id, user);
-    const price = coin.price;
-    const history = coin.history || [];
-    const held = (u.crypto || {})[coin.id] || 0;
-    const prev = history[history.length - 2] || price;
-    const accentColor = price > prev ? 0x57f287 : price < prev ? 0xff4757 : 0xf1c40f;
-    const { attachment, imageUrl } = await makeChart(history, `${coin.name} (${coin.symbol})`, price > prev ? '#57f287' : price < prev ? '#ff4757' : '#f1c40f');
-    const embed = new EmbedBuilder()
-        .setTitle(`💹 ${coin.name} (${coin.symbol})`)
-        .setColor(accentColor)
-        .addFields(
-            { name: '現在価格', value: `**${fmtPrice(price)}** 🪙`, inline: true },
-            { name: '発行枚数', value: `${coin.totalSupply.toLocaleString()}`, inline: true },
-            { name: '保有枚数', value: `${held.toLocaleString()}`, inline: true },
-            { name: '購入可能', value: `${coin.availableSupply.toLocaleString()}`, inline: true },
-            { name: '時価総額', value: `**${fmtPrice(round3(price * coin.totalSupply))}** 🪙`, inline: true },
-            { name: '手数料', value: '売買各2%', inline: true }
-        );
-    if (imageUrl) embed.setImage(imageUrl);
-    else { const chartStr = buildStockChart(history); if (chartStr) embed.setDescription(`\`\`\`\n${chartStr}\n\`\`\``); }
-    const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(`crypto_buy_${coin.id}`).setLabel('💰 買う').setStyle(ButtonStyle.Success).setDisabled(coin.availableSupply <= 0),
-        new ButtonBuilder().setCustomId(`crypto_sell_${coin.id}`).setLabel('💸 売る').setStyle(ButtonStyle.Danger).setDisabled(held <= 0),
-        new ButtonBuilder().setCustomId(`crypto_refresh_${coin.id}`).setLabel('🔄 更新').setStyle(ButtonStyle.Secondary)
-    );
-    const files = attachment ? [attachment] : [];
-    if (isUpdate) return interaction.update({ embeds: [embed], components: [row, delBtn()], files });
-    return interaction.reply({ embeds: [embed], components: [row, delBtn()], files, ...EPH });
-}
-
-async function doBuyCrypto(interaction, coin, amtInput, econ, u, cryptoData, CRYPTO_FILE) {
-    let amount;
-    if (amtInput === 'all') amount = Math.min(Math.floor(u.balance / (coin.price * (1 + FEE_RATE))), coin.availableSupply);
-    else amount = parseInt(amtInput) || 0;
-    if (amount <= 0) return interaction.reply({ content: '❌ 有効な枚数を入力してください。', ...EPH });
-    if (coin.availableSupply < amount) return interaction.reply({ content: `❌ 購入可能枚数不足。現在: **${coin.availableSupply.toLocaleString()}** 枚`, ...EPH });
-    const subtotal = round3(coin.price * amount);
-    const fee = round3(subtotal * FEE_RATE);
-    const total = round3(subtotal + fee);
-    if (u.balance < total) return interaction.reply({ content: `❌ 残高不足。必要: **${fmtPrice(total)}** 🪙 (手数料${fmtPrice(fee)}含)\n現在: **${fmtPrice(u.balance)}** 🪙`, ...EPH });
-    u.balance = round3(u.balance - total);
-    if (!u.crypto) u.crypto = {};
-    u.crypto[coin.id] = (u.crypto[coin.id] || 0) + amount;
-    coin.availableSupply -= amount;
-    const ratio = 1 + 0.02 * Math.min(Math.log10(amount + 1), 5); // 最大+10%
-    coin.price = round3(Math.max(0.001, coin.price * ratio));
-    if (!coin.history) coin.history = [];
-    coin.history.push(coin.price);
-    if (coin.history.length > 60) coin.history.shift();
-    save(ECON_FILE, econ);
-    save(CRYPTO_FILE, cryptoData);
-    return interaction.reply({ content: `✅ **${coin.name}** を **${amount.toLocaleString()}** 枚 購入！\n小計: ${fmtPrice(subtotal)} 🪙 + 手数料: ${fmtPrice(fee)} 🪙\n現在価格: **${fmtPrice(coin.price)}** 🪙`, components: [delBtn()], ...EPH });
-}
-
-async function doSellCrypto(interaction, coin, amtInput, econ, u, cryptoData, CRYPTO_FILE) {
-    const held = (u.crypto || {})[coin.id] || 0;
-    let amount;
-    if (amtInput === 'all') amount = held;
-    else amount = parseInt(amtInput) || 0;
-    if (amount <= 0) return interaction.reply({ content: '❌ 有効な枚数を入力してください。', ...EPH });
-    if (held < amount) return interaction.reply({ content: `❌ 保有枚数不足。現在: **${held.toLocaleString()}** 枚`, ...EPH });
-    const subtotal = round3(coin.price * amount);
-    const fee = round3(subtotal * FEE_RATE);
-    const total = round3(subtotal - fee);
-    u.balance = round3(u.balance + total);
-    u.crypto[coin.id] = held - amount;
-    coin.availableSupply += amount;
-    const ratio = 1 - 0.015 * Math.min(Math.log10(amount + 1), 5); // 最大-7.5%
-    coin.price = round3(Math.max(0.001, coin.price * ratio));
-    if (!coin.history) coin.history = [];
-    coin.history.push(coin.price);
-    if (coin.history.length > 60) coin.history.shift();
-    save(ECON_FILE, econ);
-    save(CRYPTO_FILE, cryptoData);
-    return interaction.reply({ content: `✅ **${coin.name}** を **${amount.toLocaleString()}** 枚 売却！\n小計: ${fmtPrice(subtotal)} 🪙 - 手数料: ${fmtPrice(fee)} 🪙 = **${fmtPrice(total)}** 🪙\n現在価格: **${fmtPrice(coin.price)}** 🪙`, components: [delBtn()], ...EPH });
-}
-
-async function showStoreManage(interaction, c, corpData, user) {
-    const embed = new EmbedBuilder().setTitle(`⚙️ ${c.name} 管理`).setColor(0x9b59b6)
-        .addFields(
-            { name: '会社残高', value: `**${(c.balance || 0).toLocaleString()}** 🪙`, inline: true },
-            { name: '商品数', value: `${c.items.length}件`, inline: true },
-            { name: '株式', value: c.stock ? `株価: **${c.stock.price.toLocaleString()}** 🪙` : '未発行', inline: true }
-        );
-    const row1 = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(`store_additem_${c.id}`).setLabel('商品追加').setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId(`store_removeitem_${c.id}`).setLabel('商品削除').setStyle(ButtonStyle.Danger),
-        new ButtonBuilder().setCustomId(`store_withdraw_${c.id}`).setLabel('売上回収').setStyle(ButtonStyle.Success)
-    );
-    const row2 = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(`store_issuestock_${c.id}`).setLabel(c.stock ? '📊 株式追加発行' : '📊 株式発行').setStyle(ButtonStyle.Secondary)
-    );
-    return interaction.reply({ embeds: [embed], components: [row1, row2], ...EPH });
-}
-
-async function handleEconInteraction(interaction) {
-    const cid = interaction.customId;
-    const { user, guild } = interaction;
-    const econ = load(ECON_FILE);
-    const corpData = load(CORP_FILE);
-
-    // 銀行ボタン
-    if (cid === 'bank_loan') {
-        const modal = new ModalBuilder().setCustomId('modal_bank_loan').setTitle('💸 ローンを借りる');
-        modal.addComponents(
-            new ActionRowBuilder().addComponents(
-                new TextInputBuilder().setCustomId('loan_amount').setLabel('借入額（上限5,000）').setStyle(TextInputStyle.Short).setPlaceholder('例: 1000').setRequired(true)
-            )
-        );
-        return interaction.showModal(modal);
-    }
-    if (cid === 'bank_repay') {
-        const modal = new ModalBuilder().setCustomId('modal_bank_repay').setTitle('💰 ローン返済');
-        modal.addComponents(
-            new ActionRowBuilder().addComponents(
-                new TextInputBuilder().setCustomId('repay_amount').setLabel('返済額（全額返済は「all」）').setStyle(TextInputStyle.Short).setPlaceholder('例: 500 または all').setRequired(true)
-            )
-        );
-        return interaction.showModal(modal);
-    }
-
-    // 株ボタン
-    if (cid.startsWith('stock_buy_') || cid.startsWith('stock_sell_')) {
-        const isBuy = cid.startsWith('stock_buy_');
-        const corpId = cid.replace(isBuy ? 'stock_buy_' : 'stock_sell_', '');
-        const modal = new ModalBuilder().setCustomId(`modal_stock_${isBuy ? 'buy' : 'sell'}_${corpId}`).setTitle(isBuy ? '📈 株を購入' : '📉 株を売却');
-        modal.addComponents(
-            new ActionRowBuilder().addComponents(
-                new TextInputBuilder().setCustomId('stock_amount').setLabel('株数').setStyle(TextInputStyle.Short).setPlaceholder('例: 10').setRequired(true)
-            )
-        );
-        return interaction.showModal(modal);
-    }
-
-    // ストア: 株式発行ボタン
-    if (cid.startsWith('store_issuestock_')) {
-        const corpId = cid.replace('store_issuestock_', '');
-        const c = corpData[corpId];
-        if (!c || c.ownerId !== user.id) return interaction.reply({ content: '❌ 権限がありません。', ...EPH });
-        const isAdditional = !!c.stock;
-        const modal = new ModalBuilder().setCustomId(`modal_store_issuestock_${corpId}`).setTitle(isAdditional ? '📊 株式追加発行' : '📊 株式発行');
-        if (isAdditional) {
-            modal.addComponents(
-                new ActionRowBuilder().addComponents(
-                    new TextInputBuilder().setCustomId('stock_total_shares').setLabel(`追加発行株数（現在: ${c.stock.totalShares.toLocaleString()}株　株価: ${fmtPrice(c.stock.price)}🪙）`).setStyle(TextInputStyle.Short).setPlaceholder('例: 100').setRequired(true)
-                )
+        if (commandName === 'serverlock') {
+            const action = options.getString('action');
+            const conf = servers[guildId];
+            const exemptRoles = conf?.serverLockExemptRoles || [];
+            const exemptChannels = conf?.serverLockExemptChannels || [];
+            await interaction.deferReply({ ...EPH });
+            const isLock = action === 'lock';
+            const textChannels = interaction.guild.channels.cache.filter(c => c.type === ChannelType.GuildText && !exemptChannels.includes(c.id));
+            const allRoles = interaction.guild.roles.cache.filter(r =>
+                r.id !== interaction.guild.id &&
+                !r.managed &&
+                !exemptRoles.includes(r.id) &&
+                !r.permissions.has(PermissionFlagsBits.Administrator)
             );
-        } else {
-            modal.addComponents(
-                new ActionRowBuilder().addComponents(
-                    new TextInputBuilder().setCustomId('stock_initial_price').setLabel('初期株価').setStyle(TextInputStyle.Short).setPlaceholder('例: 500').setRequired(true)
-                ),
-                new ActionRowBuilder().addComponents(
-                    new TextInputBuilder().setCustomId('stock_total_shares').setLabel('発行株数').setStyle(TextInputStyle.Short).setPlaceholder('例: 100').setRequired(true)
-                )
-            );
+            // 全対象ロールの権限を剥奪/復元
+            for (const [, role] of allRoles) {
+                await role.setPermissions(isLock ? 0n : role.permissions).catch(() => {});
+            }
+            // 全対象チャンネルの@everyoneのViewChannelを剥奪/復元
+            for (const [, ch] of textChannels) {
+                await ch.permissionOverwrites.edit(interaction.guild.roles.everyone, { ViewChannel: isLock ? false : null }).catch(() => {});
+            }
+            servers[guildId].serverLocked = isLock;
+            saveData(SERVERS_FILE, servers);
+            const embed = new EmbedBuilder()
+                .setTitle(isLock ? '🔒 サーバーロック実行' : '🔓 サーバーロック解除')
+                .setDescription(isLock ? '対象ロールの権限を剥奪し、全チャンネルの閲覧を制限しました。' : 'サーバーロックを解除しました。')
+                .setColor(isLock ? 0xff0000 : 0x57f287)
+                .addFields(
+                    { name: '除外ロール', value: exemptRoles.length > 0 ? exemptRoles.map(r => `<@&${r}>`).join(' ') : 'なし', inline: true },
+                    { name: '除外チャンネル', value: exemptChannels.length > 0 ? exemptChannels.map(c => `<#${c}>`).join(' ') : 'なし', inline: true }
+                ).setTimestamp();
+            await interaction.editReply({ embeds: [embed] });
         }
-        return interaction.showModal(modal);
+
+        // ==================== /chset ====================
+        if (commandName === 'chset') {
+            const target = options.getChannel('channel') || interaction.channel;
+            const ch = interaction.guild.channels.cache.get(target.id);
+            if (!ch) return interaction.reply({ content: '❌ チャンネルが見つかりません。', ...EPH });
+            const buildChsetPanel = (ch) => {
+                const embed = new EmbedBuilder()
+                    .setTitle(`⚙️ チャンネル設定: #${ch.name}`)
+                    .setColor(0x3498db)
+                    .addFields(
+                        { name: 'チャンネルID', value: `\`${ch.id}\``, inline: true },
+                        { name: 'カテゴリ', value: ch.parent?.name || 'なし', inline: true },
+                        { name: '\u200b', value: '\u200b', inline: true },
+                        { name: 'トピック', value: ch.topic || '未設定', inline: false },
+                        { name: '低速モード', value: ch.rateLimitPerUser > 0 ? `${ch.rateLimitPerUser}秒` : 'オフ', inline: true },
+                        { name: 'NSFW', value: ch.nsfw ? '✅ オン' : '❌ オフ', inline: true },
+                        { name: 'ロックダウン', value: '\u200b', inline: true }
+                    );
+                const row1 = new ActionRowBuilder().addComponents(
+                    new ButtonBuilder().setCustomId(`chset_name_${ch.id}`).setLabel('チャンネル名を変更').setStyle(ButtonStyle.Primary),
+                    new ButtonBuilder().setCustomId(`chset_topic_${ch.id}`).setLabel('トピックを変更').setStyle(ButtonStyle.Primary),
+                    new ButtonBuilder().setCustomId(`chset_slowmode_${ch.id}`).setLabel('低速モード').setStyle(ButtonStyle.Secondary)
+                );
+                const row2 = new ActionRowBuilder().addComponents(
+                    new ButtonBuilder().setCustomId(`chset_nsfw_${ch.id}`).setLabel(`NSFW: ${ch.nsfw ? 'ON → OFF' : 'OFF → ON'}`).setStyle(ch.nsfw ? ButtonStyle.Danger : ButtonStyle.Secondary),
+                    new ButtonBuilder().setCustomId(`chset_lock_${ch.id}`).setLabel('ロックダウン').setStyle(ButtonStyle.Danger),
+                    new ButtonBuilder().setCustomId(`chset_unlock_${ch.id}`).setLabel('ロック解除').setStyle(ButtonStyle.Success),
+                    new ButtonBuilder().setCustomId('chset_close').setLabel('✕ 閉じる').setStyle(ButtonStyle.Secondary)
+                );
+                return { embeds: [embed], components: [row1, row2], ...EPH };
+            };
+            await interaction.reply(buildChsetPanel(ch));
+        }
+
+        // econコマンド
+        const econCommandNames = ['balance','earn','pay','bank','account','shop','buy','sell','dust','inventory','econrank','corp','crypto','stock','buystock','sellstock'];
+        if (econCommandNames.includes(commandName)) {
+            await handleEcon(interaction);
+        }
     }
 
-    if (cid === 'balance_reload') {
-        const u = getUser(econ, user.id, user);
-        const corp = load(CORP_FILE);
-        const ownedCorps = Object.values(corp).filter(c => c.ownerId === user.id);
+    // ==================== セレクトメニュー ====================
+    if (interaction.isChannelSelectMenu()) {
+        const cid = interaction.customId;
+        const channelId = interaction.values[0];
+        if (cid === 'select_log_channel') {
+            servers[guildId].logChannel = channelId;
+            saveData(SERVERS_FILE, servers);
+            await interaction.update({ content: `✅ ログ送信先を <#${channelId}> に設定しました。`, components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('set_back_main').setLabel('戻る').setStyle(ButtonStyle.Secondary))] });
+        }
+        if (cid === 'select_welcome_channel') {
+            pendingWelcomeChannel.set(`${guildId}_${interaction.user.id}`, channelId);
+            const modal = new ModalBuilder().setCustomId('modal_welcome_message').setTitle('入室通知メッセージ');
+            const input = new TextInputBuilder().setCustomId('welcome_message').setLabel('通知メッセージ').setStyle(TextInputStyle.Paragraph).setPlaceholder('{user} {server} {members} が使えます').setRequired(true);
+            if (servers[guildId].welcome?.message) input.setValue(servers[guildId].welcome.message);
+            modal.addComponents(new ActionRowBuilder().addComponents(input));
+            await interaction.showModal(modal);
+        }
+        if (cid === 'select_bye_channel') {
+            pendingByeChannel.set(`${guildId}_${interaction.user.id}`, channelId);
+            const modal = new ModalBuilder().setCustomId('modal_bye_message').setTitle('退室通知メッセージ');
+            const input = new TextInputBuilder().setCustomId('bye_message').setLabel('通知メッセージ').setStyle(TextInputStyle.Paragraph).setPlaceholder('{user} {server} {members} が使えます').setRequired(true);
+            if (servers[guildId].bye?.message) input.setValue(servers[guildId].bye.message);
+            modal.addComponents(new ActionRowBuilder().addComponents(input));
+            await interaction.showModal(modal);
+        }
+        if (cid === 'select_kaso_exclude_add') {
+            if (!servers[guildId].kasoIgnoreChannels) servers[guildId].kasoIgnoreChannels = [];
+            if (!servers[guildId].kasoIgnoreChannels.includes(channelId)) {
+                servers[guildId].kasoIgnoreChannels.push(channelId);
+                saveData(SERVERS_FILE, servers);
+                await interaction.update({ content: `✅ <#${channelId}> を除外しました。`, components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('set_menu_kaso').setLabel('戻る').setStyle(ButtonStyle.Secondary))] });
+            } else {
+                await interaction.update({ content: '⚠️ そのチャンネルは既に除外されています。', components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('set_menu_kaso').setLabel('戻る').setStyle(ButtonStyle.Secondary))] });
+            }
+        }
+        if (cid === 'select_kaso_exclude_del') {
+            const before = servers[guildId].kasoIgnoreChannels?.length || 0;
+            servers[guildId].kasoIgnoreChannels = (servers[guildId].kasoIgnoreChannels || []).filter(c => c !== channelId);
+            saveData(SERVERS_FILE, servers);
+            if ((servers[guildId].kasoIgnoreChannels?.length || 0) < before) {
+                await interaction.update({ content: `✅ <#${channelId}> の除外を解除しました。`, components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('set_menu_kaso').setLabel('戻る').setStyle(ButtonStyle.Secondary))] });
+            } else {
+                await interaction.update({ content: '⚠️ そのチャンネルは除外リストにありません。', components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('set_menu_kaso').setLabel('戻る').setStyle(ButtonStyle.Secondary))] });
+            }
+        }
+        const backToServerLock = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('set_menu_serverlock').setLabel('← 戻る').setStyle(ButtonStyle.Secondary));
+        if (cid === 'select_serverlock_ch_add') {
+            if (!servers[guildId].serverLockExemptChannels) servers[guildId].serverLockExemptChannels = [];
+            if (!servers[guildId].serverLockExemptChannels.includes(channelId)) {
+                servers[guildId].serverLockExemptChannels.push(channelId);
+                saveData(SERVERS_FILE, servers);
+                await interaction.update({ content: `✅ <#${channelId}> を除外チャンネルに追加しました。`, components: [backToServerLock] });
+            } else {
+                await interaction.update({ content: '⚠️ 既に除外されています。', components: [backToServerLock] });
+            }
+        }
+        if (cid === 'select_serverlock_ch_del') {
+            const before = servers[guildId].serverLockExemptChannels?.length || 0;
+            servers[guildId].serverLockExemptChannels = (servers[guildId].serverLockExemptChannels || []).filter(c => c !== channelId);
+            saveData(SERVERS_FILE, servers);
+            if ((servers[guildId].serverLockExemptChannels?.length || 0) < before) {
+                await interaction.update({ content: `✅ <#${channelId}> の除外を解除しました。`, components: [backToServerLock] });
+            } else {
+                await interaction.update({ content: '⚠️ そのチャンネルは除外リストにありません。', components: [backToServerLock] });
+            }
+        }
+    }
+
+    if (interaction.isRoleSelectMenu()) {
+        const cid = interaction.customId;
+        const roleId = interaction.values[0];
+        if (cid === 'select_ngword_exempt_add') {
+            if (!servers[guildId].ngwordExemptRoles) servers[guildId].ngwordExemptRoles = [];
+            if (!servers[guildId].ngwordExemptRoles.includes(roleId)) {
+                servers[guildId].ngwordExemptRoles.push(roleId);
+                saveData(SERVERS_FILE, servers);
+                await interaction.update({ content: `✅ <@&${roleId}> を除外ロールに追加しました。`, components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('set_menu_ngword').setLabel('戻る').setStyle(ButtonStyle.Secondary))] });
+            } else {
+                await interaction.update({ content: '⚠️ そのロールは既に登録されています。', components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('set_menu_ngword').setLabel('戻る').setStyle(ButtonStyle.Secondary))] });
+            }
+        }
+        if (cid === 'select_ngword_exempt_del') {
+            const before = servers[guildId].ngwordExemptRoles?.length || 0;
+            servers[guildId].ngwordExemptRoles = (servers[guildId].ngwordExemptRoles || []).filter(r => r !== roleId);
+            saveData(SERVERS_FILE, servers);
+            if ((servers[guildId].ngwordExemptRoles?.length || 0) < before) {
+                await interaction.update({ content: `✅ <@&${roleId}> を除外ロールから削除しました。`, components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('set_menu_ngword').setLabel('戻る').setStyle(ButtonStyle.Secondary))] });
+            } else {
+                await interaction.update({ content: '⚠️ そのロールは登録されていません。', components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('set_menu_ngword').setLabel('戻る').setStyle(ButtonStyle.Secondary))] });
+            }
+        }
+        const backToSLRole = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('set_menu_serverlock').setLabel('← 戻る').setStyle(ButtonStyle.Secondary));
+        if (cid === 'select_serverlock_role_add') {
+            if (!servers[guildId].serverLockExemptRoles) servers[guildId].serverLockExemptRoles = [];
+            if (!servers[guildId].serverLockExemptRoles.includes(roleId)) {
+                servers[guildId].serverLockExemptRoles.push(roleId);
+                saveData(SERVERS_FILE, servers);
+                await interaction.update({ content: `✅ <@&${roleId}> を除外ロールに追加しました。`, components: [backToSLRole] });
+            } else {
+                await interaction.update({ content: '⚠️ 既に登録されています。', components: [backToSLRole] });
+            }
+        }
+        if (cid === 'select_serverlock_role_del') {
+            const before = servers[guildId].serverLockExemptRoles?.length || 0;
+            servers[guildId].serverLockExemptRoles = (servers[guildId].serverLockExemptRoles || []).filter(r => r !== roleId);
+            saveData(SERVERS_FILE, servers);
+            if ((servers[guildId].serverLockExemptRoles?.length || 0) < before) {
+                await interaction.update({ content: `✅ <@&${roleId}> を除外ロールから削除しました。`, components: [backToSLRole] });
+            } else {
+                await interaction.update({ content: '⚠️ そのロールは登録されていません。', components: [backToSLRole] });
+            }
+        }
+    }
+
+    // ==================== モーダル ====================
+    if (interaction.isModalSubmit()) {
+        const cid = interaction.customId;
+        if (cid === 'modal_welcome_message') {
+            const message = interaction.fields.getTextInputValue('welcome_message');
+            const channelId = pendingWelcomeChannel.get(`${guildId}_${interaction.user.id}`);
+            if (!channelId) return interaction.reply({ content: '❌ タイムアウトしました。再度設定してください。', ...EPH });
+            pendingWelcomeChannel.delete(`${guildId}_${interaction.user.id}`);
+            servers[guildId].welcome = { channel: channelId, message };
+            saveData(SERVERS_FILE, servers);
+            await interaction.reply({ content: `✅ 入室通知を <#${channelId}> に設定しました。\nメッセージ: \`${message}\`\n変数: \`{user}\` \`{server}\` \`{members}\``, ...EPH });
+        }
+        if (cid === 'modal_bye_message') {
+            const message = interaction.fields.getTextInputValue('bye_message');
+            const channelId = pendingByeChannel.get(`${guildId}_${interaction.user.id}`);
+            if (!channelId) return interaction.reply({ content: '❌ タイムアウトしました。再度設定してください。', ...EPH });
+            pendingByeChannel.delete(`${guildId}_${interaction.user.id}`);
+            servers[guildId].bye = { channel: channelId, message };
+            saveData(SERVERS_FILE, servers);
+            await interaction.reply({ content: `✅ 退室通知を <#${channelId}> に設定しました。\nメッセージ: \`${message}\`\n変数: \`{user}\` \`{server}\` \`{members}\``, ...EPH });
+        }
+        if (cid === 'modal_ngword_add') {
+            const word = interaction.fields.getTextInputValue('ngword_input').trim();
+            if (!word) return interaction.reply({ content: '❌ ワードを入力してください。', ...EPH });
+            if (!servers[guildId].ngwords) servers[guildId].ngwords = [];
+            if (!servers[guildId].ngwords.includes(word)) {
+                servers[guildId].ngwords.push(word);
+                saveData(SERVERS_FILE, servers);
+                await interaction.reply({ content: `✅ 「${word}」をNGワードに追加しました。`, ...EPH });
+            } else { await interaction.reply({ content: '⚠️ そのワードは既に登録されています。', ...EPH }); }
+        }
+        if (cid === 'modal_ngword_del') {
+            const word = interaction.fields.getTextInputValue('ngword_input').trim();
+            const before = servers[guildId].ngwords?.length || 0;
+            servers[guildId].ngwords = (servers[guildId].ngwords || []).filter(w => w !== word);
+            saveData(SERVERS_FILE, servers);
+            if ((servers[guildId].ngwords?.length || 0) < before) { await interaction.reply({ content: `✅ 「${word}」をNGワードから削除しました。`, ...EPH }); }
+            else { await interaction.reply({ content: '⚠️ そのワードは登録されていません。', ...EPH }); }
+        }
+        if (cid === 'modal_ngword_timeout') {
+            const sec = parseInt(interaction.fields.getTextInputValue('timeout_seconds').trim());
+            if (isNaN(sec) || sec < 0) return interaction.reply({ content: '❌ 正しい秒数を入力してください。', ...EPH });
+            servers[guildId].ngwordTimeoutSeconds = sec;
+            saveData(SERVERS_FILE, servers);
+            await interaction.reply({ content: `✅ タイムアウト秒数を ${sec}秒 に設定しました。`, ...EPH });
+        }
+        if (cid === 'modal_ngword_violation') {
+            const count = parseInt(interaction.fields.getTextInputValue('violation_count').trim());
+            if (isNaN(count) || count < 1) return interaction.reply({ content: '❌ 1以上の数値を入力してください。', ...EPH });
+            servers[guildId].ngwordViolationLimit = count;
+            saveData(SERVERS_FILE, servers);
+            await interaction.reply({ content: `✅ 連呼罰則を ${count}回 に設定しました。`, ...EPH });
+        }
+        if (cid === 'modal_mute_role') {
+            const roleName = interaction.fields.getTextInputValue('mute_role_name').trim();
+            if (!roleName) return interaction.reply({ content: '❌ ロール名を入力してください。', ...EPH });
+            let role = interaction.guild.roles.cache.find(r => r.name === roleName);
+            if (!role) {
+                role = await interaction.guild.roles.create({ name: roleName, permissions: [], reason: 'ミュートロール自動作成' }).catch(() => null);
+                if (!role) return interaction.reply({ content: '❌ ロールの作成に失敗しました。', ...EPH });
+            }
+            servers[guildId].muteRole = role.id;
+            saveData(SERVERS_FILE, servers);
+            await interaction.reply({ content: `✅ ミュートロールを <@&${role.id}> に設定しました。`, ...EPH });
+        }
+
+        if (cid.startsWith('modal_chset_name_')) {
+            const chId = cid.replace('modal_chset_name_', '');
+            const ch = interaction.guild.channels.cache.get(chId);
+            if (!ch) return interaction.reply({ content: '❌ チャンネルが見つかりません。', ...EPH });
+            const newName = interaction.fields.getTextInputValue('chset_name_input').trim();
+            await ch.setName(newName).catch(() => null);
+            await interaction.reply({ content: `✅ チャンネル名を **${newName}** に変更しました。`, ...EPH });
+        }
+
+        if (cid.startsWith('modal_chset_topic_')) {
+            const chId = cid.replace('modal_chset_topic_', '');
+            const ch = interaction.guild.channels.cache.get(chId);
+            if (!ch) return interaction.reply({ content: '❌ チャンネルが見つかりません。', ...EPH });
+            const newTopic = interaction.fields.getTextInputValue('chset_topic_input').trim();
+            await ch.setTopic(newTopic || null).catch(() => null);
+            await interaction.reply({ content: `✅ トピックを設定しました。`, ...EPH });
+        }
+
+        if (cid.startsWith('modal_chset_slowmode_')) {
+            const chId = cid.replace('modal_chset_slowmode_', '');
+            const ch = interaction.guild.channels.cache.get(chId);
+            if (!ch) return interaction.reply({ content: '❌ チャンネルが見つかりません。', ...EPH });
+            const sec = parseInt(interaction.fields.getTextInputValue('chset_slowmode_input')) || 0;
+            const clamped = Math.min(21600, Math.max(0, sec));
+            await ch.setRateLimitPerUser(clamped).catch(() => null);
+            await interaction.reply({ content: clamped === 0 ? `✅ 低速モードをオフにしました。` : `✅ 低速モードを **${clamped}秒** に設定しました。`, ...EPH });
+        }
+
+        if (cid === 'modal_autoreply_add') {
+            const trigger = interaction.fields.getTextInputValue('ar_trigger').trim();
+            const responsesRaw = interaction.fields.getTextInputValue('ar_responses').trim();
+            const modeRaw = interaction.fields.getTextInputValue('ar_mode').trim().toLowerCase();
+            const matchRaw = interaction.fields.getTextInputValue('ar_match').trim().toLowerCase();
+            const responses = responsesRaw.split(',').map(r => r.trim()).filter(Boolean);
+            const mode = modeRaw === 'send' ? 'send' : 'reply';
+            const matchType = matchRaw === 'exact' ? 'exact' : 'contains';
+            if (!trigger || responses.length === 0) return interaction.reply({ content: '❌ トリガーと返答を入力してください。', ...EPH });
+            if (!servers[guildId].autoReplies) servers[guildId].autoReplies = [];
+            if (servers[guildId].autoReplies.length >= 50) return interaction.reply({ content: '❌ 自動返信は最大50件までです。', ...EPH });
+            servers[guildId].autoReplies.push({ trigger, responses, mode, matchType });
+            saveData(SERVERS_FILE, servers);
+            const modeLabel = mode === 'reply' ? '↩️ 返信' : '💬 送信';
+            const matchLabel = matchType === 'exact' ? '完全一致' : '含む';
+            await interaction.reply({ content: `✅ 自動返信を追加しました。\nトリガー: \`${trigger}\`\n返答: ${responses.length}件\nモード: ${modeLabel} | 判定: ${matchLabel}`, ...EPH });
+        }
+    }
+
+    // ==================== ボタン ====================
+    if (interaction.isButton()) {
+        const cid = interaction.customId;
+
+        if (cid === 'delete_reply') {
+            await interaction.message.delete().catch(() => {});
+            return;
+        }
+
+        // chset ボタン
+        if (cid.startsWith('chset_')) {
+            const parts = cid.split('_');
+            const action = parts[1];
+            const channelId = parts[2];
+            if (action === 'close') { await interaction.message.delete().catch(() => {}); return; }
+            const ch = channelId ? interaction.guild.channels.cache.get(channelId) : null;
+            if (!ch) return interaction.reply({ content: '❌ チャンネルが見つかりません。', ...EPH });
+
+            if (action === 'nsfw') {
+                await ch.setNSFW(!ch.nsfw);
+                await interaction.update({
+                    embeds: [new EmbedBuilder().setTitle(`⚙️ チャンネル設定: #${ch.name}`).setColor(0x3498db).addFields(
+                        { name: 'トピック', value: ch.topic || '未設定', inline: false },
+                        { name: '低速モード', value: ch.rateLimitPerUser > 0 ? `${ch.rateLimitPerUser}秒` : 'オフ', inline: true },
+                        { name: 'NSFW', value: ch.nsfw ? '✅ オン' : '❌ オフ', inline: true }
+                    )],
+                    components: [
+                        new ActionRowBuilder().addComponents(
+                            new ButtonBuilder().setCustomId(`chset_name_${ch.id}`).setLabel('チャンネル名を変更').setStyle(ButtonStyle.Primary),
+                            new ButtonBuilder().setCustomId(`chset_topic_${ch.id}`).setLabel('トピックを変更').setStyle(ButtonStyle.Primary),
+                            new ButtonBuilder().setCustomId(`chset_slowmode_${ch.id}`).setLabel('低速モード').setStyle(ButtonStyle.Secondary)
+                        ),
+                        new ActionRowBuilder().addComponents(
+                            new ButtonBuilder().setCustomId(`chset_nsfw_${ch.id}`).setLabel(`NSFW: ${ch.nsfw ? 'ON → OFF' : 'OFF → ON'}`).setStyle(ch.nsfw ? ButtonStyle.Danger : ButtonStyle.Secondary),
+                            new ButtonBuilder().setCustomId(`chset_lock_${ch.id}`).setLabel('ロックダウン').setStyle(ButtonStyle.Danger),
+                            new ButtonBuilder().setCustomId(`chset_unlock_${ch.id}`).setLabel('ロック解除').setStyle(ButtonStyle.Success),
+                            new ButtonBuilder().setCustomId('chset_close').setLabel('✕ 閉じる').setStyle(ButtonStyle.Secondary)
+                        )
+                    ]
+                });
+                return;
+            }
+
+            if (action === 'lock') {
+                await ch.permissionOverwrites.edit(interaction.guild.roles.everyone, { SendMessages: false });
+                return interaction.reply({ content: `🔒 <#${ch.id}> をロックダウンしました。`, ...EPH });
+            }
+            if (action === 'unlock') {
+                await ch.permissionOverwrites.edit(interaction.guild.roles.everyone, { SendMessages: null });
+                return interaction.reply({ content: `🔓 <#${ch.id}> のロックを解除しました。`, ...EPH });
+            }
+
+            if (action === 'name') {
+                const modal = new ModalBuilder().setCustomId(`modal_chset_name_${ch.id}`).setTitle('チャンネル名を変更');
+                modal.addComponents(new ActionRowBuilder().addComponents(
+                    new TextInputBuilder().setCustomId('chset_name_input').setLabel('新しいチャンネル名').setStyle(TextInputStyle.Short).setValue(ch.name).setRequired(true).setMaxLength(100)
+                ));
+                return interaction.showModal(modal);
+            }
+            if (action === 'topic') {
+                const modal = new ModalBuilder().setCustomId(`modal_chset_topic_${ch.id}`).setTitle('トピックを変更');
+                modal.addComponents(new ActionRowBuilder().addComponents(
+                    new TextInputBuilder().setCustomId('chset_topic_input').setLabel('新しいトピック').setStyle(TextInputStyle.Paragraph).setValue(ch.topic || '').setRequired(false).setMaxLength(1024)
+                ));
+                return interaction.showModal(modal);
+            }
+            if (action === 'slowmode') {
+                const modal = new ModalBuilder().setCustomId(`modal_chset_slowmode_${ch.id}`).setTitle('低速モード設定');
+                modal.addComponents(new ActionRowBuilder().addComponents(
+                    new TextInputBuilder().setCustomId('chset_slowmode_input').setLabel('秒数（0でオフ、最大21600）').setStyle(TextInputStyle.Short).setValue(String(ch.rateLimitPerUser || 0)).setRequired(true).setMaxLength(5)
+                ));
+                return interaction.showModal(modal);
+            }
+            return;
+        }
+
+        if (cid.startsWith('ranking_prev_') || cid.startsWith('ranking_next_')) {
+            const isPrev = cid.startsWith('ranking_prev_');
+            const currentPage = parseInt(cid.split('_')[2]);
+            const newPage = isPrev ? currentPage - 1 : currentPage + 1;
+            const sorted = getAllRanking(users);
+            const { embed, safePage, totalPages } = buildRankingEmbed(sorted, newPage);
+            await interaction.update({ embeds: [embed], components: totalPages > 1 ? [buildRankingRow(safePage, totalPages)] : [] });
+        }
+
+        if (cid === 'set_menu_log') {
+            const select = new ChannelSelectMenuBuilder().setCustomId('select_log_channel').setPlaceholder('ログ送信先チャンネルを選択').addChannelTypes(ChannelType.GuildText);
+            const lc = servers[guildId].logConfig;
+            await interaction.update({ content: `📋 **ログ設定**\n\n現在のログチャンネル: ${servers[guildId].logChannel ? `<#${servers[guildId].logChannel}>` : '未設定'}\n\nチャンネルを選択してください。`, components: [new ActionRowBuilder().addComponents(select), ...createLogConfigRows(lc)] });
+        }
+        if (cid === 'set_back_main') await interaction.update(buildSetPanel(servers[guildId]));
+        if (cid === 'set_lv_toggle') { servers[guildId].leveling = !servers[guildId].leveling; saveData(SERVERS_FILE, servers); await interaction.update(buildSetPanel(servers[guildId])); }
+        if (cid === 'set_menu_lock') {
+            servers[guildId].locked = !servers[guildId].locked;
+            const channels = interaction.guild.channels.cache.filter(c => c.type === ChannelType.GuildText);
+            for (const [, ch] of channels) await ch.permissionOverwrites.edit(interaction.guild.roles.everyone, { SendMessages: servers[guildId].locked ? false : null }).catch(() => {});
+            saveData(SERVERS_FILE, servers);
+            await interaction.update(buildSetPanel(servers[guildId]));
+        }
+        if (cid.startsWith('log_toggle_')) {
+            const key = cid.replace('log_toggle_', '');
+            if (!servers[guildId].logConfig) servers[guildId].logConfig = {};
+            servers[guildId].logConfig[key] = !servers[guildId].logConfig[key];
+            saveData(SERVERS_FILE, servers);
+            const select = new ChannelSelectMenuBuilder().setCustomId('select_log_channel').setPlaceholder('ログ送信先チャンネルを選択').addChannelTypes(ChannelType.GuildText);
+            await interaction.update({ content: `📋 **ログ設定**\n\n現在のログチャンネル: ${servers[guildId].logChannel ? `<#${servers[guildId].logChannel}>` : '未設定'}`, components: [new ActionRowBuilder().addComponents(select), ...createLogConfigRows(servers[guildId].logConfig)] });
+        }
+        if (cid === 'set_menu_welcome') {
+            const current = servers[guildId].welcome;
+            const select = new ChannelSelectMenuBuilder().setCustomId('select_welcome_channel').setPlaceholder('送信先チャンネルを選択').addChannelTypes(ChannelType.GuildText);
+            await interaction.update({ content: `📥 **入室通知設定**\n\n現在: ${current?.channel ? `<#${current.channel}>` : '未設定'}\nメッセージ: ${current?.message || '未設定'}\n\nチャンネルを選択後、メッセージを入力します。`, components: [new ActionRowBuilder().addComponents(select), new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('set_back_main').setLabel('戻る').setStyle(ButtonStyle.Secondary))] });
+        }
+        if (cid === 'set_menu_bye') {
+            const current = servers[guildId].bye;
+            const select = new ChannelSelectMenuBuilder().setCustomId('select_bye_channel').setPlaceholder('送信先チャンネルを選択').addChannelTypes(ChannelType.GuildText);
+            await interaction.update({ content: `📤 **退室通知設定**\n\n現在: ${current?.channel ? `<#${current.channel}>` : '未設定'}\nメッセージ: ${current?.message || '未設定'}\n\nチャンネルを選択後、メッセージを入力します。`, components: [new ActionRowBuilder().addComponents(select), new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('set_back_main').setLabel('戻る').setStyle(ButtonStyle.Secondary))] });
+        }
+        if (cid === 'set_menu_ngword') await interaction.update(buildNgwordPanel(servers[guildId]));
+        if (cid === 'ngword_add') {
+            const modal = new ModalBuilder().setCustomId('modal_ngword_add').setTitle('NGワード追加');
+            modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('ngword_input').setLabel('追加するワード').setStyle(TextInputStyle.Short).setRequired(true)));
+            await interaction.showModal(modal);
+        }
+        if (cid === 'ngword_del') {
+            const modal = new ModalBuilder().setCustomId('modal_ngword_del').setTitle('NGワード削除');
+            modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('ngword_input').setLabel('削除するワード').setStyle(TextInputStyle.Short).setRequired(true)));
+            await interaction.showModal(modal);
+        }
+        if (cid === 'ngword_exempt_add') {
+            const select = new RoleSelectMenuBuilder().setCustomId('select_ngword_exempt_add').setPlaceholder('除外するロールを選択');
+            await interaction.update({ content: '🔓 **除外ロール追加**\n\n除外するロールを選択してください。', components: [new ActionRowBuilder().addComponents(select), new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('set_menu_ngword').setLabel('戻る').setStyle(ButtonStyle.Secondary))] });
+        }
+        if (cid === 'ngword_exempt_del') {
+            const select = new RoleSelectMenuBuilder().setCustomId('select_ngword_exempt_del').setPlaceholder('削除するロールを選択');
+            await interaction.update({ content: '🔒 **除外ロール削除**\n\n削除するロールを選択してください。', components: [new ActionRowBuilder().addComponents(select), new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('set_menu_ngword').setLabel('戻る').setStyle(ButtonStyle.Secondary))] });
+        }
+        if (cid === 'ngword_timeout_set') {
+            const modal = new ModalBuilder().setCustomId('modal_ngword_timeout').setTitle('タイムアウト秒数設定');
+            const input = new TextInputBuilder().setCustomId('timeout_seconds').setLabel('秒数 (0=タイムアウトなし)').setStyle(TextInputStyle.Short).setPlaceholder('例: 300').setRequired(true);
+            if (servers[guildId].ngwordTimeoutSeconds != null) input.setValue(String(servers[guildId].ngwordTimeoutSeconds));
+            modal.addComponents(new ActionRowBuilder().addComponents(input));
+            await interaction.showModal(modal);
+        }
+        if (cid === 'ngword_violation_set') {
+            const modal = new ModalBuilder().setCustomId('modal_ngword_violation').setTitle('連呼罰則回数設定');
+            const input = new TextInputBuilder().setCustomId('violation_count').setLabel('何回でタイムアウトするか').setStyle(TextInputStyle.Short).setPlaceholder('例: 3').setRequired(true);
+            if (servers[guildId].ngwordViolationLimit != null) input.setValue(String(servers[guildId].ngwordViolationLimit));
+            modal.addComponents(new ActionRowBuilder().addComponents(input));
+            await interaction.showModal(modal);
+        }
+        if (cid === 'set_menu_kaso') {
+            const ignored = servers[guildId].kasoIgnoreChannels || [];
+            const list = ignored.length > 0 ? ignored.map(c => `<#${c}>`).join('、') : 'なし';
+            const selectAdd = new ChannelSelectMenuBuilder().setCustomId('select_kaso_exclude_add').setPlaceholder('除外するチャンネルを選択').addChannelTypes(ChannelType.GuildText);
+            const selectDel = new ChannelSelectMenuBuilder().setCustomId('select_kaso_exclude_del').setPlaceholder('除外を解除するチャンネルを選択').addChannelTypes(ChannelType.GuildText);
+            await interaction.update({ content: `📊 **調査除外設定**\n\n除外チャンネル: ${list}\n※ticket-チャンネルは自動除外`, components: [new ActionRowBuilder().addComponents(selectAdd), new ActionRowBuilder().addComponents(selectDel), new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('set_back_main').setLabel('戻る').setStyle(ButtonStyle.Secondary))] });
+        }
+        if (cid === 'set_menu_mute') {
+            const modal = new ModalBuilder().setCustomId('modal_mute_role').setTitle('ミュートロール設定');
+            const input = new TextInputBuilder().setCustomId('mute_role_name').setLabel('ロール名（なければ自動作成）').setStyle(TextInputStyle.Short).setPlaceholder('例: Muted').setRequired(true);
+            const current = servers[guildId].muteRole ? interaction.guild.roles.cache.get(servers[guildId].muteRole)?.name : null;
+            if (current) input.setValue(current);
+            modal.addComponents(new ActionRowBuilder().addComponents(input));
+            await interaction.showModal(modal);
+        }
+        if (cid === 'set_menu_serverlock') {
+            const conf = servers[guildId];
+            const exemptRoles = conf.serverLockExemptRoles || [];
+            const exemptChannels = conf.serverLockExemptChannels || [];
+            const content = `🔒 **サーバーロック設定**\n\n除外ロール: ${exemptRoles.length > 0 ? exemptRoles.map(r => `<@&${r}>`).join(' ') : 'なし'}\n除外チャンネル: ${exemptChannels.length > 0 ? exemptChannels.map(c => `<#${c}>`).join(' ') : 'なし'}\n\n※ロック実行は \`/serverlock\` から`;
+            const selectRoleAdd = new RoleSelectMenuBuilder().setCustomId('select_serverlock_role_add').setPlaceholder('除外ロールを追加');
+            const selectRoleDel = new RoleSelectMenuBuilder().setCustomId('select_serverlock_role_del').setPlaceholder('除外ロールを削除');
+            const selectChAdd = new ChannelSelectMenuBuilder().setCustomId('select_serverlock_ch_add').setPlaceholder('除外チャンネルを追加').addChannelTypes(ChannelType.GuildText);
+            const selectChDel = new ChannelSelectMenuBuilder().setCustomId('select_serverlock_ch_del').setPlaceholder('除外チャンネルを削除').addChannelTypes(ChannelType.GuildText);
+            await interaction.update({ content, components: [
+                new ActionRowBuilder().addComponents(selectRoleAdd),
+                new ActionRowBuilder().addComponents(selectRoleDel),
+                new ActionRowBuilder().addComponents(selectChAdd),
+                new ActionRowBuilder().addComponents(selectChDel),
+                new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('set_back_main').setLabel('← 戻る').setStyle(ButtonStyle.Secondary))
+            ]});
+        }
+
+        // 自動返信管理
+        if (cid === 'set_menu_autoreply') {
+            await interaction.update(buildAutoReplyPanel(servers[guildId]));
+        }
+        if (cid === 'autoreply_add') {
+            const modal = new ModalBuilder().setCustomId('modal_autoreply_add').setTitle('自動返信 追加');
+            modal.addComponents(
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('ar_trigger').setLabel('反応するワード').setStyle(TextInputStyle.Short).setPlaceholder('例: おはよう').setRequired(true)),
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('ar_responses').setLabel('返答内容（,区切りでランダム）').setStyle(TextInputStyle.Paragraph).setPlaceholder('例: おはようございます,おはよう！,よっ').setRequired(true)),
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('ar_mode').setLabel('モード: reply（返信）/ send（送信）').setStyle(TextInputStyle.Short).setPlaceholder('reply または send').setValue('reply').setRequired(true)),
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('ar_match').setLabel('判定: exact（完全一致）/ contains（含む）').setStyle(TextInputStyle.Short).setPlaceholder('exact または contains').setValue('contains').setRequired(true))
+            );
+            return interaction.showModal(modal);
+        }
+        if (cid === 'autoreply_del') {
+            const replies = servers[guildId].autoReplies || [];
+            if (replies.length === 0) return interaction.reply({ content: '削除できる自動返信がありません。', ...EPH });
+            const select = new StringSelectMenuBuilder()
+                .setCustomId('autoreply_del_select')
+                .setPlaceholder('削除するルールを選択')
+                .addOptions(replies.slice(0, 25).map((r, i) => ({
+                    label: `${i + 1}. ${r.trigger}`,
+                    description: r.responses[0]?.slice(0, 50) || '',
+                    value: String(i)
+                })));
+            return interaction.reply({ content: '削除するルールを選択:', components: [new ActionRowBuilder().addComponents(select)], ...EPH });
+        }
+        if (cid.startsWith('ticket_open_')) {
+            const mid = cid.split('_')[2];
+            const channel = await interaction.guild.channels.create({
+                name: `ticket-${interaction.user.username}`,
+                type: ChannelType.GuildText,
+                permissionOverwrites: [
+                    { id: interaction.guild.id, deny: [PermissionFlagsBits.ViewChannel] },
+                    { id: interaction.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] },
+                    { id: mid, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] }
+                ]
+            });
+            const closeBtn = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('ticket_close').setLabel('チケットを閉じる').setStyle(ButtonStyle.Danger));
+            await channel.send({ content: `<@&${mid}> チケット作成ありがとうございます！ \n管理者が来るまでお待ちください`, components: [closeBtn] });
+            await interaction.reply({ content: `チケットを作成しました: ${channel}`, ...EPH });
+        }
+        if (cid === 'ticket_close') {
+            await interaction.reply('チケットを閉鎖します...');
+            setTimeout(() => interaction.channel.delete().catch(() => {}), 3000);
+        }
+        if (cid === 'rp_delete_panel') {
+            const msgs = await interaction.channel.messages.fetch({ limit: 50 });
+            const panel = msgs.find(m => m.author.id === client.user.id && m.components.length > 0 && m.components[0].components.some(c => c.customId?.startsWith('rp_')));
+            if (!panel) return interaction.reply({ content: '❌ 近くに役職パネルが見つかりませんでした。', ...EPH });
+            await panel.delete().catch(() => {});
+            await interaction.reply({ content: '✅ 役職パネルを削除しました。', ...EPH });
+        }
+        if (cid.startsWith('rp_') && cid !== 'rp_delete_panel') {
+            const rid = cid.split('_')[1];
+            if (interaction.member.roles.cache.has(rid)) { await interaction.member.roles.remove(rid); await interaction.reply({ content: '役職を解除しました。', ...EPH }); }
+            else { await interaction.member.roles.add(rid); await interaction.reply({ content: '役職を付与しました。', ...EPH }); }
+        }
+
+        // econ ボタン
+        const econBtnPrefixes = ['bj_hit_', 'bj_stand_', 'bj_double_', 'bank_loan', 'bank_repay', 'bank_reload', 'balance_reload', 'stock_buy_', 'stock_sell_', 'stock_refresh_', 'crypto_buy_', 'crypto_sell_', 'crypto_refresh_', 'store_issuestock_', 'store_additem_', 'store_removeitem_', 'store_withdraw_'];
+        if (econBtnPrefixes.some(p => cid.startsWith(p))) {
+            await handleEconInteraction(interaction);
+        }
+    }
+
+    // econ セレクトメニュー
+    if (interaction.isStringSelectMenu()) {
+        const cid = interaction.customId;
+        if (cid === 'autoreply_del_select') {
+            const servers = loadData(SERVERS_FILE);
+            const idx = parseInt(interaction.values[0]);
+            if (!servers[guildId].autoReplies || !servers[guildId].autoReplies[idx]) return interaction.reply({ content: '❌ 該当ルールが見つかりません。', ...EPH });
+            const removed = servers[guildId].autoReplies.splice(idx, 1)[0];
+            saveData(SERVERS_FILE, servers);
+            return interaction.reply({ content: `✅ トリガー「${removed.trigger}」の自動返信を削除しました。`, ...EPH });
+        }
+        const econSelectPrefixes = ['dust_select_', 'buy_select', 'sell_select_', 'store_select_corp', 'store_select_view', 'store_select_mixed', 'store_buy_', 'stock_select_view', 'stock_buyselect_', 'stock_sellselect_', 'corp_deposit_select_', 'crypto_view_select', 'crypto_buyselect_', 'crypto_sellselect_'];
+        if (econSelectPrefixes.some(p => cid === p || cid.startsWith(p))) {
+            await handleEconInteraction(interaction);
+        } else if (cid.startsWith('store_delitem_select_')) {
+            await handleEconSelect(interaction);
+        }
+    }
+
+    // econ モーダル
+    if (interaction.isModalSubmit() && (interaction.customId.startsWith('modal_store_') || interaction.customId.startsWith('modal_earn_') || interaction.customId.startsWith('modal_bank_') || interaction.customId.startsWith('modal_stock_') || interaction.customId.startsWith('modal_crypto_'))) {
+        await handleEconModal(interaction);
+    }
+});
+
+// ==================== メッセージイベント ====================
+client.on(Events.MessageCreate, async (message) => {
+    if (message.author.bot) return;
+    if (message.content.startsWith('!') && OWNER_IDS.includes(message.author.id)) {
+        const args = message.content.slice(1).trim().split(/\s+/);
+        const cmd = args.shift().toLowerCase();
+
+        if (cmd === 'kick') {
+            const input = args[0];
+            if (!input) return message.reply('使用法: !kick [ユーザーID or メンション] [理由]');
+            const userId = input.replace(/[<@!>]/g, '');
+            const reason = args.slice(1).join(' ') || '理由なし';
+            if (!message.guild) return message.reply('❌ サーバー内で使用してください。');
+            const member = await message.guild.members.fetch(userId).catch(() => null);
+            if (!member) return message.reply('❌ ユーザーが見つかりません。');
+            if (!member.kickable) return message.reply('❌ このユーザーをキックできません。');
+            await member.kick(reason);
+            return message.reply(`👢 **${member.user.tag}** をキックしました。理由: ${reason}`);
+        }
+
+        if (cmd === 'ban') {
+            const input = args[0];
+            if (!input) return message.reply('使用法: !ban [ユーザーID or メンション] [理由]');
+            const userId = input.replace(/[<@!>]/g, '');
+            const reason = args.slice(1).join(' ') || '理由なし';
+            if (!message.guild) return message.reply('❌ サーバー内で使用してください。');
+            const member = await message.guild.members.fetch(userId).catch(() => null);
+            if (member && !member.bannable) return message.reply('❌ このユーザーをBANできません。');
+            await message.guild.members.ban(userId, { reason });
+            return message.reply(`🔨 \`${userId}\` をBANしました。理由: ${reason}`);
+        }
+
+        if (cmd === 'unban') {
+            const input = args[0];
+            if (!input) return message.reply('使用法: !unban [ユーザーID or メンション]');
+            const userId = input.replace(/[<@!>]/g, '');
+            if (!message.guild) return message.reply('❌ サーバー内で使用してください。');
+            const banned = await message.guild.bans.fetch(userId).catch(() => null);
+            if (!banned) return message.reply('❌ そのユーザーはBANされていません。');
+            await message.guild.members.unban(userId);
+            return message.reply(`🔓 \`${userId}\` のBANを解除しました。`);
+        }
+
+        if (cmd === 'give') {
+            const input = args[0];
+            const amount = parseInt(args[1]);
+            if (!input || isNaN(amount)) return message.reply('使用法: !give [ユーザーID or メンション] [金額]');
+            const userId = input.replace(/[<@!>]/g, '');
+            const { load: loadEcon, save: saveEcon } = (() => {
+                const fs = require('fs'), path = require('path');
+                const f = path.join(__dirname, 'data', 'econ.json');
+                return {
+                    load: () => fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')) : {},
+                    save: (d) => fs.writeFileSync(f, JSON.stringify(d, null, 4))
+                };
+            })();
+            const econ = loadEcon();
+            if (!econ[userId]) econ[userId] = { balance: 0, dailyLast: 0, workLast: 0, crimeLast: 0, inventory: [] };
+            econ[userId].balance = Math.max(0, econ[userId].balance + amount);
+            saveEcon(econ);
+            const sign = amount >= 0 ? '+' : '';
+            return message.reply(`✅ \`${userId}\` の残高を **${sign}${amount.toLocaleString()}** 🪙 変更しました。現在: **${econ[userId].balance.toLocaleString()}** 🪙`);
+        }
+
+        await handleAdminCommands(message, client, OWNER_IDS, loadData, saveData, USERS_FILE);
+        return;
+    }
+    if (!message.guild) return;
+    const servers = loadData(SERVERS_FILE);
+    const users = loadData(USERS_FILE);
+    const gid = message.guildId;
+
+    // !bal コマンド（全員使用可）
+    if (message.content.toLowerCase().startsWith('!bal')) {
+        const fs = require('fs'), path = require('path');
+        const econPath = path.join(__dirname, 'data', 'econ.json');
+        const econ = fs.existsSync(econPath) ? JSON.parse(fs.readFileSync(econPath, 'utf8')) : {};
+        const mention = message.mentions.users.first();
+        const target = mention || message.author;
+        const u = econ[target.id] || { balance: 0 };
         const loan = u.loan || 0;
-        const netBalance = round3(u.balance - loan);
-        const embed = new EmbedBuilder()
-            .setTitle(`${CURRENCY} ${user.username} の所持金`)
-            .setThumbnail(user.displayAvatarURL())
-            .setColor(netBalance < 0 ? 0xff4757 : 0xf1c40f)
+        const { EmbedBuilder: EB } = require('discord.js');
+        const embed = new EB().setTitle(`🪙 ${target.username} の所持金`)
+            .setThumbnail(target.displayAvatarURL())
+            .setColor(0xf1c40f)
             .addFields(
-                { name: '残高', value: `**${fmtPrice(u.balance)}** ${CURRENCY}`, inline: true },
-                { name: '借入残高', value: loan > 0 ? `**-${fmtPrice(loan)}** ${CURRENCY}` : 'なし', inline: true },
-                { name: '実質残高', value: `**${fmtPrice(netBalance)}** ${CURRENCY}${netBalance < 0 ? ' 🔴' : ''}`, inline: true },
-                { name: '保有会社', value: ownedCorps.length > 0 ? ownedCorps.map(c => c.name).join(', ') : 'なし', inline: true }
+                { name: '残高', value: `**${u.balance.toLocaleString()}** 🪙`, inline: true },
+                { name: '借入残高', value: `**${loan.toLocaleString()}** 🪙`, inline: true }
             ).setTimestamp();
-        const row = new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId('balance_reload').setLabel('🔄 更新').setStyle(ButtonStyle.Secondary)
-        );
-        return interaction.update({ embeds: [embed], components: [row, delBtn()] });
+        return message.reply({ embeds: [embed] });
     }
 
-    // crypto ボタン
-    if (cid.startsWith('crypto_buy_') || cid.startsWith('crypto_sell_') || cid.startsWith('crypto_refresh_')) {
-        const CRYPTO_FILE = path.join(__dirname, 'data', 'crypto.json');
-        const cryptoData = load(CRYPTO_FILE);
-        const action = cid.startsWith('crypto_buy_') ? 'buy' : cid.startsWith('crypto_sell_') ? 'sell' : 'refresh';
-        const coinId = cid.replace(`crypto_${action}_`, '');
-        const coin = cryptoData[coinId];
-        if (!coin) return interaction.reply({ content: '❌ 通貨が見つかりません。', ...EPH });
-        if (action === 'refresh') return showCryptoDetail(interaction, coin, econ, user, CRYPTO_FILE, true);
-        const modal = new ModalBuilder().setCustomId(`modal_crypto_${action}_${coinId}`).setTitle(action === 'buy' ? `💰 ${coin.name} 購入` : `💸 ${coin.name} 売却`);
-        modal.addComponents(new ActionRowBuilder().addComponents(
-            new TextInputBuilder().setCustomId('crypto_amount').setLabel('枚数（数字・all）').setStyle(TextInputStyle.Short).setPlaceholder('例: 1000 または all').setRequired(true)
-        ));
-        return interaction.showModal(modal);
+    if (!message.channel.name?.startsWith('ticket-')) recordMessage(gid, message.channelId, message.author.id);
+
+    // メッセージ送信ログ
+    if (servers[gid]?.logConfig?.message_send) {
+        const content = message.content || (message.attachments.size > 0 ? `[添付ファイル: ${message.attachments.map(a => a.name).join(', ')}]` : '[内容なし]');
+        const embed = new EmbedBuilder().setTitle('💬 メッセージ送信').setDescription(`**送信者:** <@${message.author.id}>\n**チャンネル:** <#${message.channelId}>\n\n**内容:**\n${content.slice(0, 1000)}`).setColor(0x57f287).setTimestamp();
+        await sendLog(message.guild, embed);
     }
 
-    // crypto セレクト
-    if (interaction.isStringSelectMenu() && cid === 'crypto_view_select') {
-        const CRYPTO_FILE = path.join(__dirname, 'data', 'crypto.json');
-        const cryptoData = load(CRYPTO_FILE);
-        const coin = cryptoData[interaction.values[0]];
-        if (!coin) return interaction.reply({ content: '❌ 通貨が見つかりません。', ...EPH });
-        return showCryptoDetail(interaction, coin, econ, user, CRYPTO_FILE);
-    }
-    if (interaction.isStringSelectMenu() && cid.startsWith('crypto_buyselect_')) {
-        const CRYPTO_FILE = path.join(__dirname, 'data', 'crypto.json');
-        const cryptoData = load(CRYPTO_FILE);
-        const amtInput = cid.replace('crypto_buyselect_', '');
-        const coin = cryptoData[interaction.values[0]];
-        if (!coin) return interaction.reply({ content: '❌ 通貨が見つかりません。', ...EPH });
-        const u = getUser(econ, user.id, user);
-        return doBuyCrypto(interaction, coin, amtInput, econ, u, cryptoData, CRYPTO_FILE);
-    }
-    if (interaction.isStringSelectMenu() && cid.startsWith('crypto_sellselect_')) {
-        const CRYPTO_FILE = path.join(__dirname, 'data', 'crypto.json');
-        const cryptoData = load(CRYPTO_FILE);
-        const amtInput = cid.replace('crypto_sellselect_', '');
-        const coin = cryptoData[interaction.values[0]];
-        if (!coin) return interaction.reply({ content: '❌ 通貨が見つかりません。', ...EPH });
-        const u = getUser(econ, user.id, user);
-        return doSellCrypto(interaction, coin, amtInput, econ, u, cryptoData, CRYPTO_FILE);
-    }
-
-    // BJ: ヒット
-    if (cid.startsWith('bj_hit_')) {
-        const gameKey = cid.replace('bj_hit_', '');
-        const game = bjGames.get(gameKey);
-        if (!game || game.userId !== user.id) return interaction.reply({ content: '❌ このゲームはあなたのものではありません。', ...EPH });
-        game.playerCards.push(drawCard(game.deck));
-        const playerTotal = calcBJ(game.playerCards);
-        if (playerTotal > 21) {
-            const econ2 = load(ECON_FILE);
-            const u = getUser(econ2, user.id, user);
-            u.balance -= game.bet * (game.leverage || 2);
-            const debtMsg = applyDebt(u);
-            save(ECON_FILE, econ2);
-            bjGames.delete(gameKey);
-            const embed = buildBJEmbed(game, 'bust', u.balance, user);
-            if (debtMsg) embed.setFooter({ text: debtMsg });
-            return interaction.update({ embeds: [embed], components: [delBtn()] });
-        }
-        return interaction.update({ embeds: [buildBJEmbed(game, 'playing', null, user)], components: buildBJRows(gameKey) });
-    }
-
-    if (cid.startsWith('bj_stand_')) {
-        const gameKey = cid.replace('bj_stand_', '');
-        const game = bjGames.get(gameKey);
-        if (!game || game.userId !== user.id) return interaction.reply({ content: '❌ このゲームはあなたのものではありません。', ...EPH });
-        while (calcBJ(game.dealerCards) < 17) game.dealerCards.push(drawCard(game.deck));
-        const playerTotal = calcBJ(game.playerCards);
-        const dealerTotal = calcBJ(game.dealerCards);
-        const econ2 = load(ECON_FILE);
-        const u = getUser(econ2, user.id, user);
-        const lev = game.leverage || 2;
-        let result;
-        if (dealerTotal > 21 || playerTotal > dealerTotal) { u.balance += game.bet * lev; result = 'win'; }
-        else if (playerTotal === dealerTotal) { result = 'push'; }
-        else { u.balance -= game.bet * lev; result = 'lose'; }
-        const debtMsg = applyDebt(u);
-        save(ECON_FILE, econ2);
-        bjGames.delete(gameKey);
-        const embed = buildBJEmbed(game, result, u.balance, user);
-        if (debtMsg) embed.setFooter({ text: debtMsg });
-        return interaction.update({ embeds: [embed], components: [delBtn()] });
-    }
-
-    if (cid.startsWith('bj_double_')) {
-        const gameKey = cid.replace('bj_double_', '');
-        const game = bjGames.get(gameKey);
-        if (!game || game.userId !== user.id) return interaction.reply({ content: '❌ このゲームはあなたのものではありません。', ...EPH });
-        const econ2 = load(ECON_FILE);
-        const u = getUser(econ2, user.id, user);
-        const lev = game.leverage || 2;
-        if (u.balance < game.bet * lev * 2) return interaction.reply({ content: `❌ ダブルダウンには **${(game.bet * lev * 2).toLocaleString()}** 🪙 必要です。`, ...EPH });
-        game.bet *= 2;
-        game.playerCards.push(drawCard(game.deck));
-        const playerTotal = calcBJ(game.playerCards);
-        while (calcBJ(game.dealerCards) < 17) game.dealerCards.push(drawCard(game.deck));
-        const dealerTotal = calcBJ(game.dealerCards);
-        let result;
-        if (playerTotal > 21) { u.balance -= game.bet * lev; result = 'bust'; }
-        else if (dealerTotal > 21 || playerTotal > dealerTotal) { u.balance += game.bet * lev; result = 'win'; }
-        else if (playerTotal === dealerTotal) { result = 'push'; }
-        else { u.balance -= game.bet * lev; result = 'lose'; }
-        const debtMsg = applyDebt(u);
-        save(ECON_FILE, econ2);
-        bjGames.delete(gameKey);
-        const embed = buildBJEmbed(game, result, u.balance, user);
-        if (debtMsg) embed.setFooter({ text: debtMsg });
-        return interaction.update({ embeds: [embed], components: [delBtn()] });
-    }
-
-    // dust セレクト
-    if (interaction.isStringSelectMenu() && cid.startsWith('dust_select_')) {
-        const dustCount = parseInt(cid.replace('dust_select_', '')) || 1;
-        const itemName = interaction.values[0];
-        const u = getUser(econ, user.id, user);
-        return doDustItem(interaction, itemName, dustCount, econ, u);
-    }
-
-    // buy セレクト
-    if (interaction.isStringSelectMenu() && cid === 'buy_select') {
-        const itemName = interaction.values[0];
-        const shop = load(SHOP_FILE);
-        return doBuyItem(interaction, itemName, econ, user, guild, shop);
-    }
-
-    // sell セレクト
-    if (interaction.isStringSelectMenu() && cid.startsWith('sell_select_')) {
-        const sellCount = parseInt(cid.replace('sell_select_', '')) || 1;
-        const itemName = interaction.values[0];
-        const u = getUser(econ, user.id, user);
-        return doSellItem(interaction, itemName, sellCount, econ, u);
-    }
-
-    if (interaction.isStringSelectMenu() && cid === 'store_select_corp') {
-        const corpId = interaction.values[0];
-        const c = corpData[corpId];
-        if (!c) return interaction.reply({ content: '❌ 会社が見つかりません。', ...EPH });
-        return showStoreManage(interaction, c, corpData, user);
-    }
-
-    // stock 会社選択（閲覧）
-    if (interaction.isStringSelectMenu() && cid === 'stock_select_view') {
-        const corpId = interaction.values[0];
-        const c = corpData[corpId];
-        if (!c || !c.stock) return interaction.reply({ content: '❌ 会社が見つかりません。', ...EPH });
-        return showStockDetail(interaction, c, econ, user);
-    }
-
-    // buystock 会社選択
-    if (interaction.isStringSelectMenu() && cid.startsWith('stock_buyselect_')) {
-        const amount = parseInt(cid.replace('stock_buyselect_', '')) || 1;
-        const corpId = interaction.values[0];
-        const c = corpData[corpId];
-        if (!c || !c.stock) return interaction.reply({ content: '❌ 会社が見つかりません。', ...EPH });
-        return doBuyStock(interaction, c, amount, econ, user, corpData);
-    }
-
-    // sellstock 会社選択
-    if (interaction.isStringSelectMenu() && cid.startsWith('stock_sellselect_')) {
-        const amount = parseInt(cid.replace('stock_sellselect_', '')) || 1;
-        const corpId = interaction.values[0];
-        const c = corpData[corpId];
-        if (!c || !c.stock) return interaction.reply({ content: '❌ 会社が見つかりません。', ...EPH });
-        const u = getUser(econ, user.id, user);
-        return doSellStock(interaction, c, amount, econ, u, corpData);
-    }
-
-    // store 会社選択（閲覧 or 管理混在）
-    if (interaction.isStringSelectMenu() && cid === 'store_select_view') {
-        const corpId = interaction.values[0];
-        const c = corpData[corpId];
-        if (!c) return interaction.reply({ content: '❌ 会社が見つかりません。', ...EPH });
-        return showStore(interaction, c, user);
-    }
-
-    if (interaction.isStringSelectMenu() && cid === 'store_select_mixed') {
-        const val = interaction.values[0];
-        if (val.startsWith('manage_')) {
-            const corpId = val.replace('manage_', '');
-            const c = corpData[corpId];
-            if (!c) return interaction.reply({ content: '❌ 会社が見つかりません。', ...EPH });
-            return showStoreManage(interaction, c, corpData, user);
-        } else {
-            const corpId = val.replace('view_', '');
-            const c = corpData[corpId];
-            if (!c) return interaction.reply({ content: '❌ 会社が見つかりません。', ...EPH });
-            return showStore(interaction, c, user);
+    // NGワード判定
+    if (servers[gid]?.ngwords?.length > 0) {
+        const exempt = servers[gid].ngwordExemptRoles || [];
+        if (!exempt.some(r => message.member?.roles?.cache?.has(r)) && containsNgWord(message.content, servers[gid].ngwords)) {
+            await message.delete().catch(() => {});
+            const key = `${gid}_${message.author.id}`;
+            const now = Date.now();
+            const v = ngwordViolations.get(key) || { count: 0, resetAt: now + 60000 };
+            if (now > v.resetAt) { v.count = 0; v.resetAt = now + 60000; }
+            v.count++;
+            ngwordViolations.set(key, v);
+            const limit = servers[gid].ngwordViolationLimit || 3;
+            if (v.count >= limit) {
+                ngwordViolations.delete(key);
+                await message.member?.timeout((servers[gid].ngwordTimeoutSeconds || 60) * 1000, 'NGワード連呼').catch(() => {});
+                return message.channel.send(`<@${message.author.id}> NGワードを連呼したため ${servers[gid].ngwordTimeoutSeconds || 60}秒 タイムアウトしました。`).then(m => setTimeout(() => m.delete().catch(() => {}), 5000));
+            }
+            return message.channel.send(`<@${message.author.id}> 不適切な言葉が含まれていたため削除しました。(${v.count}/${limit}回)`).then(m => setTimeout(() => m.delete().catch(() => {}), 3000));
         }
     }
 
-    if (interaction.isStringSelectMenu() && cid.startsWith('store_buy_')) {
-        const corpId = cid.replace('store_buy_', '');
-        const c = corpData[corpId];
-        if (!c) return interaction.reply({ content: '❌ 会社が見つかりません。', ...EPH });
-        const itemName = interaction.values[0];
-        const item = c.items.find(i => i.name === itemName);
-        if (!item) return interaction.reply({ content: '❌ 商品が見つかりません。', ...EPH });
-        const u = getUser(econ, user.id, user);
-        if (u.balance < item.price) return interaction.reply({ content: `❌ 残高不足。必要: **${item.price.toLocaleString()}** / 現在: **${u.balance.toLocaleString()}** 🪙`, ...EPH });
-        u.balance -= item.price;
-        c.balance = (c.balance || 0) + item.price;
-        if (!u.inventory) u.inventory = [];
-        u.inventory.push({ name: item.name, boughtAt: Date.now(), sellPrice: Math.floor(item.price * 0.3), from: c.name });
-        save(ECON_FILE, econ);
-        save(CORP_FILE, corpData);
-        return interaction.reply({ content: `✅ **${item.name}** を **${item.price.toLocaleString()}** 🪙 で購入しました！`, ...EPH });
-    }
-
-    if (!interaction.isButton()) return;
-
-    if (cid.startsWith('store_additem_')) {
-        const corpId = cid.replace('store_additem_', '');
-        const c = corpData[corpId];
-        if (!c || c.ownerId !== user.id) return interaction.reply({ content: '❌ 権限がありません。', ...EPH });
-        const modal = new ModalBuilder().setCustomId(`modal_store_additem_${corpId}`).setTitle(`${c.name} - 商品追加`);
-        modal.addComponents(
-            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('item_name').setLabel('商品名').setStyle(TextInputStyle.Short).setRequired(true)),
-            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('item_price').setLabel('価格').setStyle(TextInputStyle.Short).setRequired(true)),
-            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('item_desc').setLabel('説明').setStyle(TextInputStyle.Paragraph).setRequired(true))
-        );
-        return interaction.showModal(modal);
-    }
-
-    if (cid.startsWith('store_removeitem_')) {
-        const corpId = cid.replace('store_removeitem_', '');
-        const c = corpData[corpId];
-        if (!c || c.ownerId !== user.id) return interaction.reply({ content: '❌ 権限がありません。', ...EPH });
-        if (c.items.length === 0) return interaction.reply({ content: '❌ 削除する商品がありません。', ...EPH });
-        const select = new StringSelectMenuBuilder().setCustomId(`store_delitem_select_${corpId}`).setPlaceholder('削除する商品を選択')
-            .addOptions(c.items.map(item => ({ label: item.name, description: `${item.price.toLocaleString()} 🪙`, value: item.name })));
-        return interaction.reply({ content: '削除する商品を選択:', components: [new ActionRowBuilder().addComponents(select)], ...EPH });
-    }
-
-    if (cid.startsWith('store_withdraw_')) {
-        const corpId = cid.replace('store_withdraw_', '');
-        const c = corpData[corpId];
-        if (!c || c.ownerId !== user.id) return interaction.reply({ content: '❌ 権限がありません。', ...EPH });
-        if ((c.balance || 0) === 0) return interaction.reply({ content: '❌ 回収できる売上がありません。', ...EPH });
-        const modal = new ModalBuilder().setCustomId(`modal_store_withdraw_${corpId}`).setTitle(`${c.name} - 売上回収`);
-        modal.addComponents(
-            new ActionRowBuilder().addComponents(
-                new TextInputBuilder().setCustomId('withdraw_amount').setLabel(`金額（数字・all・half）　会社残高: ${(c.balance || 0).toLocaleString()} 🪙`).setStyle(TextInputStyle.Short).setPlaceholder('例: 1000 / all / half').setRequired(true)
-            )
-        );
-        return interaction.showModal(modal);
-    }
-
-    // 株式チャート更新
-    if (cid.startsWith('stock_refresh_')) {
-        const corpId = cid.replace('stock_refresh_', '');
-        const corpData2 = load(CORP_FILE);
-        const c = corpData2[corpId];
-        if (!c || !c.stock) return interaction.reply({ content: '❌ 会社が見つかりません。', ...EPH });
-        return showStockDetailUpdate(interaction, c, econ, user);
-    }
-
-    // corp deposit 会社選択
-    if (interaction.isStringSelectMenu() && cid.startsWith('corp_deposit_select_')) {
-        const amtInput = cid.replace('corp_deposit_select_', '');
-        const corpId = interaction.values[0];
-        const c = corpData[corpId];
-        if (!c) return interaction.reply({ content: '❌ 会社が見つかりません。', ...EPH });
-        const u = getUser(econ, user.id, user);
-        let amount;
-        if (amtInput === 'all') amount = u.balance;
-        else if (amtInput === 'half') amount = Math.floor(u.balance / 2);
-        else amount = parseInt(amtInput) || 0;
-        if (amount <= 0) return interaction.reply({ content: '❌ 有効な金額を入力してください。', ...EPH });
-        if (u.balance < amount) return interaction.reply({ content: `❌ 残高不足。現在: **${u.balance.toLocaleString()}** 🪙`, ...EPH });
-        u.balance -= amount;
-        c.balance = (c.balance || 0) + amount;
-        save(ECON_FILE, econ);
-        save(CORP_FILE, corpData);
-        return interaction.reply({ content: `✅ **${c.name}** に **${amount.toLocaleString()}** 🪙 を入金しました。\n会社残高: **${c.balance.toLocaleString()}** 🪙`, ...EPH });
-    }
-}
-
-async function handleEconModal(interaction) {
-    const cid = interaction.customId;
-    const { user, guild } = interaction;
-    const econ = load(ECON_FILE);
-
-    // ==================== crypto 購入/売却モーダル ====================
-    if (cid.startsWith('modal_crypto_buy_') || cid.startsWith('modal_crypto_sell_')) {
-        const isBuy = cid.startsWith('modal_crypto_buy_');
-        const coinId = cid.replace(isBuy ? 'modal_crypto_buy_' : 'modal_crypto_sell_', '');
-        const CRYPTO_FILE = path.join(__dirname, 'data', 'crypto.json');
-        const cryptoData = load(CRYPTO_FILE);
-        const coin = cryptoData[coinId];
-        if (!coin) return interaction.reply({ content: '❌ 通貨が見つかりません。', ...EPH });
-        const amtInput = interaction.fields.getTextInputValue('crypto_amount').trim().toLowerCase();
-        const u = getUser(econ, user.id, user);
-        if (isBuy) return doBuyCrypto(interaction, coin, amtInput, econ, u, cryptoData, CRYPTO_FILE);
-        else return doSellCrypto(interaction, coin, amtInput, econ, u, cryptoData, CRYPTO_FILE);
-    }
-
-    // ==================== 強盗モーダル ====================
-    // ==================== 銀行ローンモーダル ====================
-    if (cid === 'modal_bank_loan') {
-        const input = interaction.fields.getTextInputValue('loan_amount').trim().toLowerCase();
-        const u = getUser(econ, user.id, user);
-        const current = u.loan || 0;
-        const remaining = 5000 - current;
-        let amount;
-        if (input === 'all') amount = remaining;
-        else if (input === 'half') amount = Math.floor(remaining / 2);
-        else amount = parseInt(input) || 0;
-        if (amount <= 0) return interaction.reply({ content: '❌ 有効な金額を入力してください。', ...EPH });
-        if (amount > remaining) return interaction.reply({ content: `❌ 借入上限を超えます。あと **${remaining.toLocaleString()}** ${CURRENCY} まで借りられます。`, ...EPH });
-        u.loan = current + amount;
-        u.balance += amount;
-        u.loanDate = u.loanDate || Date.now();
-        u.lastInterestCharge = u.lastInterestCharge || Date.now();
-        save(ECON_FILE, econ);
-        return interaction.reply({ content: `✅ **${amount.toLocaleString()}** ${CURRENCY} を借りました。\n借入残高: **${u.loan.toLocaleString()}** ${CURRENCY}\n※3時間ごとに5%の利子が加算されます。`, ...EPH });
-    }
-
-    if (cid === 'modal_bank_repay') {
-        const input = interaction.fields.getTextInputValue('repay_amount').trim().toLowerCase();
-        const u = getUser(econ, user.id, user);
-        const loan = u.loan || 0;
-        if (loan <= 0) return interaction.reply({ content: '❌ 返済するローンがありません。', ...EPH });
-        let amount;
-        if (input === 'all') amount = loan;
-        else if (input === 'half') amount = Math.ceil(loan / 2);
-        else amount = parseInt(input) || 0;
-        if (amount <= 0) return interaction.reply({ content: '❌ 有効な金額を入力してください。', ...EPH });
-        if (u.balance < amount) return interaction.reply({ content: `❌ 残高不足。現在: **${u.balance.toLocaleString()}** ${CURRENCY}`, ...EPH });
-        const actual = Math.min(amount, loan);
-        u.balance -= actual;
-        u.loan = loan - actual;
-        if (u.loan <= 0) { u.loan = 0; delete u.loanDate; delete u.lastInterestCharge; }
-        save(ECON_FILE, econ);
-        return interaction.reply({ content: `✅ **${actual.toLocaleString()}** ${CURRENCY} を返済しました。\n残り借入: **${u.loan.toLocaleString()}** ${CURRENCY}`, ...EPH });
-    }
-
-    // ==================== 株購入モーダル ====================
-    if (cid.startsWith('modal_stock_buy_')) {
-        const corpId = cid.replace('modal_stock_buy_', '');
-        const amount = parseInt(interaction.fields.getTextInputValue('stock_amount')) || 0;
-        if (amount <= 0) return interaction.reply({ content: '❌ 有効な株数を入力してください。', ...EPH });
-        const corpData = load(CORP_FILE);
-        const c = corpData[corpId];
-        if (!c || !c.stock) return interaction.reply({ content: '❌ 会社が見つかりません。', ...EPH });
-        const u = getUser(econ, user.id, user);
-        const total = c.stock.price * amount;
-        if (u.balance < total) return interaction.reply({ content: `❌ 残高不足。必要: **${total.toLocaleString()}** / 現在: **${u.balance.toLocaleString()}** ${CURRENCY}`, ...EPH });
-        if (c.stock.availableShares < amount) return interaction.reply({ content: `❌ 購入可能株数が不足。現在: **${c.stock.availableShares}** 株`, ...EPH });
-        u.balance -= total;
-        if (!u.stocks) u.stocks = {};
-        u.stocks[c.id] = (u.stocks[c.id] || 0) + amount;
-        c.stock.availableShares -= amount;
-        c.balance = (c.balance || 0) + total;
-        c.stock.price = Math.ceil(c.stock.price * (1 + 0.01 * Math.min(amount, 10)));
-        if (!c.stock.history) c.stock.history = [];
-        c.stock.history.push(c.stock.price);
-        if (c.stock.history.length > 20) c.stock.history.shift();
-        save(ECON_FILE, econ);
-        save(CORP_FILE, corpData);
-        return interaction.reply({ content: `✅ **${c.name}** の株を **${amount}** 株 (**${total.toLocaleString()}** ${CURRENCY}) で購入しました！\n現在株価: **${c.stock.price.toLocaleString()}** ${CURRENCY}`, ...EPH });
-    }
-
-    // ==================== 株売却モーダル ====================
-    if (cid.startsWith('modal_stock_sell_')) {
-        const corpId = cid.replace('modal_stock_sell_', '');
-        const amount = parseInt(interaction.fields.getTextInputValue('stock_amount')) || 0;
-        if (amount <= 0) return interaction.reply({ content: '❌ 有効な株数を入力してください。', ...EPH });
-        const corpData = load(CORP_FILE);
-        const c = corpData[corpId];
-        if (!c || !c.stock) return interaction.reply({ content: '❌ 会社が見つかりません。', ...EPH });
-        const u = getUser(econ, user.id, user);
-        const held = (u.stocks || {})[c.id] || 0;
-        if (held < amount) return interaction.reply({ content: `❌ 保有株数不足。現在: **${held}** 株`, ...EPH });
-        const total = c.stock.price * amount;
-        u.balance += total;
-        u.stocks[c.id] -= amount;
-        c.stock.availableShares += amount;
-        c.stock.price = Math.max(1, Math.floor(c.stock.price * (1 - 0.008 * Math.min(amount, 10))));
-        if (!c.stock.history) c.stock.history = [];
-        c.stock.history.push(c.stock.price);
-        if (c.stock.history.length > 20) c.stock.history.shift();
-        save(ECON_FILE, econ);
-        save(CORP_FILE, corpData);
-        return interaction.reply({ content: `✅ **${c.name}** の株を **${amount}** 株 (**${total.toLocaleString()}** ${CURRENCY}) で売却しました！\n現在株価: **${c.stock.price.toLocaleString()}** ${CURRENCY}`, ...EPH });
-    }
-
-    // ==================== 株式発行モーダル ====================
-    if (cid.startsWith('modal_store_issuestock_')) {
-        const corpId = cid.replace('modal_store_issuestock_', '');
-        const corpData = load(CORP_FILE);
-        const c = corpData[corpId];
-        if (!c || c.ownerId !== user.id) return interaction.reply({ content: '❌ 権限がありません。', ...EPH });
-        const shares = parseInt(interaction.fields.getTextInputValue('stock_total_shares')) || 0;
-        if (shares <= 0) return interaction.reply({ content: '❌ 有効な株数を入力してください。', ...EPH });
-        if (c.stock) {
-            // 追加発行
-            c.stock.totalShares += shares;
-            c.stock.availableShares += shares;
-            save(CORP_FILE, corpData);
-            return interaction.reply({ content: `✅ **${c.name}** の株式を **${shares.toLocaleString()}** 株 追加発行しました！\n総発行株数: **${c.stock.totalShares.toLocaleString()}** 株　現在株価: **${fmtPrice(c.stock.price)}** 🪙`, ...EPH });
-        } else {
-            // 新規発行
-            const price = parseFloat(interaction.fields.getTextInputValue('stock_initial_price')) || 0;
-            if (price <= 0) return interaction.reply({ content: '❌ 有効な株価を入力してください。', ...EPH });
-            c.stock = { price: round3(price), totalShares: shares, availableShares: shares, history: [round3(price)] };
-            save(CORP_FILE, corpData);
-            return interaction.reply({ content: `✅ **${c.name}** の株式を新規発行しました！\n初期株価: **${fmtPrice(price)}** 🪙　発行数: **${shares.toLocaleString()}** 株`, ...EPH });
+    // 自動返信
+    if (servers[gid]?.autoReplies?.length > 0) {
+        const text = message.content;
+        for (const rule of servers[gid].autoReplies) {
+            const matched = rule.matchType === 'exact'
+                ? text === rule.trigger
+                : text.includes(rule.trigger);
+            if (matched) {
+                const response = rule.responses[Math.floor(Math.random() * rule.responses.length)];
+                if (rule.mode === 'reply') {
+                    await message.reply(response).catch(() => {});
+                } else {
+                    await message.channel.send(response).catch(() => {});
+                }
+                break; // 最初にマッチしたルールのみ実行
+            }
         }
     }
 
-    // ==================== ストア商品追加モーダル ====================
-    const corpData = load(CORP_FILE);
-    if (cid.startsWith('modal_store_additem_')) {
-        const corpId = cid.replace('modal_store_additem_', '');
-        const c = corpData[corpId];
-        if (!c || c.ownerId !== user.id) return interaction.reply({ content: '❌ 権限がありません。', ...EPH });
-        const name = interaction.fields.getTextInputValue('item_name').trim();
-        const price = parseInt(interaction.fields.getTextInputValue('item_price')) || 0;
-        const desc = interaction.fields.getTextInputValue('item_desc').trim();
-        if (price <= 0) return interaction.reply({ content: '❌ 有効な価格を入力してください。', ...EPH });
-        if (c.items.some(i => i.name.toLowerCase() === name.toLowerCase())) return interaction.reply({ content: `❌ **${name}** はすでに存在します。`, ...EPH });
-        c.items.push({ name, price, description: desc });
-        save(CORP_FILE, corpData);
-        return interaction.reply({ content: `✅ **${name}** (${price.toLocaleString()} 🪙) を **${c.name}** のストアに追加しました。`, ...EPH });
+    // レベリング（30秒クールダウン）
+    if (servers[gid]?.leveling !== false) {
+        const key = `${gid}_${message.author.id}`;
+        const now = Date.now();
+        const last = xpCooldowns.get(key) || 0;
+        if (now - last >= 30000) {
+            xpCooldowns.set(key, now);
+            if (!users[message.author.id]) users[message.author.id] = { xp: 0, lv: 0 };
+            if (typeof users[message.author.id].xp !== 'number') users[message.author.id].xp = 0;
+            if (typeof users[message.author.id].lv !== 'number') users[message.author.id].lv = 0;
+            users[message.author.id].xp += 15;
+            users[message.author.id].username = message.author.username;
+            if (users[message.author.id].xp >= getNextLevelXP(users[message.author.id].lv)) {
+                users[message.author.id].lv++;
+                message.reply(`🎉 レベルアップ！ **Lv.${users[message.author.id].lv}** になりました！`);
+            }
+            saveData(USERS_FILE, users);
+        }
     }
-}
 
-async function handleEconSelect(interaction) {
-    const cid = interaction.customId;
-    const { user } = interaction;
-    const corpData = load(CORP_FILE);
-    if (cid.startsWith('store_delitem_select_')) {
-        const corpId = cid.replace('store_delitem_select_', '');
-        const c = corpData[corpId];
-        if (!c || c.ownerId !== user.id) return interaction.reply({ content: '❌ 権限がありません。', ...EPH });
-        const itemName = interaction.values[0];
-        const idx = c.items.findIndex(i => i.name === itemName);
-        if (idx === -1) return interaction.reply({ content: '❌ 商品が見つかりません。', ...EPH });
-        c.items.splice(idx, 1);
-        save(CORP_FILE, corpData);
-        return interaction.reply({ content: `✅ **${itemName}** を削除しました。`, ...EPH });
+    // グローバルチャット
+    if (servers[gid]?.gChatChannel === message.channelId) {
+        const embed = new EmbedBuilder().setAuthor({ name: `${message.author.tag} (${message.guild.name})`, iconURL: message.author.displayAvatarURL() }).setDescription(message.content || ' ').setColor(0x00ff00).setTimestamp();
+        if (message.attachments.size > 0) embed.setImage(message.attachments.first().url);
+        for (const targetGid in servers) {
+            const targetChId = servers[targetGid].gChatChannel;
+            if (targetChId && targetChId !== message.channelId) {
+                const ch = client.channels.cache.get(targetChId);
+                if (ch) ch.send({ embeds: [embed] }).catch(() => {});
+            }
+        }
     }
-}
+});
 
-module.exports = { econCommands, handleEcon, handleEconInteraction, handleEconModal, handleEconSelect };
+client.on(Events.MessageDelete, async (msg) => {
+    if (!msg.guild || !msg.author || msg.author.bot) return;
+    // snipeキャッシュ
+    const key = `${msg.guildId}_${msg.channelId}`;
+    snipeCache.set(key, {
+        content: msg.content || '',
+        authorTag: msg.author.tag,
+        authorAvatar: msg.author.displayAvatarURL(),
+        attachmentUrl: msg.attachments.first()?.url || null,
+        timestamp: Date.now()
+    });
+    const s = loadData(SERVERS_FILE);
+    if (s[msg.guildId]?.logConfig?.delete) {
+        const embed = new EmbedBuilder().setTitle('🗑 メッセージ削除').setDescription(`**送信者:** <@${msg.author.id}>\n**チャンネル:** <#${msg.channelId}>\n\n**内容:**\n${msg.content || '内容なし'}`).setColor(0xff0000).setTimestamp();
+        await sendLog(msg.guild, embed);
+    }
+});
+
+client.on(Events.MessageUpdate, async (oldMsg, newMsg) => {
+    if (!oldMsg.guild || !oldMsg.author || oldMsg.author.bot || oldMsg.content === newMsg.content) return;
+    const s = loadData(SERVERS_FILE);
+    if (s[oldMsg.guildId]?.logConfig?.edit) {
+        const embed = new EmbedBuilder().setTitle('📝 メッセージ編集').setDescription(`**送信者:** <@${oldMsg.author.id}>\n**チャンネル:** <#${oldMsg.channelId}>\n\n**編集前:**\n${oldMsg.content}\n\n**編集後:**\n${newMsg.content}`).setColor(0xffff00).setTimestamp();
+        await sendLog(oldMsg.guild, embed);
+    }
+});
+
+client.on(Events.GuildMemberAdd, async (member) => {
+    const s = loadData(SERVERS_FILE);
+    const conf = s[member.guild.id];
+    if (conf?.welcome) {
+        const ch = member.guild.channels.cache.get(conf.welcome.channel);
+        if (ch) ch.send(replacePlaceholders(conf.welcome.message, member));
+    }
+    if (conf?.logConfig?.join) {
+        const embed = new EmbedBuilder().setTitle('📥 入室通知').setDescription(`<@${member.id}> が参加しました。`).setColor(0x00ff00).setTimestamp();
+        await sendLog(member.guild, embed);
+    }
+    updateStatus();
+});
+
+client.on(Events.GuildMemberRemove, async (member) => {
+    const s = loadData(SERVERS_FILE);
+    const conf = s[member.guild.id];
+    if (conf?.bye) {
+        const ch = member.guild.channels.cache.get(conf.bye.channel);
+        if (ch) ch.send(replacePlaceholders(conf.bye.message, member));
+    }
+    if (conf?.logConfig?.leave) {
+        const embed = new EmbedBuilder().setTitle('📤 退出通知').setDescription(`<@${member.id}> が退出しました。`).setColor(0xffa500).setTimestamp();
+        await sendLog(member.guild, embed);
+    }
+});
+
+client.on(Events.GuildCreate, () => updateStatus());
+client.on(Events.GuildDelete, () => updateStatus());
+
+// チャンネル作成ログ
+client.on(Events.ChannelCreate, async (channel) => {
+    if (!channel.guild) return;
+    const s = loadData(SERVERS_FILE);
+    if (!s[channel.guild.id]?.logConfig?.channel) return;
+    const embed = new EmbedBuilder().setTitle('📁 チャンネル作成').setDescription(`**名前:** <#${channel.id}> (\`${channel.name}\`)\n**種類:** ${channel.type === ChannelType.GuildText ? 'テキスト' : channel.type === ChannelType.GuildVoice ? 'ボイス' : 'その他'}`).setColor(0x00bfff).setTimestamp();
+    await sendLog(channel.guild, embed);
+});
+
+// ロール付与/剥奪ログ
+client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
+    const s = loadData(SERVERS_FILE);
+    if (!s[newMember.guild.id]?.logConfig?.role) return;
+    const added = newMember.roles.cache.filter(r => !oldMember.roles.cache.has(r.id) && r.id !== newMember.guild.id);
+    const removed = oldMember.roles.cache.filter(r => !newMember.roles.cache.has(r.id) && r.id !== newMember.guild.id);
+    if (added.size === 0 && removed.size === 0) return;
+    const lines = [];
+    if (added.size > 0) lines.push(`**付与:** ${added.map(r => `<@&${r.id}>`).join(' ')}`);
+    if (removed.size > 0) lines.push(`**剥奪:** ${removed.map(r => `<@&${r.id}>`).join(' ')}`);
+    const embed = new EmbedBuilder().setTitle('🏷️ ロール変更').setDescription(`**対象:** <@${newMember.id}>\n${lines.join('\n')}`).setColor(added.size > 0 ? 0x57f287 : 0xed4245).setTimestamp();
+    await sendLog(newMember.guild, embed);
+});
+
+// タイムアウトログ
+client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
+    const s = loadData(SERVERS_FILE);
+    if (!s[newMember.guild.id]?.logConfig?.timeout) return;
+    const wasTimedOut = oldMember.communicationDisabledUntil;
+    const isTimedOut = newMember.communicationDisabledUntil;
+    if (!wasTimedOut && isTimedOut && new Date(isTimedOut) > new Date()) {
+        const until = Math.floor(new Date(isTimedOut).getTime() / 1000);
+        const embed = new EmbedBuilder().setTitle('🔇 タイムアウト').setDescription(`**対象:** <@${newMember.id}>\n**解除予定:** <t:${until}:R> (<t:${until}:F>)`).setColor(0xff6b35).setTimestamp();
+        await sendLog(newMember.guild, embed);
+    } else if (wasTimedOut && (!isTimedOut || new Date(isTimedOut) <= new Date())) {
+        const embed = new EmbedBuilder().setTitle('🔊 タイムアウト解除').setDescription(`**対象:** <@${newMember.id}>`).setColor(0x57f287).setTimestamp();
+        await sendLog(newMember.guild, embed);
+    }
+});
+
+client.login(TOKEN);
