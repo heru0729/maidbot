@@ -292,8 +292,9 @@ client.once(Events.ClientReady, async () => {
             let changed = false;
             for (const c of Object.values(cryptoData)) {
                 const circRatio = 1 - c.availableSupply / c.totalSupply;
-                const baseDrift = (circRatio - 0.5) * 0.01;
-                const noise = (Math.random() - 0.5) * 0.02;
+                // 流通率10%以上で上昇圧力、それ以下はほぼ中立
+                const baseDrift = circRatio > 0.1 ? (circRatio - 0.1) * 0.02 : (circRatio - 0.5) * 0.004;
+                const noise = (Math.random() - 0.45) * 0.06; // ±3%、わずかに上昇バイアス
                 const change = 1 + baseDrift + noise;
                 c.price = r3(Math.max(0.001, c.price * change));
                 c.history = c.history || [];
@@ -373,7 +374,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (commandName === 'help') {
             const helpPages = [
                 {
-                    title: '📊 レベル / 👤 ユーザー / 🏰 サーバー',
+                    title: '(1/6) 📊 レベル / 👤 ユーザー / 🏰 サーバー',
                     fields: [
                         { name: '📊 レベル', value: '`/rank [user]` — 自分またはユーザーのレベル・XPを確認\n`/ranking` — サーバーのレベルランキングを表示', inline: false },
                         { name: '👤 ユーザー', value: '`/userinfo [user]` — ユーザーの詳細情報を表示', inline: false },
@@ -381,15 +382,15 @@ client.on(Events.InteractionCreate, async (interaction) => {
                     ]
                 },
                 {
-                    title: '🔍 ユーティリティ / ⚙️ 管理 / 🔨 モデレート',
+                    title: '(2/6) 🔍 ユーティリティ / ⚙️ 管理 / 🔨 モデレート',
                     fields: [
-                        { name: '🔍 ユーティリティ', value: '`/botstatus` — Botの稼働状況を表示\n`/snipe` — 直近の削除メッセージを表示\n`/top` — メッセージ数トップユーザーを表示\n`/choose [choices]` — 選択肢からランダムに1つ選ぶ\n`/dice [max]` — サイコロを振る\n`/coinflip` — コインを投げる\n`/janken` — じゃんけんをする', inline: false },
-                        { name: '⚙️ 管理', value: '`/set` — サーバー管理設定パネル（ログ・通知・NGワード等）\n`/clear [amount]` — 指定数のメッセージを一括削除\n`/log [channel]` — ログ送信先チャンネルを設定\n`/chatlock` — チャンネルのチャットをロック/解除\n`/chset [channel]` — チャンネルの設定を変更', inline: false },
+                        { name: '🔍 ユーティリティ', value: '`/botstatus` — Botの稼働状況を表示\n`/snipe` — 直近の削除メッセージを表示\n`/top` — メッセージ数トップユーザーを表示\n`/choose [choices]` — 選択肢からランダムに1つ選ぶ\n`/dice [max]` — サイコロを振る\n`/coinflip` — コインを投げる\n`/janken` — じゃんけんをする\n`/omikuji` — おみくじを引く', inline: false },
+                        { name: '⚙️ 管理', value: '`/set` — サーバー管理設定パネル（ログ・通知・NGワード・自動返信等）\n`/clear [amount]` — 指定数のメッセージを一括削除\n`/log [channel]` — ログ送信先チャンネルを設定\n`/chatlock` — チャンネルのチャットをロック/解除\n`/chset [channel]` — チャンネルの設定を変更', inline: false },
                         { name: '🔨 モデレート', value: '`/kick [user]` — ユーザーをキック\n`/ban [user]` — ユーザーをBAN\n`/unban [id]` — ユーザーのBANを解除\n`/mute [user] [duration]` — ユーザーをタイムアウト\n`/unmute [user]` — タイムアウトを解除\n`/serverlock` — サーバー全体をロック/解除', inline: false },
                     ]
                 },
                 {
-                    title: '📢 告知 / 🔐 認証 / 🌐 グローバル / 🏷️ 役職',
+                    title: '(3/6) 📢 告知 / 🔐 認証 / 🌐 グローバル / 🏷️ 役職',
                     fields: [
                         { name: '📢 告知', value: '`/embed` — カスタムEmbed（告知）を作成・送信', inline: false },
                         { name: '🔐 認証', value: '`/authset` — OAuth2認証パネルを設置', inline: false },
@@ -398,27 +399,28 @@ client.on(Events.InteractionCreate, async (interaction) => {
                     ]
                 },
                 {
-                    title: '🎁 ギブアウェイ / 🎫 チケット',
+                    title: '(4/6) 🎁 ギブアウェイ / 🎫 チケット',
                     fields: [
-                        { name: '🎁 ギブアウェイ', value: '`/giveaway` — ギブアウェイを開始（期間・賞品・当選者数を設定）', inline: false },
+                        { name: '🎁 ギブアウェイ', value: '`/giveaway` — ギブアウェイを開始（期間・賞品・当選者数を設定）\nユーザーがボタンで参加し、終了時に自動抽選', inline: false },
                         { name: '🎫 チケット', value: '`/ticket` — サポートチケットパネルを設置\nユーザーがボタンを押すと専用チャンネルが作成されます', inline: false },
                     ]
                 },
                 {
-                    title: '🪙 エコノミー',
+                    title: '(5/6) 🪙 エコノミー',
                     fields: [
-                        { name: '💰 基本', value: '`/balance [user]` — 所持金・借入・実質残高を確認\n`/send [user] [amount]` — 他ユーザーに送金（all/half対応）\n`/bank` — ローン借入・返済（all/half対応）', inline: false },
-                        { name: '🎲 稼ぐ', value: '`/earn daily` — デイリーボーナス（深夜0時リセット）\n`/earn work` — 労働（CD: 1時間）\n`/earn crime` — 犯罪（CD: 2時間）\n`/earn hunt` — 狩猟でアイテムドロップ（CD: 30分）\n`/earn fish` — 釣りで魚をドロップ（CD: 45分）\n`/earn rob [target]` — 他ユーザーから強盗\n`/earn flip [amount] [side]` — コインフリップ\n`/earn slots [amount]` — スロット（最大10倍）\n`/earn bj [amount] [leverage]` — ブラックジャック（レバレッジ2〜10倍）', inline: false },
-                        { name: '🛒 ショップ', value: '`/shop` — ショップ一覧\n`/buy [item]` — アイテム購入（未指定でセレクト）\n`/sell [item]` — アイテム売却（未指定でセレクト）\n`/inventory [user]` — インベントリ確認', inline: false },
-                        { name: '🏢 会社', value: '`/corp create [name] [desc]` — 会社設立（費用10,000🪙）\n`/corp setting [corp]` — 会社管理・ストア設定\n`/corp deposit [corp] [amount]` — 会社に入金', inline: false },
-                        { name: '📈 株式', value: '`/stock [corp]` — 株式チャート・売買\n`/buystock [amount] [corp]` — 株を購入（all対応）\n`/sellstock [amount] [corp]` — 株を売却', inline: false },
-                        { name: '💹 仮想通貨', value: '`/crypto create [name] [symbol]` — 仮想通貨発行（1人1枚）\n`/crypto list` — 通貨一覧\n`/crypto view [symbol]` — チャート・売買\n`/crypto buy [amount] [symbol]` — 購入（all対応）\n`/crypto sell [amount] [symbol]` — 売却\n`/econrank` — 所持金ランキング', inline: false },
+                        { name: '💰 残高・送金', value: '`/balance [user]` — 所持金・借入・実質残高を確認\n`/pay [user] [amount]` — 他ユーザーに送金（all/half対応）\n`/bank` — ローン借入・返済（3時間毎5%利子）\n`/econrank` — 所持金ランキング', inline: false },
+                        { name: '💸 稼ぐ (サブコマンド)', value: '`/earn daily` — デイリーボーナス（深夜0時リセット）\n`/earn work` — 労働でコインを稼ぐ（CD: 1時間）\n`/earn crime` — 犯罪（CD: 2時間・失敗で罰金）\n`/earn hunt` — 狩猟でアイテムドロップ（CD: 30分）\n`/earn fish` — 釣りで魚をドロップ（CD: 45分）\n`/earn rob [target]` — 他ユーザーから強盗（ID/メンション）\n`/earn flip [amount] [side]` — コインフリップ（omote/ura）\n`/earn slots [amount]` — スロット（最大10倍）\n`/earn bj [amount] [leverage]` — ブラックジャック（レバレッジ2〜10倍）', inline: false },
+                        { name: '🛒 ショップ', value: '`/shop` — ショップ一覧を表示\n`/buy [item]` — アイテム購入（未指定でセレクト表示）\n`/sell [item]` — アイテム売却（未指定でセレクト表示）\n`/inventory [user]` — インベントリを確認', inline: false },
+                        { name: '🏢 会社', value: '`/corp create [name] [desc]` — 会社設立（費用10,000🪙・最大2社）\n`/corp setting [corp]` — 管理画面（商品追加・削除・株式発行等）\n`/corp deposit [corp] [amount]` — 会社に入金（all/half対応）', inline: false },
+                        { name: '📈 株式', value: '`/stock [corp]` — 株式チャート表示・売買\n`/buystock [amount] [corp]` — 株を購入（all対応・手数料2%）\n`/sellstock [amount] [corp]` — 株を売却（手数料2%）\n※1分ごとに市場が自動調整されます', inline: false },
+                        { name: '💹 仮想通貨', value: '`/crypto create [name] [symbol]` — 仮想通貨を発行（1人1枚・初期価格0.005🪙）\n`/crypto list` — 通貨一覧を表示\n`/crypto view [symbol]` — チャート・売買ボタン\n`/crypto buy [amount] [symbol]` — 購入（all対応・手数料2%）\n`/crypto sell [amount] [symbol]` — 売却（手数料2%）', inline: false },
                     ]
                 },
                 {
-                    title: '❓ その他',
+                    title: '(6/6) ❓ その他',
                     fields: [
-                        { name: '❓ その他', value: '`/help` — このコマンド一覧を表示\n`/support` — サポートサーバーのリンクを表示\n`/omikuji` — おみくじを引く', inline: false },
+                        { name: '❓ その他', value: '`/help` — このコマンド一覧を表示（◀▶でページ切り替え）\n`/support` — サポートサーバーのリンクを表示', inline: false },
+                        { name: '💡 Tips', value: '`/set` からサーバーの各種設定が可能です\n金額指定は `数字` / `all` / `half` で入力できます\n株式・仮想通貨の売買はそれぞれ手数料2%がかかります', inline: false },
                     ]
                 },
             ];
@@ -426,10 +428,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
             const buildHelpEmbed = (page) => {
                 const p = helpPages[page];
                 return new EmbedBuilder()
-                    .setTitle(`📖 コマンド一覧 — ${p.title}`)
+                    .setTitle(`📖 ${p.title}`)
                     .setColor(0x3498db)
                     .addFields(p.fields)
-                    .setFooter({ text: `ページ ${page + 1} / ${helpPages.length}　| /set でサーバー設定` });
+                    .setFooter({ text: `◀ ▶ でページ切り替え | /set でサーバー設定` });
             };
 
             const buildHelpRow = (page) => new ActionRowBuilder().addComponents(
@@ -948,7 +950,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
 
         // econコマンド
-        const econCommandNames = ['balance','earn','hunt','fish','rob','flip','slots','bj','send','bank','shop','buy','sell','inventory','econrank','corp','crypto','stock','buystock','sellstock'];
+        const econCommandNames = ['balance','earn','pay','bank','account','shop','buy','sell','dust','inventory','econrank','corp','crypto','stock','buystock','sellstock'];
         if (econCommandNames.includes(commandName)) {
             await handleEcon(interaction);
         }
@@ -1441,7 +1443,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
             saveData(SERVERS_FILE, servers);
             return interaction.reply({ content: `✅ トリガー「${removed.trigger}」の自動返信を削除しました。`, ...EPH });
         }
-        const econSelectPrefixes = ['buy_select', 'sell_select_', 'store_select_corp', 'store_select_view', 'store_select_mixed', 'store_buy_', 'stock_select_view', 'stock_buyselect_', 'stock_sellselect_', 'corp_deposit_select_', 'crypto_view_select', 'crypto_buyselect_', 'crypto_sellselect_'];
+        const econSelectPrefixes = ['dust_select_', 'buy_select', 'sell_select_', 'store_select_corp', 'store_select_view', 'store_select_mixed', 'store_buy_', 'stock_select_view', 'stock_buyselect_', 'stock_sellselect_', 'corp_deposit_select_', 'crypto_view_select', 'crypto_buyselect_', 'crypto_sellselect_'];
         if (econSelectPrefixes.some(p => cid === p || cid.startsWith(p))) {
             await handleEconInteraction(interaction);
         } else if (cid.startsWith('store_delitem_select_')) {
