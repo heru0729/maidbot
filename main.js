@@ -235,46 +235,66 @@ const CHART_HTML = (title, dataEndpoint) => `<!DOCTYPE html>
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <title>${title}</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
-body{background:#1e2124;color:#e0e0e0;font-family:'Segoe UI',sans-serif;padding:12px}
-h1{font-size:16px;margin-bottom:8px;color:#fff}
-#info{display:flex;gap:12px;margin-bottom:8px;font-size:14px;align-items:baseline}
+html,body{width:100%;height:100%;overflow:hidden;background:#1e2124;color:#e0e0e0;font-family:'Segoe UI',sans-serif}
+#top{padding:10px 12px 6px;display:flex;flex-direction:column;gap:6px}
+h1{font-size:15px;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#info{display:flex;gap:10px;align-items:baseline}
 #price{font-size:20px;font-weight:bold}
+#change{font-size:13px}
 .up{color:#26a69a}.dn{color:#ef5350}
-#tabs{display:flex;gap:6px;margin-bottom:8px}
-button{background:#2d3035;color:#9ea3aa;border:none;padding:5px 14px;border-radius:4px;cursor:pointer;font-size:13px}
+#tabs{display:flex;gap:6px}
+button{background:#2d3035;color:#9ea3aa;border:none;padding:4px 13px;border-radius:4px;cursor:pointer;font-size:13px;touch-action:manipulation}
 button.active{background:#3a3d44;color:#fff}
-canvas{display:block;background:#2b2d31;border-radius:8px}
-#status{font-size:11px;color:#555;margin-top:6px}
+#wrap{position:relative;flex:1;overflow:hidden;touch-action:none}
+canvas{display:block;width:100%;height:100%;cursor:grab}
+canvas.grabbing{cursor:grabbing}
+#status{position:absolute;bottom:4px;right:8px;font-size:10px;color:#444;pointer-events:none}
+body{display:flex;flex-direction:column}
 </style>
 </head>
 <body>
-<h1>${title}</h1>
-<div id="info"><span id="price">---</span><span id="change"></span></div>
-<div id="tabs">
-  <button onclick="setTF('1m')" id="btn1m" class="active">1m</button>
-  <button onclick="setTF('1h')" id="btn1h">1h</button>
-  <button onclick="setTF('24h')" id="btn24h">24h</button>
+<div id="top">
+  <h1>${title}</h1>
+  <div id="info"><span id="price">---</span><span id="change"></span></div>
+  <div id="tabs">
+    <button onclick="setTF('1m')" id="btn1m" class="active">1m</button>
+    <button onclick="setTF('1h')" id="btn1h">1h</button>
+    <button onclick="setTF('24h')" id="btn24h">24h</button>
+    <button onclick="resetZoom()" style="margin-left:auto">リセット</button>
+  </div>
 </div>
-<canvas id="c"></canvas>
-<div id="status">⏳ 読込中...</div>
+<div id="wrap">
+  <canvas id="c"></canvas>
+  <div id="status">⏳ 読込中...</div>
+</div>
 <script>
 const API='${dataEndpoint}';
-const fmt=v=>v<0.0001?v.toFixed(6):v<0.001?v.toFixed(5):v<0.01?v.toFixed(4):v<0.1?v.toFixed(4):v<1?v.toFixed(3):v<100?v.toFixed(2):v.toFixed(1);
-let tf='1m', timer=null, allData=[];
+const fmt=v=>v===0?'0':v<0.0001?v.toFixed(6):v<0.001?v.toFixed(5):v<0.01?v.toFixed(4):v<0.1?v.toFixed(4):v<1?v.toFixed(3):v<100?v.toFixed(2):v.toFixed(1);
+let tf='1m', timer=null, allData=[], viewData=[];
+// ズーム状態: startIdx〜endIdx（表示範囲）
+let zoomStart=0, zoomEnd=0;
 
 function setTF(t){
   tf=t;
   ['1m','1h','24h'].forEach(x=>document.getElementById('btn'+x).className=x===t?'active':'');
-  draw(aggregate(allData,t));
+  const d=aggregate(allData,t);
+  viewData=d;
+  zoomStart=0; zoomEnd=d.length;
+  draw();
+}
+
+function resetZoom(){
+  zoomStart=0; zoomEnd=viewData.length;
+  draw();
 }
 
 function aggregate(raw,tf){
   if(!raw||!raw.length) return [];
-  if(tf==='1m') return raw.slice(-60);
+  if(tf==='1m') return raw.slice(-120);
   const size=tf==='1h'?60:raw.length;
   const out=[];
   for(let i=0;i<raw.length;i+=size){
@@ -285,17 +305,31 @@ function aggregate(raw,tf){
   return out;
 }
 
-function draw(data){
-  const cv=document.getElementById('c');
+// ===== 描画 =====
+const cv=document.getElementById('c');
+const ctx=cv.getContext('2d');
+
+function resize(){
+  const wrap=document.getElementById('wrap');
   const DPR=window.devicePixelRatio||1;
-  const W=Math.min(window.innerWidth-24,720), H=300;
-  cv.width=W*DPR; cv.height=H*DPR; cv.style.width=W+'px'; cv.style.height=H+'px';
-  const ctx=cv.getContext('2d'); ctx.scale(DPR,DPR);
+  cv.width=wrap.clientWidth*DPR;
+  cv.height=wrap.clientHeight*DPR;
+  cv.style.width=wrap.clientWidth+'px';
+  cv.style.height=wrap.clientHeight+'px';
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+  draw();
+}
+window.addEventListener('resize',resize);
+
+function draw(){
+  const W=cv.width/(window.devicePixelRatio||1);
+  const H=cv.height/(window.devicePixelRatio||1);
   ctx.fillStyle='#2b2d31'; ctx.fillRect(0,0,W,H);
 
+  const data=viewData.slice(zoomStart,zoomEnd||viewData.length);
   if(!data||data.length<2){
-    ctx.fillStyle='#666'; ctx.font='13px sans-serif'; ctx.textAlign='center';
-    ctx.fillText('データ不足（しばらくお待ちください）',W/2,H/2); return;
+    ctx.fillStyle='#666'; ctx.font='14px sans-serif'; ctx.textAlign='center';
+    ctx.fillText('データ不足（1分ごとに更新されます）',W/2,H/2); return;
   }
 
   const last=data[data.length-1].c, first=data[0].o;
@@ -304,53 +338,132 @@ function draw(data){
   document.getElementById('price').innerHTML='<span class="'+(isUp?'up':'dn')+'">'+fmt(last)+' 🪙</span>';
   document.getElementById('change').innerHTML='<span class="'+(isUp?'up':'dn')+'">'+(isUp?'▲':'▼')+Math.abs(pct)+'%</span>';
 
-  const PAD={t:30,r:12,b:28,l:68};
+  const PAD={t:12,r:16,b:24,l:72};
   const cw=W-PAD.l-PAD.r, ch=H-PAD.t-PAD.b;
+
   const vMax=Math.max(...data.map(d=>d.h)), vMin=Math.min(...data.map(d=>d.l));
-  const vPad=(vMax-vMin)*0.07||Math.abs(vMin)*0.05||0.0001;
+  const vPad=(vMax-vMin)*0.08||Math.abs(vMin)*0.06||0.0001;
   const vTop=vMax+vPad, vBot=vMin-vPad, vR=vTop-vBot;
   const toY=v=>PAD.t+ch-(v-vBot)/vR*ch;
   const toX=i=>PAD.l+(i+0.5)*cw/data.length;
 
-  // グリッド & Yラベル
-  ctx.strokeStyle='#333'; ctx.lineWidth=1;
-  for(let i=0;i<=4;i++){
-    const y=PAD.t+ch/4*i;
+  // グリッド
+  ctx.strokeStyle='#2d3035'; ctx.lineWidth=1;
+  const gridN=5;
+  for(let i=0;i<=gridN;i++){
+    const y=PAD.t+ch/gridN*i;
     ctx.beginPath(); ctx.moveTo(PAD.l,y); ctx.lineTo(PAD.l+cw,y); ctx.stroke();
-    ctx.fillStyle='#9ea3aa'; ctx.font='10px monospace'; ctx.textAlign='right';
-    ctx.fillText(fmt(vTop-vR/4*i),PAD.l-4,y+3.5);
+    const v=vTop-vR/gridN*i;
+    ctx.fillStyle='#7a7e87'; ctx.font='10px monospace'; ctx.textAlign='right';
+    ctx.fillText(fmt(v), PAD.l-5, y+3.5);
   }
 
+  // Y軸線
+  ctx.strokeStyle='#3a3d44'; ctx.lineWidth=1;
+  ctx.beginPath(); ctx.moveTo(PAD.l,PAD.t); ctx.lineTo(PAD.l,PAD.t+ch); ctx.stroke();
+
   // ロウソク
-  const bw=Math.max(2,cw/data.length*0.65);
+  const bw=Math.max(1.5, cw/data.length*0.6);
   for(let i=0;i<data.length;i++){
     const {o,h,l,c}=data[i], up=c>=o, col=up?'#26a69a':'#ef5350';
     const x=toX(i), yO=toY(o), yC=toY(c), yH=toY(h), yL=toY(l);
     const bTop=Math.min(yO,yC), bH=Math.max(1,Math.abs(yO-yC));
-    ctx.strokeStyle=col; ctx.lineWidth=1;
+    ctx.strokeStyle=col; ctx.lineWidth=Math.max(1,bw*0.15);
     ctx.beginPath(); ctx.moveTo(x,yH); ctx.lineTo(x,bTop); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(x,bTop+bH); ctx.lineTo(x,yL); ctx.stroke();
-    ctx.fillStyle=col; ctx.fillRect(x-bw/2,bTop,bw,bH);
+    ctx.fillStyle=col;
+    ctx.fillRect(x-bw/2, bTop, bw, bH);
   }
 
+  // X軸ラベル（本数に応じて間引き）
   ctx.fillStyle='#555'; ctx.font='10px sans-serif'; ctx.textAlign='center';
-  ctx.fillText('← 古',PAD.l+22,H-6); ctx.fillText('新 →',PAD.l+cw-22,H-6);
+  const step=Math.ceil(data.length/8);
+  for(let i=0;i<data.length;i+=step){
+    ctx.fillText(i+1+zoomStart, toX(i), H-6);
+  }
 }
 
+// ===== ズーム（マウスホイール） =====
+cv.addEventListener('wheel', e=>{
+  e.preventDefault();
+  const len=zoomEnd-zoomStart;
+  const delta=e.deltaY>0?1:-1;
+  const step=Math.max(1,Math.round(len*0.1));
+  const center=Math.round((zoomStart+zoomEnd)/2);
+  let ns=zoomStart+delta*step, ne=zoomEnd-delta*step;
+  if(ne-ns<4){const m=Math.round((ns+ne)/2); ns=m-2; ne=m+2;}
+  ns=Math.max(0,ns); ne=Math.min(viewData.length,ne);
+  if(ne-ns>=2){zoomStart=ns; zoomEnd=ne; draw();}
+},{passive:false});
+
+// ===== ピンチ（タッチ） =====
+let pt=null;
+function getTouchDist(e){return Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);}
+cv.addEventListener('touchstart',e=>{
+  if(e.touches.length===2){pt={dist:getTouchDist(e),zs:zoomStart,ze:zoomEnd};}
+  else if(e.touches.length===1){pt={x:e.touches[0].clientX,zs:zoomStart,ze:zoomEnd};}
+},{passive:true});
+cv.addEventListener('touchmove',e=>{
+  e.preventDefault();
+  if(!pt) return;
+  if(e.touches.length===2&&pt.dist){
+    const d=getTouchDist(e), ratio=pt.dist/d;
+    const len=pt.ze-pt.zs, newLen=Math.round(len*ratio);
+    const center=Math.round((pt.zs+pt.ze)/2);
+    let ns=center-Math.round(newLen/2), ne=center+Math.round(newLen/2);
+    ns=Math.max(0,ns); ne=Math.min(viewData.length,ne);
+    if(ne-ns>=2){zoomStart=ns; zoomEnd=ne; draw();}
+  } else if(e.touches.length===1&&pt.x!==undefined){
+    const dx=e.touches[0].clientX-pt.x;
+    const len=pt.ze-pt.zs;
+    const shift=Math.round(-dx/cv.clientWidth*len);
+    let ns=pt.zs+shift, ne=pt.ze+shift;
+    if(ns<0){ne-=ns; ns=0;} if(ne>viewData.length){ns-=(ne-viewData.length); ne=viewData.length;}
+    ns=Math.max(0,ns); ne=Math.min(viewData.length,ne);
+    if(ne-ns>=2){zoomStart=ns; zoomEnd=ne; draw();}
+  }
+},{passive:false});
+cv.addEventListener('touchend',()=>{pt=null;});
+
+// ===== マウスドラッグ =====
+let drag=null;
+cv.addEventListener('mousedown',e=>{drag={x:e.clientX,zs:zoomStart,ze:zoomEnd}; cv.classList.add('grabbing');});
+window.addEventListener('mousemove',e=>{
+  if(!drag) return;
+  const len=drag.ze-drag.zs;
+  const shift=Math.round(-(e.clientX-drag.x)/cv.clientWidth*len);
+  let ns=drag.zs+shift, ne=drag.ze+shift;
+  if(ns<0){ne-=ns; ns=0;} if(ne>viewData.length){ns-=(ne-viewData.length); ne=viewData.length;}
+  ns=Math.max(0,ns); ne=Math.min(viewData.length,ne);
+  if(ne-ns>=2){zoomStart=ns; zoomEnd=ne; draw();}
+});
+window.addEventListener('mouseup',()=>{drag=null; cv.classList.remove('grabbing');});
+
+// ===== データ取得 =====
 async function refresh(){
   try{
     const res=await fetch(API); const json=await res.json();
-    allData=json.ohlc&&json.ohlc.length?json.ohlc:(json.history||[]).map((c,i,a)=>{
+    const raw=json.ohlc&&json.ohlc.length?json.ohlc:(json.history||[]).map((c,i,a)=>{
       const o=i>0?a[i-1]:c, n=Math.abs(c)*0.004;
       return {o,h:Math.max(o,c)+n,l:Math.min(o,c)-n,c};
     });
-    draw(aggregate(allData,tf));
-    document.getElementById('status').textContent='🔄 最終更新: '+new Date().toLocaleTimeString('ja-JP');
+    const prev=allData; allData=raw;
+    const d=aggregate(allData,tf); viewData=d;
+    // 初回またはズームリセット時のみ全表示
+    if(!prev.length||zoomEnd===prev.length||zoomEnd===0){zoomStart=0; zoomEnd=d.length;}
+    else{
+      // データが増えた分だけ末尾を伸ばす
+      const added=allData.length-prev.length;
+      if(added>0) zoomEnd=Math.min(d.length,zoomEnd+added);
+    }
+    draw();
+    document.getElementById('status').textContent='🔄 '+new Date().toLocaleTimeString('ja-JP');
   }catch(e){
-    document.getElementById('status').textContent='❌ 更新失敗: '+e.message;
+    document.getElementById('status').textContent='❌ '+e.message;
   }
 }
 
+resize();
 refresh();
 timer=setInterval(refresh,5000);
 window.addEventListener('beforeunload',()=>clearInterval(timer));
