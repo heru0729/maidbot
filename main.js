@@ -229,6 +229,83 @@ function buildAutoReplyPanel(s) {
 }
 
 setupAuth(app, loadData, saveData, USERS_FILE, CLIENT_ID, CLIENT_SECRET);
+
+// ==================== チャートページ ====================
+const CHART_HTML = (title, dataJson, type) => `<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${title} チャート</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-chart-financial@0.2.1/dist/chartjs-chart-financial.min.js"></script>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:#1e2124;color:#e0e0e0;font-family:sans-serif;padding:16px}
+  h1{font-size:18px;margin-bottom:12px;color:#fff}
+  .info{display:flex;gap:16px;margin-bottom:12px;font-size:13px;color:#9ea3aa}
+  .price{font-size:22px;font-weight:bold}
+  .up{color:#26a69a}.dn{color:#ef5350}
+  canvas{max-width:100%;border-radius:8px;background:#2b2d31}
+</style>
+</head>
+<body>
+<h1 id="title">${title}</h1>
+<div class="info"><span id="price"></span><span id="change"></span></div>
+<canvas id="chart"></canvas>
+<script>
+const raw = ${dataJson};
+const data = raw.ohlc || (raw.history || []).map((c,i,a)=>{
+  const o = i>0?a[i-1]:c, noise=Math.abs(c)*0.003;
+  return {o, h:Math.max(o,c)+noise, l:Math.min(o,c)-noise, c, t:Date.now()-((a.length-1-i)*60000)};
+});
+if(!data.length){document.body.innerHTML='<p style="color:#888;padding:32px">データがありません</p>'}
+else{
+  const last=data[data.length-1].c, first=data[0].o;
+  const pct=((last-first)/Math.abs(first)*100).toFixed(2);
+  const isUp=last>=first;
+  const fmt=v=>v<0.001?v.toFixed(6):v<0.01?v.toFixed(5):v<0.1?v.toFixed(4):v<1?v.toFixed(3):v<1000?v.toFixed(2):v.toLocaleString();
+  document.getElementById('price').innerHTML='<span class="price '+(isUp?'up':'dn')+'">'+fmt(last)+' 🪙</span>';
+  document.getElementById('change').textContent=(isUp?'▲':'▼')+Math.abs(pct)+'%';
+  const labels=data.map((_,i)=>i+1);
+  const ohlcData=data.map(d=>({x:d.t||Date.now(),o:d.o,h:d.h,l:d.l,c:d.c}));
+  new Chart(document.getElementById('chart'),{
+    type:'candlestick',
+    data:{datasets:[{label:document.getElementById('title').textContent,data:ohlcData,
+      color:{up:'#26a69a',down:'#ef5350',unchanged:'#888'},
+      borderColor:{up:'#26a69a',down:'#ef5350',unchanged:'#888'}
+    }]},
+    options:{
+      responsive:true,
+      plugins:{legend:{display:false}},
+      scales:{
+        x:{type:'time',time:{unit:'minute'},ticks:{color:'#9ea3aa'},grid:{color:'#2d3035'}},
+        y:{ticks:{color:'#9ea3aa',callback:v=>v<0.001?v.toFixed(6):v<1?v.toFixed(3):v.toFixed(2)},grid:{color:'#2d3035'}}
+      }
+    }
+  });
+}
+</script>
+</body></html>`;
+
+app.get('/chart/stock/:corpid', (req, res) => {
+    const { corpid } = req.params;
+    const corpData = loadData(path.join(__dirname, 'data', 'corp.json'));
+    const c = corpData[corpid] || Object.values(corpData).find(c => c.name.toLowerCase() === corpid.toLowerCase());
+    if (!c || !c.stock) return res.status(404).send('<p>会社または株式が見つかりません</p>');
+    const data = { ohlc: c.stock.ohlc || null, history: c.stock.history || [] };
+    res.send(CHART_HTML(c.name + ' 株式', JSON.stringify(data), 'stock'));
+});
+
+app.get('/chart/crypto/:symbol', (req, res) => {
+    const symbol = req.params.symbol.toUpperCase();
+    const cryptoData = loadData(path.join(__dirname, 'data', 'crypto.json'));
+    const coin = Object.values(cryptoData).find(c => c.symbol === symbol);
+    if (!coin) return res.status(404).send('<p>通貨が見つかりません</p>');
+    const data = { ohlc: coin.ohlc || null, history: coin.history || [] };
+    res.send(CHART_HTML(`${coin.name} (${symbol})`, JSON.stringify(data), 'crypto'));
+});
+// ==========================================
 app.listen(process.env.PORT || 3000, '0.0.0.0', () => console.log('Web Server Ready'));
 
 client.once(Events.ClientReady, async () => {
