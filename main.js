@@ -598,6 +598,34 @@ client.once(Events.ClientReady, async () => {
         if (changed) fs.writeFileSync(econPath, JSON.stringify(econ, null, 4));
     }, 3600000);
 
+    // 日給支払い（1分ごとにチェック、JST 0時に支給）
+    setInterval(() => {
+        const fs = require('fs'), path = require('path');
+        const econPath = path.join(__dirname, 'data', 'econ.json');
+        const corpPath = path.join(__dirname, 'data', 'corp.json');
+        if (!fs.existsSync(econPath) || !fs.existsSync(corpPath)) return;
+        const jstNow = new Date(Date.now() + 9 * 3600000);
+        const todayStr = `${jstNow.getUTCFullYear()}-${String(jstNow.getUTCMonth()+1).padStart(2,'0')}-${String(jstNow.getUTCDate()).padStart(2,'0')}`;
+        const econ = JSON.parse(fs.readFileSync(econPath, 'utf8'));
+        const corp = JSON.parse(fs.readFileSync(corpPath, 'utf8'));
+        let econChanged = false, corpChanged = false;
+        for (const c of Object.values(corp)) {
+            if (!c.employees || !c.employees.length || !c.salary) continue;
+            if (c.lastSalaryDate === todayStr) continue;
+            const total = c.salary * c.employees.length;
+            if ((c.balance || 0) < total) continue; // 残高不足はスキップ
+            c.balance = (c.balance || 0) - total;
+            for (const id of c.employees) {
+                if (!econ[id]) continue;
+                econ[id].balance = (econ[id].balance || 0) + c.salary;
+            }
+            c.lastSalaryDate = todayStr;
+            econChanged = true; corpChanged = true;
+        }
+        if (econChanged) fs.writeFileSync(econPath, JSON.stringify(econ, null, 4));
+        if (corpChanged) fs.writeFileSync(corpPath, JSON.stringify(corp, null, 4));
+    }, 60000);
+
     // 1分ごとの市場自動調整（株式・仮想通貨）
     setInterval(() => {
         const fs = require('fs'), path = require('path');
