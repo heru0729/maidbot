@@ -1029,10 +1029,12 @@ async function showStockDetail(interaction, c, econ, user) {
         if (chartStr) embed.setDescription(`\`\`\`\n${chartStr}\n\`\`\``);
         else embed.setDescription('価格履歴なし（しばらくお待ちください）');
     }
+    const publicUrl = process.env.PUBLIC_URL || '';
     const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId(`stock_buy_${c.id}`).setLabel('📈 買う').setStyle(ButtonStyle.Success).setDisabled(c.stock.availableShares <= 0),
         new ButtonBuilder().setCustomId(`stock_sell_${c.id}`).setLabel('📉 売る').setStyle(ButtonStyle.Danger).setDisabled(userShares <= 0),
-        new ButtonBuilder().setCustomId(`stock_refresh_${c.id}`).setLabel('🔄 更新').setStyle(ButtonStyle.Secondary)
+        new ButtonBuilder().setCustomId(`stock_refresh_${c.id}`).setLabel('🔄 更新').setStyle(ButtonStyle.Secondary),
+        ...(publicUrl ? [new ButtonBuilder().setLabel('📊 ロウソク足').setStyle(ButtonStyle.Link).setURL(`${publicUrl}/chart/stock/${c.id}`)] : [])
     );
     const files = attachment ? [attachment] : [];
     return interaction.reply({ embeds: [embed], components: [row, delBtn()], files, ...EPH });
@@ -1067,7 +1069,8 @@ async function showStockDetailUpdate(interaction, c, econ, user) {
     const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId(`stock_buy_${c.id}`).setLabel('📈 買う').setStyle(ButtonStyle.Success).setDisabled(c.stock.availableShares <= 0),
         new ButtonBuilder().setCustomId(`stock_sell_${c.id}`).setLabel('📉 売る').setStyle(ButtonStyle.Danger).setDisabled(userShares <= 0),
-        new ButtonBuilder().setCustomId(`stock_refresh_${c.id}`).setLabel('🔄 更新').setStyle(ButtonStyle.Secondary)
+        new ButtonBuilder().setCustomId(`stock_refresh_${c.id}`).setLabel('🔄 更新').setStyle(ButtonStyle.Secondary),
+        ...((process.env.PUBLIC_URL) ? [new ButtonBuilder().setLabel('📊 ロウソク足').setStyle(ButtonStyle.Link).setURL(`${process.env.PUBLIC_URL}/chart/stock/${c.id}`)] : [])
     );
     const files = attachment ? [attachment] : [];
     return interaction.update({ embeds: [embed], components: [row, delBtn()], files });
@@ -1165,7 +1168,8 @@ async function showCryptoDetail(interaction, coin, econ, user, CRYPTO_FILE, isUp
     const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId(`crypto_buy_${coin.id}`).setLabel('💰 買う').setStyle(ButtonStyle.Success).setDisabled(coin.availableSupply <= 0),
         new ButtonBuilder().setCustomId(`crypto_sell_${coin.id}`).setLabel('💸 売る').setStyle(ButtonStyle.Danger).setDisabled(held <= 0),
-        new ButtonBuilder().setCustomId(`crypto_refresh_${coin.id}`).setLabel('🔄 更新').setStyle(ButtonStyle.Secondary)
+        new ButtonBuilder().setCustomId(`crypto_refresh_${coin.id}`).setLabel('🔄 更新').setStyle(ButtonStyle.Secondary),
+        ...((process.env.PUBLIC_URL) ? [new ButtonBuilder().setLabel('📊 ロウソク足').setStyle(ButtonStyle.Link).setURL(`${process.env.PUBLIC_URL}/chart/crypto/${coin.symbol}`)] : [])
     );
     const files = attachment ? [attachment] : [];
     if (isUpdate) return interaction.update({ embeds: [embed], components: [row, delBtn()], files });
