@@ -195,10 +195,7 @@ const econCommands = [
     new SlashCommandBuilder().setName('inventory').setDescription('所持アイテムを確認します').addUserOption(o => o.setName('user').setDescription('対象ユーザー（未指定なら自分）')),
     new SlashCommandBuilder().setName('econrank').setDescription('所持金ランキングを表示します'),
     new SlashCommandBuilder().setName('bank').setDescription('銀行メニュー（残高確認・ローン・返済）'),
-    new SlashCommandBuilder().setName('exchange')
-        .setDescription('UnbelievaBoatの通貨とmaidbotの🪙を換金します')
-        .addSubcommand(sub => sub.setName('unb_to_bot').setDescription('UNB通貨 → maidbot 🪙').addIntegerOption(o => o.setName('amount').setDescription('換金するUNB量').setRequired(true).setMinValue(1)))
-        .addSubcommand(sub => sub.setName('bot_to_unb').setDescription('maidbot 🪙 → UNB通貨').addIntegerOption(o => o.setName('amount').setDescription('換金する🪙量').setRequired(true).setMinValue(1))),
+    new SlashCommandBuilder().setName('exchange').setDescription('UnbelievaBoatの通貨とmaidbotの🪙を換金します'),
     new SlashCommandBuilder().setName('corp')
         .setDescription('会社の管理')
         .addSubcommand(sub => sub.setName('create').setDescription('会社を設立します（1人2社まで・設立費用10,000枚）')
@@ -517,72 +514,43 @@ async function handleEcon(interaction) {
     }
 
     if (commandName === 'exchange') {
-        const sub = options.getSubcommand();
-        const serverCfg = interaction.client._serversCache?.[guildId] || (() => {
+        const serverCfg = (() => {
             try { return JSON.parse(require('fs').readFileSync(require('path').join(__dirname,'data','servers.json'),'utf8'))[guildId] || {}; } catch(e){ return {}; }
         })();
         const ex = serverCfg.exchange || {};
         if (!ex.enabled) return interaction.reply({ content: '❌ このサーバーでは換金機能が無効です。管理者が `/set` → **UNB換金** から有効化できます。', ...EPH });
         if (!ex.unbToken) return interaction.reply({ content: '❌ UNB APIトークンが設定されていません。管理者が `/set` → **UNB換金** から設定できます。', ...EPH });
 
-        const amount = options.getInteger('amount');
+        // UNB残高を取得して表示
+        let unbBalance = 0;
+        try {
+            const { Client } = require('unb-api');
+            const unbClient = new Client(ex.unbToken);
+            const unbUser = await unbClient.getUserBalance(guildId, user.id);
+            unbBalance = unbUser.cash || 0;
+        } catch(e) {
+            return interaction.reply({ content: `❌ UNB API接続エラー: ${e.message}\nAPIトークンを確認してください。`, ...EPH });
+        }
+
         const u = getUser(econ, user.id, user);
-        const axios = require('axios');
-        const UNB_API = 'https://unbelievaboat.com/api/v1';
-        const headers = { Authorization: ex.unbToken, 'Content-Type': 'application/json' };
+        const r1 = ex.rateUNBtoBot || 1;
+        const r2 = ex.rateBotToUNB || 1;
 
-        if (sub === 'unb_to_bot') {
-            const rate = ex.rateUNBtoBot || 1;
-            const receive = Math.floor(amount * rate);
-            // UNB残高確認
-            let unbBalance;
-            try {
-                const res = await axios.get(`${UNB_API}/guilds/${guildId}/users/${user.id}`, { headers });
-                unbBalance = (res.data.cash || 0) + (res.data.bank || 0);
-            } catch(e) {
-                return interaction.reply({ content: `❌ UNB APIエラー: ${e.response?.data?.message || e.message}`, ...EPH });
-            }
-            if (unbBalance < amount) return interaction.reply({ content: `❌ UNB残高不足。現在: **${unbBalance.toLocaleString()}** UNB`, ...EPH });
-            // UNBから減算
-            try {
-                await axios.patch(`${UNB_API}/guilds/${guildId}/users/${user.id}`, { cash: -amount }, { headers });
-            } catch(e) {
-                return interaction.reply({ content: `❌ UNB減算失敗: ${e.response?.data?.message || e.message}`, ...EPH });
-            }
-            // maidbot加算
-            u.balance += receive;
-            save(ECON_FILE, econ);
-            return interaction.reply({ embeds: [new EmbedBuilder().setTitle('💱 換金完了').setColor(0x26a69a)
-                .addFields(
-                    { name: '支払い', value: `**${amount.toLocaleString()}** UNB`, inline: true },
-                    { name: '受取', value: `**${receive.toLocaleString()}** 🪙`, inline: true },
-                    { name: 'レート', value: `1 UNB = ${rate} 🪙`, inline: true }
-                ).setTimestamp()], components: [delBtn()], ...EPH });
-        }
-
-        if (sub === 'bot_to_unb') {
-            const rate = ex.rateBotToUNB || 1;
-            const receive = Math.floor(amount * rate);
-            if (u.balance < amount) return interaction.reply({ content: `❌ 残高不足。現在: **${u.balance.toLocaleString()}** 🪙`, ...EPH });
-            // maidbot減算
-            u.balance -= amount;
-            save(ECON_FILE, econ);
-            // UNBに加算
-            try {
-                await axios.patch(`${UNB_API}/guilds/${guildId}/users/${user.id}`, { cash: receive }, { headers });
-            } catch(e) {
-                // 失敗したら返金
-                u.balance += amount;
-                save(ECON_FILE, econ);
-                return interaction.reply({ content: `❌ UNB加算失敗: ${e.response?.data?.message || e.message}`, ...EPH });
-            }
-            return interaction.reply({ embeds: [new EmbedBuilder().setTitle('💱 換金完了').setColor(0x5865f2)
-                .addFields(
-                    { name: '支払い', value: `**${amount.toLocaleString()}** 🪙`, inline: true },
-                    { name: '受取', value: `**${receive.toLocaleString()}** UNB`, inline: true },
-                    { name: 'レート', value: `1 🪙 = ${rate} UNB`, inline: true }
-                ).setTimestamp()], components: [delBtn()], ...EPH });
-        }
+        const embed = new EmbedBuilder()
+            .setTitle('💱 換金')
+            .setColor(0x5865f2)
+            .addFields(
+                { name: 'UNB残高', value: `**${unbBalance.toLocaleString()}** UNB`, inline: true },
+                { name: 'maidbot残高', value: `**${u.balance.toLocaleString()}** 🪙`, inline: true },
+                { name: '\u200b', value: '\u200b', inline: true },
+                { name: 'UNB → 🪙 レート', value: `1 UNB = **${r1}** 🪙`, inline: true },
+                { name: '🪙 → UNB レート', value: `1 🪙 = **${r2}** UNB`, inline: true }
+            );
+        const row = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('exchange_unb_to_bot').setLabel('UNB → 🪙').setStyle(ButtonStyle.Success),
+            new ButtonBuilder().setCustomId('exchange_bot_to_unb').setLabel('🪙 → UNB').setStyle(ButtonStyle.Primary)
+        );
+        return interaction.reply({ embeds: [embed], components: [row, delBtn()], ...EPH });
     }
 
     if (commandName === 'dust') {
@@ -1481,6 +1449,31 @@ async function handleEconInteraction(interaction) {
     const econ = load(ECON_FILE);
     const corpData = load(CORP_FILE);
 
+    // 換金ボタン
+    if (cid === 'exchange_unb_to_bot' || cid === 'exchange_bot_to_unb') {
+        const serverCfg = (() => {
+            try { return JSON.parse(require('fs').readFileSync(require('path').join(__dirname,'data','servers.json'),'utf8'))[guild?.id] || {}; } catch(e){ return {}; }
+        })();
+        const ex = serverCfg.exchange || {};
+        const isUNBtoBot = cid === 'exchange_unb_to_bot';
+        const r1 = ex.rateUNBtoBot || 1;
+        const r2 = ex.rateBotToUNB || 1;
+        const modal = new ModalBuilder()
+            .setCustomId(isUNBtoBot ? 'modal_exchange_unb_to_bot' : 'modal_exchange_bot_to_unb')
+            .setTitle(isUNBtoBot ? 'UNB → 🪙 換金' : '🪙 → UNB 換金');
+        modal.addComponents(
+            new ActionRowBuilder().addComponents(
+                new TextInputBuilder()
+                    .setCustomId('exchange_amount')
+                    .setLabel(isUNBtoBot ? `換金するUNB量（レート: 1 UNB = ${r1} 🪙）` : `換金する🪙量（レート: 1 🪙 = ${r2} UNB）`)
+                    .setStyle(TextInputStyle.Short)
+                    .setPlaceholder('例: 1000')
+                    .setRequired(true)
+            )
+        );
+        return interaction.showModal(modal);
+    }
+
     // 就職ボタン
     if (cid.startsWith('corp_join_')) {
         const corpId = cid.replace('corp_join_', '');
@@ -1926,6 +1919,69 @@ async function handleEconModal(interaction) {
         const u = getUser(econ, user.id, user);
         if (isBuy) return doBuyCrypto(interaction, coin, amtInput, econ, u, cryptoData, CRYPTO_FILE);
         else return doSellCrypto(interaction, coin, amtInput, econ, u, cryptoData, CRYPTO_FILE);
+    }
+
+    // ==================== 換金モーダル ====================
+    if (cid === 'modal_exchange_unb_to_bot' || cid === 'modal_exchange_bot_to_unb') {
+        const serverCfg = (() => {
+            try { return JSON.parse(require('fs').readFileSync(require('path').join(__dirname,'data','servers.json'),'utf8'))[interaction.guildId] || {}; } catch(e){ return {}; }
+        })();
+        const ex = serverCfg.exchange || {};
+        if (!ex.enabled || !ex.unbToken) return interaction.reply({ content: '❌ 換金機能が無効またはトークン未設定です。', ...EPH });
+
+        const amountStr = interaction.fields.getTextInputValue('exchange_amount').trim().replace(/,/g, '');
+        const amount = parseInt(amountStr) || 0;
+        if (amount <= 0) return interaction.reply({ content: '❌ 有効な金額を入力してください。', ...EPH });
+
+        const { Client } = require('unb-api');
+        const unbClient = new Client(ex.unbToken);
+        const isUNBtoBot = cid === 'modal_exchange_unb_to_bot';
+        const u = getUser(econ, user.id, user);
+
+        if (isUNBtoBot) {
+            const rate = ex.rateUNBtoBot || 1;
+            const receive = Math.floor(amount * rate);
+            // UNB残高確認
+            let unbUser;
+            try { unbUser = await unbClient.getUserBalance(interaction.guildId, user.id); }
+            catch(e) { return interaction.reply({ content: `❌ UNB APIエラー: ${e.message}`, ...EPH }); }
+            if ((unbUser.cash || 0) < amount) return interaction.reply({ content: `❌ UNBのcash残高不足。現在: **${(unbUser.cash||0).toLocaleString()}** UNB`, ...EPH });
+            // UNBから減算
+            try { await unbClient.editUserBalance(interaction.guildId, user.id, { cash: -amount }, `maidbot換金 by ${user.username}`); }
+            catch(e) { return interaction.reply({ content: `❌ UNB減算失敗: ${e.message}`, ...EPH }); }
+            // maidbot加算
+            u.balance += receive;
+            save(ECON_FILE, econ);
+            return interaction.reply({ embeds: [new EmbedBuilder().setTitle('💱 換金完了').setColor(0x26a69a)
+                .addFields(
+                    { name: '支払い', value: `**${amount.toLocaleString()}** UNB`, inline: true },
+                    { name: '受取', value: `**${receive.toLocaleString()}** 🪙`, inline: true },
+                    { name: 'レート', value: `1 UNB = ${rate} 🪙`, inline: true },
+                    { name: 'maidbot残高', value: `**${u.balance.toLocaleString()}** 🪙`, inline: true }
+                ).setTimestamp()], components: [delBtn()], ...EPH });
+        } else {
+            const rate = ex.rateBotToUNB || 1;
+            const receive = Math.floor(amount * rate);
+            if (u.balance < amount) return interaction.reply({ content: `❌ maidbot残高不足。現在: **${u.balance.toLocaleString()}** 🪙`, ...EPH });
+            // maidbot減算（先に引く）
+            u.balance -= amount;
+            save(ECON_FILE, econ);
+            // UNBに加算
+            try { await unbClient.editUserBalance(interaction.guildId, user.id, { cash: receive }, `maidbot換金 by ${user.username}`); }
+            catch(e) {
+                // 失敗したら返金
+                u.balance += amount;
+                save(ECON_FILE, econ);
+                return interaction.reply({ content: `❌ UNB加算失敗: ${e.message}`, ...EPH });
+            }
+            return interaction.reply({ embeds: [new EmbedBuilder().setTitle('💱 換金完了').setColor(0x5865f2)
+                .addFields(
+                    { name: '支払い', value: `**${amount.toLocaleString()}** 🪙`, inline: true },
+                    { name: '受取', value: `**${receive.toLocaleString()}** UNB`, inline: true },
+                    { name: 'レート', value: `1 🪙 = ${rate} UNB`, inline: true },
+                    { name: 'maidbot残高', value: `**${u.balance.toLocaleString()}** 🪙`, inline: true }
+                ).setTimestamp()], components: [delBtn()], ...EPH });
+        }
     }
 
     // ==================== 売上回収モーダル ====================
