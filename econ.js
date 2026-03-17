@@ -1100,7 +1100,7 @@ async function doBuyStock(interaction, c, amount, econ, user, corpData) {
     c.stock.price = round3(price * ratio);
     if (!c.stock.history) c.stock.history = [];
     c.stock.history.push(c.stock.price);
-    if (c.stock.history.length > 30) c.stock.history.shift();
+    if (c.stock.history.length > 1440) c.stock.history.shift();
     save(ECON_FILE, econ);
     save(CORP_FILE, corpData);
     return interaction.reply({ content: `✅ **${c.name}** の株を **${amount}** 株 購入！\n小計: ${fmtPrice(subtotal)} 🪙 + 手数料: ${fmtPrice(fee)} 🪙\n現在株価: **${fmtPrice(c.stock.price)}** 🪙`, components: [delBtn()], ...EPH });
@@ -1121,7 +1121,7 @@ async function doSellStock(interaction, c, amount, econ, u, corpData) {
     c.stock.price = round3(Math.max(0.001, price * ratio));
     if (!c.stock.history) c.stock.history = [];
     c.stock.history.push(c.stock.price);
-    if (c.stock.history.length > 30) c.stock.history.shift();
+    if (c.stock.history.length > 1440) c.stock.history.shift();
     save(ECON_FILE, econ);
     save(CORP_FILE, corpData);
     return interaction.reply({ content: `✅ **${c.name}** の株を **${amount}** 株 売却！\n小計: ${fmtPrice(subtotal)} 🪙 - 手数料: ${fmtPrice(fee)} 🪙 = **${fmtPrice(total)}** 🪙\n現在株価: **${fmtPrice(c.stock.price)}** 🪙`, components: [delBtn()], ...EPH });
