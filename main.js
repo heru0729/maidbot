@@ -210,9 +210,6 @@ function buildExchangePanel(s) {
         `**状態:** ${ex.enabled ? '✅ ON' : '❌ OFF'}`,
         `**UNB→maidbot レート:** 1 UNB = **${ex.rateUNBtoBot || 1}** 🪙`,
         `**maidbot→UNB レート:** 1 🪙 = **${ex.rateBotToUNB || 1}** UNB`,
-        '**UNB APIトークン:** 環境変数 UNB_TOKEN で管理',
-        '',
-        'UNB APIトークンは https://unbelievaboat.com/applications で取得できます。',
     ].join('\n');
     return {
         embeds: [new EmbedBuilder().setTitle('💱 UNB換金設定').setDescription(desc).setColor(0x5865f2)],
