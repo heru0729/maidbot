@@ -1911,7 +1911,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
 
         // econ ボタン
-        const econBtnPrefixes = ['bj_hit_', 'bj_stand_', 'bj_double_', 'bank_loan', 'bank_repay', 'bank_reload', 'balance_reload', 'stock_buy_', 'stock_sell_', 'stock_refresh_', 'crypto_buy_', 'crypto_sell_', 'crypto_refresh_', 'store_issuestock_', 'store_additem_', 'store_removeitem_', 'store_withdraw_', 'corp_dissolve_'];
+        const econBtnPrefixes = ['bj_hit_', 'bj_stand_', 'bj_double_', 'bank_loan', 'bank_repay', 'bank_reload', 'balance_reload', 'stock_buy_', 'stock_sell_', 'stock_refresh_', 'crypto_buy_', 'crypto_sell_', 'crypto_refresh_', 'store_issuestock_', 'store_additem_', 'store_removeitem_', 'store_withdraw_', 'corp_dissolve_', 'corp_join_', 'exchange_unb_to_bot', 'exchange_bot_to_unb'];
         if (econBtnPrefixes.some(p => cid.startsWith(p))) {
             await handleEconInteraction(interaction);
         }
@@ -1937,7 +1937,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     // econ モーダル
-    if (interaction.isModalSubmit() && (interaction.customId.startsWith('modal_store_') || interaction.customId.startsWith('modal_earn_') || interaction.customId.startsWith('modal_bank_') || interaction.customId.startsWith('modal_stock_') || interaction.customId.startsWith('modal_crypto_'))) {
+    if (interaction.isModalSubmit() && (interaction.customId.startsWith('modal_store_') || interaction.customId.startsWith('modal_earn_') || interaction.customId.startsWith('modal_bank_') || interaction.customId.startsWith('modal_stock_') || interaction.customId.startsWith('modal_crypto_') || interaction.customId.startsWith('modal_exchange_'))) {
         await handleEconModal(interaction);
     }
 });
