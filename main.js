@@ -212,7 +212,7 @@ function buildExchangePanel(s) {
         `**maidbot→UNB レート:** 1 🪙 = **${ex.rateBotToUNB || 1}** UNB`,
         `**UNB APIトークン:** ${ex.unbToken ? '設定済み' : '未設定'}`,
         '',
-        'UNB APIトークンはUnbelievaBoatのダッシュボード → Applications → APIで取得できます。',
+        'UNB APIトークンは https://unbelievaboat.com/applications で取得できます。',
     ].join('\n');
     return {
         embeds: [new EmbedBuilder().setTitle('💱 UNB換金設定').setDescription(desc).setColor(0x5865f2)],
@@ -1851,7 +1851,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (cid === 'exchange_set_token') {
             const modal = new ModalBuilder().setCustomId('modal_exchange_token').setTitle('🔑 UNB APIトークン設定');
             modal.addComponents(
-                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('unb_token').setLabel('UnbelievaBoat APIトークン').setStyle(TextInputStyle.Short).setPlaceholder('ダッシュボード → Applications → APIで取得').setRequired(true))
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('unb_token').setLabel('UnbelievaBoat APIトークン').setStyle(TextInputStyle.Short).setPlaceholder('https://unbelievaboat.com/applications で取得').setRequired(true))
             );
             return interaction.showModal(modal);
         }
