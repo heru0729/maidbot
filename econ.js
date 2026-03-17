@@ -533,8 +533,8 @@ async function handleEcon(interaction) {
         }
 
         const u = getUser(econ, user.id, user);
-        const r1 = ex.rateUNBtoBot || 1;
-        const r2 = ex.rateBotToUNB || 1;
+        const r1 = 1;
+        const r2 = 1;
 
         const embed = new EmbedBuilder()
             .setTitle('💱 換金')
@@ -1456,8 +1456,8 @@ async function handleEconInteraction(interaction) {
         })();
         const ex = serverCfg.exchange || {};
         const isUNBtoBot = cid === 'exchange_unb_to_bot';
-        const r1 = ex.rateUNBtoBot || 1;
-        const r2 = ex.rateBotToUNB || 1;
+        const r1 = 1;
+        const r2 = 1;
         const modal = new ModalBuilder()
             .setCustomId(isUNBtoBot ? 'modal_exchange_unb_to_bot' : 'modal_exchange_bot_to_unb')
             .setTitle(isUNBtoBot ? 'UNB → 🪙 換金' : '🪙 → UNB 換金');
