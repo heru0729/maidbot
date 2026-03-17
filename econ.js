@@ -994,7 +994,7 @@ async function showStockDetail(interaction, c, econ, user) {
     const userShares = (u.stocks || {})[c.id] || 0;
     const prev = history[history.length - 2] || price;
     const accentColor = price > prev ? 0x57f287 : price < prev ? 0xff4757 : 0x3498db;
-    const { attachment, imageUrl } = await makeChart(history, `${c.name} 株式`, price > prev ? '#57f287' : price < prev ? '#ff4757' : '#5865f2');
+    const { attachment, imageUrl } = await makeChart(c.stock?.ohlc || history, `${c.name} 株式`, price > prev ? '#26a69a' : price < prev ? '#ef5350' : '#5865f2');
     const embed = new EmbedBuilder()
         .setTitle(`📈 ${c.name} 株式情報`)
         .setColor(accentColor)
@@ -1024,7 +1024,7 @@ async function showStockDetailUpdate(interaction, c, econ, user) {
     const userShares = (u.stocks || {})[c.id] || 0;
     const prev = history[history.length - 2] || price;
     const accentColor = price > prev ? 0x57f287 : price < prev ? 0xff4757 : 0x3498db;
-    const { attachment, imageUrl } = await makeChart(history, `${c.name} 株式`, price > prev ? '#57f287' : price < prev ? '#ff4757' : '#5865f2');
+    const { attachment, imageUrl } = await makeChart(c.stock?.ohlc || history, `${c.name} 株式`, price > prev ? '#26a69a' : price < prev ? '#ef5350' : '#5865f2');
     const embed = new EmbedBuilder()
         .setTitle(`📈 ${c.name} 株式情報`)
         .setColor(accentColor)
@@ -1117,7 +1117,7 @@ async function showCryptoDetail(interaction, coin, econ, user, CRYPTO_FILE, isUp
     const held = (u.crypto || {})[coin.id] || 0;
     const prev = history[history.length - 2] || price;
     const accentColor = price > prev ? 0x57f287 : price < prev ? 0xff4757 : 0xf1c40f;
-    const { attachment, imageUrl } = await makeChart(history, `${coin.name} (${coin.symbol})`, price > prev ? '#57f287' : price < prev ? '#ff4757' : '#f1c40f');
+    const { attachment, imageUrl } = await makeChart(coin.ohlc || history, `${coin.name} (${coin.symbol})`, price > prev ? '#26a69a' : price < prev ? '#ef5350' : '#f1c40f');
     const embed = new EmbedBuilder()
         .setTitle(`💹 ${coin.name} (${coin.symbol})`)
         .setColor(accentColor)
