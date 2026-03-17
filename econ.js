@@ -190,8 +190,8 @@ const econCommands = [
     new SlashCommandBuilder().setName('shop').setDescription('ショップ・会社ストアのアイテム一覧を表示します'),
     new SlashCommandBuilder().setName('buy').setDescription('アイテムを購入します').addStringOption(o => o.setName('item').setDescription('アイテム名（未指定でセレクト）')).addIntegerOption(o => o.setName('amount').setDescription('購入数（数字のみ、未指定で1）').setMinValue(1)),
     new SlashCommandBuilder().setName('sell').setDescription('インベントリのアイテムを売却します')
-        .addSubcommand(sub => sub.setName('shop').setDescription('ショップに売却（規定価格）').addStringOption(o => o.setName('item').setDescription('アイテム名（未指定でセレクト）')).addStringOption(o => o.setName('amount').setDescription('個数（数字・all・half、未指定で1）')))
-        .addSubcommand(sub => sub.setName('player').setDescription('プレイヤーに自由価格で売却').addStringOption(o => o.setName('item').setDescription('アイテム名').setRequired(true)).addStringOption(o => o.setName('price').setDescription('販売価格（数字・all・half）').setRequired(true)).addUserOption(o => o.setName('buyer').setDescription('販売相手（未指定で出品）'))),
+        .addSubcommand(sub => sub.setName('trader').setDescription('アイテムを規定価格でショップに売却').addStringOption(o => o.setName('item').setDescription('アイテム名（未指定でセレクト）')).addIntegerOption(o => o.setName('amount').setDescription('個数（未指定で1）').setMinValue(1)))
+        .addSubcommand(sub => sub.setName('shop').setDescription('価格を設定してプレイヤーに販売').addStringOption(o => o.setName('item').setDescription('アイテム名').setRequired(true)).addIntegerOption(o => o.setName('price').setDescription('販売価格').setRequired(true).setMinValue(1)).addUserOption(o => o.setName('buyer').setDescription('販売相手（未指定で告知のみ）'))),
     new SlashCommandBuilder().setName('inventory').setDescription('所持アイテムを確認します').addUserOption(o => o.setName('user').setDescription('対象ユーザー（未指定なら自分）')),
     new SlashCommandBuilder().setName('econrank').setDescription('所持金ランキングを表示します'),
     new SlashCommandBuilder().setName('bank').setDescription('銀行メニュー（残高確認・ローン・返済）'),
@@ -604,7 +604,7 @@ async function handleEcon(interaction) {
             });
         }
 
-        embed.setDescription('`/buy` で購入　`/sell shop` でショップ売却　`/sell player` でプレイヤー販売')
+        embed.setDescription('`/buy` で購入　`/sell shop` でショップ売却　`/sell trader` でプレイヤー販売')
             .setFooter({ text: `公式${shopItems.length}件 + 会社ストア${corps.reduce((a,c)=>a+c.items.length,0)}件` });
 
         return interaction.reply({ embeds: [embed], components: [delBtn()] });
@@ -635,56 +635,46 @@ async function handleEcon(interaction) {
         const u = getUser(econ, user.id, user);
         if (!u.inventory || u.inventory.length === 0) return interaction.reply({ content: '❌ インベントリが空です。', ...EPH });
 
-        if (sub === 'shop') {
+        if (sub === 'trader') {
+            // 規定価格でショップに売却
             const itemName = options.getString('item');
-            const amtRaw = (options.getString('amount') || '1').trim().toLowerCase();
-            const counts = {};
-            for (const item of u.inventory) counts[item.name] = (counts[item.name] || 0) + 1;
-            const resolveCount = (name) => {
-                const have = counts[name] || 0;
-                if (amtRaw === 'all') return have;
-                if (amtRaw === 'half') return Math.floor(have / 2);
-                return parseInt(amtRaw) || 1;
-            };
+            const sellCount = options.getInteger('amount') || 1;
             if (!itemName) {
+                const counts = {};
+                for (const item of u.inventory) counts[item.name] = (counts[item.name] || 0) + 1;
+                if (Object.keys(counts).length === 0) return interaction.reply({ content: '❌ 売却できるアイテムがありません。', ...EPH });
                 const select = new StringSelectMenuBuilder()
-                    .setCustomId(`sell_select_${amtRaw}`)
+                    .setCustomId(`sell_select_${sellCount}`)
                     .setPlaceholder('売却するアイテムを選択')
                     .addOptions(Object.entries(counts).slice(0, 25).map(([name, count]) => {
                         const sellPrice = u.inventory.find(i => i.name === name)?.sellPrice || 0;
-                        return { label: name, description: `所持: ${count}個 | 売却: ${sellPrice.toLocaleString()} 🪙/個`, value: name };
+                        return { label: name, description: `所持: ${count}個 | 規定価格: ${sellPrice.toLocaleString()} 🪙/個`, value: name };
                     }));
-                return interaction.reply({ content: `🎒 売却するアイテムを選択してください:`, components: [new ActionRowBuilder().addComponents(select)], ...EPH });
+                return interaction.reply({ content: `🎒 売却するアイテムを選択してください（${sellCount}個）:`, components: [new ActionRowBuilder().addComponents(select)], ...EPH });
             }
-            return doSellItem(interaction, itemName, resolveCount(itemName), econ, u);
+            return doSellItem(interaction, itemName, sellCount, econ, u);
         }
 
-        if (sub === 'player') {
+        if (sub === 'shop') {
+            // 価格設定してプレイヤーに販売
             const itemName = options.getString('item');
-            const priceInput = options.getString('price').trim().toLowerCase();
+            const price = options.getInteger('price');
             const buyer = options.getUser('buyer');
             const item = u.inventory.find(i => i.name.toLowerCase() === itemName.toLowerCase());
             if (!item) return interaction.reply({ content: `❌ **${itemName}** をインベントリに持っていません。`, ...EPH });
-
-            let price;
-            if (priceInput === 'all') price = u.balance;
-            else if (priceInput === 'half') price = Math.floor(u.balance / 2);
-            else price = parseInt(priceInput) || 0;
-            if (price <= 0) return interaction.reply({ content: '❌ 有効な価格を入力してください。', ...EPH });
-
             if (buyer) {
-                // 直接売却
+                if (buyer.id === user.id) return interaction.reply({ content: '❌ 自分自身には売れません。', ...EPH });
+                if (buyer.bot) return interaction.reply({ content: '❌ Botには売れません。', ...EPH });
                 const buyerData = getUser(econ, buyer.id, buyer);
-                if (buyerData.balance < price) return interaction.reply({ content: `❌ **${buyer.username}** の残高が不足しています。（必要: **${price.toLocaleString()}** 🪙）`, ...EPH });
+                if (buyerData.balance < price) return interaction.reply({ content: `❌ **${buyer.username}** の残高不足。（必要: **${price.toLocaleString()}** 🪙 / 現在: **${buyerData.balance.toLocaleString()}** 🪙）`, ...EPH });
                 const idx = u.inventory.findIndex(i => i.name.toLowerCase() === itemName.toLowerCase());
                 u.inventory.splice(idx, 1);
                 buyerData.balance -= price;
                 u.balance += price;
-                save(ECON_FILE, econ);
                 if (!buyerData.inventory) buyerData.inventory = [];
                 buyerData.inventory.push({ ...item, boughtAt: Date.now() });
                 save(ECON_FILE, econ);
-                const embed = new EmbedBuilder().setTitle('🤝 プレイヤー間取引完了').setColor(0x2ecc71)
+                const embed = new EmbedBuilder().setTitle('🛒 取引完了').setColor(0x2ecc71)
                     .addFields(
                         { name: '売り手', value: user.username, inline: true },
                         { name: '買い手', value: buyer.username, inline: true },
@@ -693,11 +683,9 @@ async function handleEcon(interaction) {
                     );
                 return interaction.reply({ embeds: [embed], components: [delBtn()] });
             } else {
-                // 出品（確認メッセージ）
-                const embed = new EmbedBuilder().setTitle('📋 出品確認').setColor(0xe67e22)
-                    .setDescription(`**${itemName}** を **${price.toLocaleString()}** 🪙 で出品します。\n相手が `/pay` で支払い、あなたがアイテムを渡す形になります。\n（自動取引はプレイヤー指定時のみ）`)
-                    .setFooter({ text: '相手を指定すると自動取引できます: /sell player buyer:[ユーザー]' });
-                return interaction.reply({ embeds: [embed], components: [delBtn()], ...EPH });
+                const embed = new EmbedBuilder().setTitle('📢 出品告知').setColor(0xe67e22)
+                    .setDescription(`<@${user.id}> が **${itemName}** を **${price.toLocaleString()}** 🪙 で出品中！\n購入希望者は本人に連絡してください。`);
+                return interaction.reply({ embeds: [embed], components: [delBtn()] });
             }
         }
     }
