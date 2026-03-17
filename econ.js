@@ -223,7 +223,7 @@ const econCommands = [
 ];
 
 async function handleEcon(interaction) {
-    const { commandName, options, user, guild } = interaction;
+    const { commandName, options, user, guild, guildId } = interaction;
     const econ = load(ECON_FILE);
 
     if (commandName === 'balance') {
@@ -1452,7 +1452,7 @@ async function handleEconInteraction(interaction) {
     // 換金ボタン
     if (cid === 'exchange_unb_to_bot' || cid === 'exchange_bot_to_unb') {
         const serverCfg = (() => {
-            try { return JSON.parse(require('fs').readFileSync(require('path').join(__dirname,'data','servers.json'),'utf8'))[guild?.id] || {}; } catch(e){ return {}; }
+            try { return JSON.parse(require('fs').readFileSync(require('path').join(__dirname,'data','servers.json'),'utf8'))[interaction.guildId] || {}; } catch(e){ return {}; }
         })();
         const ex = serverCfg.exchange || {};
         const isUNBtoBot = cid === 'exchange_unb_to_bot';
