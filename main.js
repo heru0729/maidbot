@@ -381,6 +381,9 @@ function draw(){
   for(let i=0;i<data.length;i+=step){
     ctx.fillText(i+1+zoomStart, toX(i), H-6);
   }
+
+  // クロスヘア・OHLCポップアップ
+  drawCrosshair(W,H,PAD,cw,ch,data,vTop,vR);
 }
 
 // ===== ズーム（マウスホイール） =====
@@ -439,7 +442,58 @@ window.addEventListener('mousemove',e=>{
 });
 window.addEventListener('mouseup',()=>{drag=null; cv.classList.remove('grabbing');});
 
-// ===== データ取得 =====
+// ===== クロスヘア =====
+let cursor={x:-1,y:-1,active:false};
+function drawCrosshair(W,H,PAD,cw,ch,data,vTop,vR){
+  if(!cursor.active||cursor.x<PAD.l||cursor.x>PAD.l+cw) return;
+  const i=Math.floor((cursor.x-PAD.l)/cw*data.length);
+  if(i<0||i>=data.length) return;
+  const {o,h,l,c}=data[i];
+  const x=PAD.l+(i+0.5)*cw/data.length;
+  const y=cursor.y;
+  const price=vTop-((y-PAD.t)/ch)*vR;
+  // 縦線
+  ctx.strokeStyle='rgba(255,255,255,0.25)'; ctx.lineWidth=1; ctx.setLineDash([3,3]);
+  ctx.beginPath(); ctx.moveTo(x,PAD.t); ctx.lineTo(x,PAD.t+ch); ctx.stroke();
+  // 横線
+  ctx.beginPath(); ctx.moveTo(PAD.l,y); ctx.lineTo(PAD.l+cw,y); ctx.stroke();
+  ctx.setLineDash([]);
+  // Y価格ラベル
+  const pLabel=fmt(Math.max(0,price));
+  ctx.fillStyle='#3a3d44';
+  ctx.fillRect(0,y-9,PAD.l-2,18);
+  ctx.fillStyle='#fff'; ctx.font='10px monospace'; ctx.textAlign='right';
+  ctx.fillText(pLabel,PAD.l-4,y+3.5);
+  // OHLCポップアップ
+  const isUp=c>=o;
+  const lines=[
+    'O: '+fmt(o), 'H: '+fmt(h), 'L: '+fmt(l), 'C: '+fmt(c)
+  ];
+  const bw=90, bh=68, bx=x+8>PAD.l+cw-bw?x-bw-8:x+8, by=Math.min(y-10,PAD.t+ch-bh);
+  ctx.fillStyle='rgba(30,33,36,0.92)';
+  ctx.beginPath(); ctx.roundRect(bx,by,bw,bh,4); ctx.fill();
+  ctx.strokeStyle=isUp?'#26a69a':'#ef5350'; ctx.lineWidth=1;
+  ctx.beginPath(); ctx.roundRect(bx,by,bw,bh,4); ctx.stroke();
+  ctx.fillStyle='#ccc'; ctx.font='11px monospace'; ctx.textAlign='left';
+  lines.forEach((l,i2)=>ctx.fillText(l,bx+8,by+16+i2*13));
+}
+
+cv.addEventListener('mousemove',e=>{
+  if(drag) return;
+  const rect=cv.getBoundingClientRect();
+  cursor={x:e.clientX-rect.left,y:e.clientY-rect.top,active:true};
+  draw();
+});
+cv.addEventListener('mouseleave',()=>{cursor.active=false; draw();});
+
+// タッチでもOHLC表示
+cv.addEventListener('touchstart',e=>{
+  if(e.touches.length===1){
+    const rect=cv.getBoundingClientRect();
+    cursor={x:e.touches[0].clientX-rect.left,y:e.touches[0].clientY-rect.top,active:true};
+  }
+},{passive:true});
+cv.addEventListener('touchend',()=>{cursor.active=false; draw();});
 async function refresh(){
   try{
     const res=await fetch(API); const json=await res.json();
