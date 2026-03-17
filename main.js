@@ -196,12 +196,40 @@ function buildNgwordPanel(s) {
     };
 }
 function createMainSetRow3(s) {
+    const exchOn = s.exchange?.enabled;
     return new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('set_menu_mute').setLabel(`ミュートロール: ${s.muteRole ? '✅設定済' : '未設定'}`).setStyle(s.muteRole ? ButtonStyle.Success : ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId('set_menu_serverlock').setLabel('サーバーロック設定').setStyle(ButtonStyle.Danger),
-        new ButtonBuilder().setCustomId('set_menu_autoreply').setLabel(`自動返信 (${(s.autoReplies || []).length}件)`).setStyle(ButtonStyle.Primary)
+        new ButtonBuilder().setCustomId('set_menu_autoreply').setLabel(`自動返信 (${(s.autoReplies || []).length}件)`).setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId('set_menu_exchange').setLabel(`UNB換金: ${exchOn ? 'ON' : 'OFF'}`).setStyle(exchOn ? ButtonStyle.Success : ButtonStyle.Secondary)
     );
 }
+function buildExchangePanel(s) {
+    const ex = s.exchange || {};
+    const desc = [
+        `**状態:** ${ex.enabled ? '✅ ON' : '❌ OFF'}`,
+        `**UNB→maidbot レート:** 1 UNB = **${ex.rateUNBtoBot || 1}** 🪙`,
+        `**maidbot→UNB レート:** 1 🪙 = **${ex.rateBotToUNB || 1}** UNB`,
+        `**UNB APIトークン:** ${ex.unbToken ? '設定済み' : '未設定'}`,
+        '',
+        'UNB APIトークンはUnbelievaBoatのダッシュボード → Applications → APIで取得できます。',
+    ].join('\n');
+    return {
+        embeds: [new EmbedBuilder().setTitle('💱 UNB換金設定').setDescription(desc).setColor(0x5865f2)],
+        components: [
+            new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('exchange_toggle').setLabel(ex.enabled ? '❌ OFFにする' : '✅ ONにする').setStyle(ex.enabled ? ButtonStyle.Danger : ButtonStyle.Success),
+                new ButtonBuilder().setCustomId('exchange_set_rate').setLabel('レート設定').setStyle(ButtonStyle.Primary),
+                new ButtonBuilder().setCustomId('exchange_set_token').setLabel('APIトークン設定').setStyle(ButtonStyle.Primary)
+            ),
+            new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('set_back_main').setLabel('← 戻る').setStyle(ButtonStyle.Secondary)
+            )
+        ],
+        ...EPH_FLAG
+    };
+}
+const EPH_FLAG = { flags: MessageFlags.Ephemeral };
 function buildSetPanel(s) {
     return { content: '⚙️ **サーバー管理設定パネル**\n下のボタンから各機能の設定を行ってください。', components: [createMainSetRow(s), createMainSetRow2(), createMainSetRow3(s)], flags: MessageFlags.Ephemeral };
 }
@@ -283,13 +311,13 @@ function setTF(t){
   ['1m','1h','24h'].forEach(x=>document.getElementById('btn'+x).className=x===t?'active':'');
   const d=aggregate(allData,t);
   viewData=d;
-  // 初期表示は直近60本、ズームアウトで全履歴を見られる
-  zoomStart=Math.max(0,d.length-60); zoomEnd=d.length;
+  // デフォルトは全データ表示
+  zoomStart=0; zoomEnd=d.length;
   draw();
 }
 
 function resetZoom(){
-  zoomStart=Math.max(0,viewData.length-60); zoomEnd=viewData.length;
+  zoomStart=0; zoomEnd=viewData.length;
   draw();
 }
 
@@ -515,7 +543,7 @@ async function refresh(){
     // 初回またはズームリセット時のみ全表示
     if(!prev.length||zoomEnd===0){
       // 初回: 直近60本表示
-      zoomStart=Math.max(0,d.length-60); zoomEnd=d.length;
+      zoomStart=0; zoomEnd=d.length;
     } else {
       // 末尾を表示中なら新しいデータに追従
       const wasAtEnd=zoomEnd>=prevLen;
@@ -598,7 +626,7 @@ client.once(Events.ClientReady, async () => {
         if (changed) fs.writeFileSync(econPath, JSON.stringify(econ, null, 4));
     }, 3600000);
 
-    // 日給支払い（1分ごとにチェック、JST 0時に支給）
+    // 日給支払い＋株式配当（1分ごとにチェック、JST 0時に支給）
     setInterval(() => {
         const fs = require('fs'), path = require('path');
         const econPath = path.join(__dirname, 'data', 'econ.json');
@@ -609,19 +637,45 @@ client.once(Events.ClientReady, async () => {
         const econ = JSON.parse(fs.readFileSync(econPath, 'utf8'));
         const corp = JSON.parse(fs.readFileSync(corpPath, 'utf8'));
         let econChanged = false, corpChanged = false;
+
         for (const c of Object.values(corp)) {
-            if (!c.employees || !c.employees.length || !c.salary) continue;
-            if (c.lastSalaryDate === todayStr) continue;
-            const total = c.salary * c.employees.length;
-            if ((c.balance || 0) < total) continue; // 残高不足はスキップ
-            c.balance = (c.balance || 0) - total;
-            for (const id of c.employees) {
-                if (!econ[id]) continue;
-                econ[id].balance = (econ[id].balance || 0) + c.salary;
+            // ===== 日給支払い =====
+            if (c.employees?.length && c.salary && c.lastSalaryDate !== todayStr) {
+                const total = c.salary * c.employees.length;
+                if ((c.balance || 0) >= total) {
+                    c.balance = (c.balance || 0) - total;
+                    for (const id of c.employees) {
+                        if (!econ[id]) continue;
+                        econ[id].balance = (econ[id].balance || 0) + c.salary;
+                    }
+                    c.lastSalaryDate = todayStr;
+                    econChanged = true; corpChanged = true;
+                }
             }
-            c.lastSalaryDate = todayStr;
+
+            // ===== 株式配当 =====
+            if (!c.stock || !c.stock.feePool || c.stock.feePool < 1) continue;
+            if (c.stock.lastDividendDate === todayStr) continue;
+            // 保有者リスト（オーナー自身は除外）
+            const holders = {};
+            let totalHeld = 0;
+            for (const [uid, ud] of Object.entries(econ)) {
+                if (uid === c.ownerId) continue; // 自己配当防止
+                const held = (ud.stocks || {})[c.id] || 0;
+                if (held > 0) { holders[uid] = held; totalHeld += held; }
+            }
+            if (totalHeld === 0) continue;
+            const pool = Math.floor(c.stock.feePool);
+            for (const [uid, held] of Object.entries(holders)) {
+                const div = Math.floor(pool * (held / totalHeld));
+                if (div <= 0) continue;
+                econ[uid].balance = (econ[uid].balance || 0) + div;
+            }
+            c.stock.feePool = Math.round((c.stock.feePool - pool) * 1000) / 1000;
+            c.stock.lastDividendDate = todayStr;
             econChanged = true; corpChanged = true;
         }
+
         if (econChanged) fs.writeFileSync(econPath, JSON.stringify(econ, null, 4));
         if (corpChanged) fs.writeFileSync(corpPath, JSON.stringify(corp, null, 4));
     }, 60000);
@@ -1337,7 +1391,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
 
         // econコマンド
-        const econCommandNames = ['balance','earn','pay','bank','account','shop','buy','sell','dust','inventory','econrank','corp','crypto','stock','buystock','sellstock'];
+        const econCommandNames = ['balance','earn','pay','exchange','bank','account','shop','buy','sell','dust','inventory','econrank','corp','crypto','stock','buystock','sellstock'];
         if (econCommandNames.includes(commandName)) {
             await handleEcon(interaction);
         }
@@ -1568,6 +1622,26 @@ client.on(Events.InteractionCreate, async (interaction) => {
             const matchLabel = matchType === 'exact' ? '完全一致' : '含む';
             await interaction.reply({ content: `✅ 自動返信を追加しました。\nトリガー: \`${trigger}\`\n返答: ${responses.length}件\nモード: ${modeLabel} | 判定: ${matchLabel}`, ...EPH });
         }
+
+        if (cid === 'modal_exchange_rate') {
+            const r1 = parseFloat(interaction.fields.getTextInputValue('rate_unb_to_bot')) || 0;
+            const r2 = parseFloat(interaction.fields.getTextInputValue('rate_bot_to_unb')) || 0;
+            if (r1 <= 0 || r2 <= 0) return interaction.reply({ content: '❌ 0より大きい値を入力してください。', ...EPH });
+            if (!servers[guildId].exchange) servers[guildId].exchange = {};
+            servers[guildId].exchange.rateUNBtoBot = r1;
+            servers[guildId].exchange.rateBotToUNB = r2;
+            saveData(SERVERS_FILE, servers);
+            await interaction.reply({ content: `✅ レートを設定しました。\nUNB→🪙: 1 UNB = **${r1}** 🪙\n🪙→UNB: 1 🪙 = **${r2}** UNB`, ...EPH });
+        }
+
+        if (cid === 'modal_exchange_token') {
+            const token = interaction.fields.getTextInputValue('unb_token').trim();
+            if (!token) return interaction.reply({ content: '❌ トークンを入力してください。', ...EPH });
+            if (!servers[guildId].exchange) servers[guildId].exchange = {};
+            servers[guildId].exchange.unbToken = token;
+            saveData(SERVERS_FILE, servers);
+            await interaction.reply({ content: '✅ UNB APIトークンを設定しました。', ...EPH });
+        }
     }
 
     // ==================== ボタン ====================
@@ -1756,6 +1830,30 @@ client.on(Events.InteractionCreate, async (interaction) => {
         // 自動返信管理
         if (cid === 'set_menu_autoreply') {
             await interaction.update(buildAutoReplyPanel(servers[guildId]));
+        }
+        if (cid === 'set_menu_exchange') {
+            await interaction.update(buildExchangePanel(servers[guildId]));
+        }
+        if (cid === 'exchange_toggle') {
+            if (!servers[guildId].exchange) servers[guildId].exchange = {};
+            servers[guildId].exchange.enabled = !servers[guildId].exchange.enabled;
+            saveData(SERVERS_FILE, servers);
+            await interaction.update(buildExchangePanel(servers[guildId]));
+        }
+        if (cid === 'exchange_set_rate') {
+            const modal = new ModalBuilder().setCustomId('modal_exchange_rate').setTitle('💱 換金レート設定');
+            modal.addComponents(
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('rate_unb_to_bot').setLabel('UNB → maidbot レート（1 UNB = ? 🪙）').setStyle(TextInputStyle.Short).setPlaceholder('例: 10').setRequired(true)),
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('rate_bot_to_unb').setLabel('maidbot → UNB レート（1 🪙 = ? UNB）').setStyle(TextInputStyle.Short).setPlaceholder('例: 1').setRequired(true))
+            );
+            return interaction.showModal(modal);
+        }
+        if (cid === 'exchange_set_token') {
+            const modal = new ModalBuilder().setCustomId('modal_exchange_token').setTitle('🔑 UNB APIトークン設定');
+            modal.addComponents(
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('unb_token').setLabel('UnbelievaBoat APIトークン').setStyle(TextInputStyle.Short).setPlaceholder('ダッシュボード → Applications → APIで取得').setRequired(true))
+            );
+            return interaction.showModal(modal);
         }
         if (cid === 'autoreply_add') {
             const modal = new ModalBuilder().setCustomId('modal_autoreply_add').setTitle('自動返信 追加');
