@@ -519,13 +519,13 @@ async function handleEcon(interaction) {
         })();
         const ex = serverCfg.exchange || {};
         if (!ex.enabled) return interaction.reply({ content: '❌ このサーバーでは換金機能が無効です。管理者が `/set` → **UNB換金** から有効化できます。', ...EPH });
-        if (!ex.unbToken) return interaction.reply({ content: '❌ UNB APIトークンが設定されていません。管理者が `/set` → **UNB換金** から設定できます。', ...EPH });
+        if (!process.env.UNB_TOKEN) return interaction.reply({ content: '❌ UNB_TOKENが環境変数に設定されていません。', ...EPH });
 
         // UNB残高を取得して表示
         let unbBalance = 0;
         try {
             const { Client } = require('unb-api');
-            const unbClient = new Client(ex.unbToken);
+            const unbClient = new Client(process.env.UNB_TOKEN);
             const unbUser = await unbClient.getUserBalance(guildId, user.id);
             unbBalance = unbUser.cash || 0;
         } catch(e) {
@@ -1927,14 +1927,15 @@ async function handleEconModal(interaction) {
             try { return JSON.parse(require('fs').readFileSync(require('path').join(__dirname,'data','servers.json'),'utf8'))[interaction.guildId] || {}; } catch(e){ return {}; }
         })();
         const ex = serverCfg.exchange || {};
-        if (!ex.enabled || !ex.unbToken) return interaction.reply({ content: '❌ 換金機能が無効またはトークン未設定です。', ...EPH });
+        if (!ex.enabled) return interaction.reply({ content: '❌ このサーバーでは換金機能が無効です。管理者が `/set` → **UNB換金** から有効化できます。', ...EPH });
+        if (!process.env.UNB_TOKEN) return interaction.reply({ content: '❌ UNB_TOKENが環境変数に設定されていません。', ...EPH });
 
         const amountStr = interaction.fields.getTextInputValue('exchange_amount').trim().replace(/,/g, '');
         const amount = parseInt(amountStr) || 0;
         if (amount <= 0) return interaction.reply({ content: '❌ 有効な金額を入力してください。', ...EPH });
 
         const { Client } = require('unb-api');
-        const unbClient = new Client(ex.unbToken);
+        const unbClient = new Client(process.env.UNB_TOKEN);
         const isUNBtoBot = cid === 'modal_exchange_unb_to_bot';
         const u = getUser(econ, user.id, user);
 
