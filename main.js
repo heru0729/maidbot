@@ -236,54 +236,88 @@ const CHART_HTML = (title, dataJson, type) => `<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${title} チャート</title>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chartjs-chart-financial@0.2.1/dist/chartjs-chart-financial.min.js"></script>
+<title>${title}</title>
 <style>
-  *{margin:0;padding:0;box-sizing:border-box}
-  body{background:#1e2124;color:#e0e0e0;font-family:sans-serif;padding:16px}
-  h1{font-size:18px;margin-bottom:12px;color:#fff}
-  .info{display:flex;gap:16px;margin-bottom:12px;font-size:13px;color:#9ea3aa}
-  .price{font-size:22px;font-weight:bold}
-  .up{color:#26a69a}.dn{color:#ef5350}
-  canvas{max-width:100%;border-radius:8px;background:#2b2d31}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#1e2124;color:#e0e0e0;font-family:'Segoe UI',sans-serif;padding:12px}
+h1{font-size:17px;margin-bottom:8px;color:#fff}
+#info{display:flex;gap:12px;margin-bottom:10px;font-size:14px;align-items:baseline}
+#price{font-size:22px;font-weight:bold}
+.up{color:#26a69a}.dn{color:#ef5350}
+canvas{display:block;width:100%;max-width:700px;background:#2b2d31;border-radius:8px}
 </style>
 </head>
 <body>
-<h1 id="title">${title}</h1>
-<div class="info"><span id="price"></span><span id="change"></span></div>
-<canvas id="chart"></canvas>
+<h1>${title}</h1>
+<div id="info"><span id="price">---</span><span id="change"></span></div>
+<canvas id="c"></canvas>
 <script>
 const raw = ${dataJson};
-const data = raw.ohlc || (raw.history || []).map((c,i,a)=>{
-  const o = i>0?a[i-1]:c, noise=Math.abs(c)*0.003;
-  return {o, h:Math.max(o,c)+noise, l:Math.min(o,c)-noise, c, t:Date.now()-((a.length-1-i)*60000)};
-});
-if(!data.length){document.body.innerHTML='<p style="color:#888;padding:32px">データがありません</p>'}
-else{
+let data = raw.ohlc && raw.ohlc.length > 1 ? raw.ohlc
+  : (raw.history||[]).map((c,i,a)=>{
+      const o=i>0?a[i-1]:c, n=Math.abs(c)*0.004;
+      return {o,h:Math.max(o,c)+n,l:Math.min(o,c)-n,c};
+    });
+
+const fmt = v => v<0.0001?v.toFixed(6):v<0.001?v.toFixed(5):v<0.01?v.toFixed(4):v<0.1?v.toFixed(4):v<1?v.toFixed(3):v<100?v.toFixed(2):v.toFixed(1);
+
+if(!data||data.length<2){
+  document.getElementById('price').textContent='データ不足（1分ごとに更新されます）';
+}else{
   const last=data[data.length-1].c, first=data[0].o;
   const pct=((last-first)/Math.abs(first)*100).toFixed(2);
   const isUp=last>=first;
-  const fmt=v=>v<0.001?v.toFixed(6):v<0.01?v.toFixed(5):v<0.1?v.toFixed(4):v<1?v.toFixed(3):v<1000?v.toFixed(2):v.toLocaleString();
-  document.getElementById('price').innerHTML='<span class="price '+(isUp?'up':'dn')+'">'+fmt(last)+' 🪙</span>';
-  document.getElementById('change').textContent=(isUp?'▲':'▼')+Math.abs(pct)+'%';
-  const labels=data.map((_,i)=>i+1);
-  const ohlcData=data.map(d=>({x:d.t||Date.now(),o:d.o,h:d.h,l:d.l,c:d.c}));
-  new Chart(document.getElementById('chart'),{
-    type:'candlestick',
-    data:{datasets:[{label:document.getElementById('title').textContent,data:ohlcData,
-      color:{up:'#26a69a',down:'#ef5350',unchanged:'#888'},
-      borderColor:{up:'#26a69a',down:'#ef5350',unchanged:'#888'}
-    }]},
-    options:{
-      responsive:true,
-      plugins:{legend:{display:false}},
-      scales:{
-        x:{type:'time',time:{unit:'minute'},ticks:{color:'#9ea3aa'},grid:{color:'#2d3035'}},
-        y:{ticks:{color:'#9ea3aa',callback:v=>v<0.001?v.toFixed(6):v<1?v.toFixed(3):v.toFixed(2)},grid:{color:'#2d3035'}}
-      }
-    }
-  });
+  document.getElementById('price').innerHTML='<span class="'+(isUp?'up':'dn')+'">'+fmt(last)+' 🪙</span>';
+  document.getElementById('change').innerHTML='<span class="'+(isUp?'up':'dn')+'">'+(isUp?'▲':'▼')+Math.abs(pct)+'%</span>';
+
+  const cv=document.getElementById('c');
+  const DPR=window.devicePixelRatio||1;
+  const W=Math.min(window.innerWidth-24,700), H=280;
+  cv.width=W*DPR; cv.height=H*DPR; cv.style.height=H+'px';
+  const ctx=cv.getContext('2d'); ctx.scale(DPR,DPR);
+
+  const PAD={t:36,r:16,b:32,l:72};
+  const cw=W-PAD.l-PAD.r, ch=H-PAD.t-PAD.b;
+
+  const highs=data.map(d=>d.h), lows=data.map(d=>d.l);
+  const vMax=Math.max(...highs), vMin=Math.min(...lows);
+  const vPad=(vMax-vMin)*0.06||vMin*0.05||0.0001;
+  const vTop=vMax+vPad, vBot=vMin-vPad, vR=vTop-vBot;
+  const toY=v=>PAD.t+ch-(v-vBot)/vR*ch;
+  const toX=i=>PAD.l+(i+0.5)*cw/data.length;
+
+  // 背景グリッド
+  ctx.strokeStyle='#333'; ctx.lineWidth=1;
+  for(let i=0;i<=4;i++){
+    const y=PAD.t+ch/4*i;
+    ctx.beginPath();ctx.moveTo(PAD.l,y);ctx.lineTo(PAD.l+cw,y);ctx.stroke();
+    const v=vTop-vR/4*i;
+    ctx.fillStyle='#9ea3aa'; ctx.font='10px monospace'; ctx.textAlign='right';
+    ctx.fillText(fmt(v),PAD.l-4,y+3.5);
+  }
+
+  // ロウソク足
+  const cw2=Math.max(2,cw/data.length*0.6);
+  for(let i=0;i<data.length;i++){
+    const {o,h,l,c}=data[i];
+    const up=c>=o;
+    const col=up?'#26a69a':'#ef5350';
+    const x=toX(i);
+    const yO=toY(o),yC=toY(c),yH=toY(h),yL=toY(l);
+    const bTop=Math.min(yO,yC), bH=Math.max(1,Math.abs(yO-yC));
+    ctx.strokeStyle=col; ctx.lineWidth=1;
+    // ヒゲ
+    ctx.beginPath();ctx.moveTo(x,yH);ctx.lineTo(x,bTop);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(x,bTop+bH);ctx.lineTo(x,yL);ctx.stroke();
+    // ボディ
+    ctx.fillStyle=col;
+    ctx.fillRect(x-cw2/2,bTop,cw2,bH);
+  }
+
+  // X軸ラベル
+  ctx.fillStyle='#666'; ctx.font='10px sans-serif'; ctx.textAlign='center';
+  ctx.fillText('← 古',PAD.l+20,H-6);
+  ctx.fillText('新 →',PAD.l+cw-20,H-6);
 }
 </script>
 </body></html>`;
