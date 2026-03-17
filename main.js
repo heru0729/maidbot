@@ -206,19 +206,11 @@ function createMainSetRow3(s) {
 }
 function buildExchangePanel(s) {
     const ex = s.exchange || {};
-    const desc = [
-        `**状態:** ${ex.enabled ? '✅ ON' : '❌ OFF'}`,
-        `**UNB→maidbot レート:** 1 UNB = **${ex.rateUNBtoBot || 1}** 🪙`,
-        `**maidbot→UNB レート:** 1 🪙 = **${ex.rateBotToUNB || 1}** UNB`,
-    ].join('\n');
     return {
-        embeds: [new EmbedBuilder().setTitle('💱 UNB換金設定').setDescription(desc).setColor(0x5865f2)],
+        embeds: [new EmbedBuilder().setTitle('💱 UNB換金設定').setDescription(`**状態:** ${ex.enabled ? '✅ ON' : '❌ OFF'}\n\nONにするとユーザーが \`/exchange\` で1:1換金できます。`).setColor(0x5865f2)],
         components: [
             new ActionRowBuilder().addComponents(
                 new ButtonBuilder().setCustomId('exchange_toggle').setLabel(ex.enabled ? '❌ OFFにする' : '✅ ONにする').setStyle(ex.enabled ? ButtonStyle.Danger : ButtonStyle.Success),
-                new ButtonBuilder().setCustomId('exchange_set_rate').setLabel('レート設定').setStyle(ButtonStyle.Primary)
-            ),
-            new ActionRowBuilder().addComponents(
                 new ButtonBuilder().setCustomId('set_back_main').setLabel('← 戻る').setStyle(ButtonStyle.Secondary)
             )
         ],
@@ -1619,16 +1611,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
             await interaction.reply({ content: `✅ 自動返信を追加しました。\nトリガー: \`${trigger}\`\n返答: ${responses.length}件\nモード: ${modeLabel} | 判定: ${matchLabel}`, ...EPH });
         }
 
-        if (cid === 'modal_exchange_rate') {
-            const r1 = parseFloat(interaction.fields.getTextInputValue('rate_unb_to_bot')) || 0;
-            const r2 = parseFloat(interaction.fields.getTextInputValue('rate_bot_to_unb')) || 0;
-            if (r1 <= 0 || r2 <= 0) return interaction.reply({ content: '❌ 0より大きい値を入力してください。', ...EPH });
-            if (!servers[guildId].exchange) servers[guildId].exchange = {};
-            servers[guildId].exchange.rateUNBtoBot = r1;
-            servers[guildId].exchange.rateBotToUNB = r2;
-            saveData(SERVERS_FILE, servers);
-            await interaction.reply({ content: `✅ レートを設定しました。\nUNB→🪙: 1 UNB = **${r1}** 🪙\n🪙→UNB: 1 🪙 = **${r2}** UNB`, ...EPH });
-        }
     }
 
     // ==================== ボタン ====================
@@ -1827,14 +1809,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
             saveData(SERVERS_FILE, servers);
             await interaction.update(buildExchangePanel(servers[guildId]));
         }
-        if (cid === 'exchange_set_rate') {
-            const modal = new ModalBuilder().setCustomId('modal_exchange_rate').setTitle('💱 換金レート設定');
-            modal.addComponents(
-                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('rate_unb_to_bot').setLabel('UNB → maidbot レート（1 UNB = ? 🪙）').setStyle(TextInputStyle.Short).setPlaceholder('例: 10').setRequired(true)),
-                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('rate_bot_to_unb').setLabel('maidbot → UNB レート（1 🪙 = ? UNB）').setStyle(TextInputStyle.Short).setPlaceholder('例: 1').setRequired(true))
-            );
-            return interaction.showModal(modal);
-        }
+
 
         if (cid === 'autoreply_add') {
             const modal = new ModalBuilder().setCustomId('modal_autoreply_add').setTitle('自動返信 追加');
