@@ -4,7 +4,12 @@ const path = require('path');
 
 // canvasが使える場合は画像チャート、使えない場合はテキストチャートにフォールバック
 let buildPriceChart = null;
-try { ({ buildPriceChart } = require('./chart.js')); } catch (e) { /* canvasなし */ }
+try {
+    ({ buildPriceChart } = require('./chart.js'));
+    console.log('[chart] canvasチャート有効');
+} catch (e) {
+    console.warn('[chart] canvasが利用不可:', e.message);
+}
 
 const ECON_FILE  = path.join(__dirname, 'data', 'econ.json');
 const CORP_FILE  = path.join(__dirname, 'data', 'corp.json');
@@ -30,14 +35,25 @@ function getUser(econ, userId, user) {
 
 // ==================== 株式チャート ====================
 // チャートを生成（canvas画像 or テキストフォールバック）
-async function makeChart(history, label, color) {
-    if (buildPriceChart && history && history.length >= 2) {
+async function makeChart(ohlcOrHistory, label, color) {
+    if (buildPriceChart && ohlcOrHistory && ohlcOrHistory.length >= 2) {
         try {
-            const buf = buildPriceChart(history, label, color);
+            const buf = buildPriceChart(ohlcOrHistory, label, color);
             return { attachment: new AttachmentBuilder(buf, { name: 'chart.png' }), imageUrl: 'attachment://chart.png' };
-        } catch (e) { /* fallthrough */ }
+        } catch (e) {
+            console.error('[chart] 生成エラー:', e.message);
+        }
     }
     return { attachment: null, imageUrl: null };
+}
+
+// OHLCまたは数値配列から終値配列を抽出
+function extractCloses(ohlcOrHistory) {
+    if (!ohlcOrHistory || ohlcOrHistory.length === 0) return [];
+    if (typeof ohlcOrHistory[0] === 'object' && 'c' in ohlcOrHistory[0]) {
+        return ohlcOrHistory.map(d => d.c);
+    }
+    return ohlcOrHistory;
 }
 
 function buildStockChart(history) {
@@ -1007,7 +1023,12 @@ async function showStockDetail(interaction, c, econ, user) {
             { name: '手数料', value: '売買各2%', inline: true }
         );
     if (imageUrl) embed.setImage(imageUrl);
-    else { const chartStr = buildStockChart(history); if (chartStr) embed.setDescription(`\`\`\`\n${chartStr}\n\`\`\``); }
+    else {
+        const chartData = c.stock.ohlc ? c.stock.ohlc.map(d => d.c) : history;
+        const chartStr = buildStockChart(chartData);
+        if (chartStr) embed.setDescription(`\`\`\`\n${chartStr}\n\`\`\``);
+        else embed.setDescription('価格履歴なし（しばらくお待ちください）');
+    }
     const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId(`stock_buy_${c.id}`).setLabel('📈 買う').setStyle(ButtonStyle.Success).setDisabled(c.stock.availableShares <= 0),
         new ButtonBuilder().setCustomId(`stock_sell_${c.id}`).setLabel('📉 売る').setStyle(ButtonStyle.Danger).setDisabled(userShares <= 0),
@@ -1037,7 +1058,12 @@ async function showStockDetailUpdate(interaction, c, econ, user) {
             { name: '手数料', value: '売買各2%', inline: true }
         );
     if (imageUrl) embed.setImage(imageUrl);
-    else { const chartStr = buildStockChart(history); if (chartStr) embed.setDescription(`\`\`\`\n${chartStr}\n\`\`\``); }
+    else {
+        const chartData = c.stock.ohlc ? c.stock.ohlc.map(d => d.c) : history;
+        const chartStr = buildStockChart(chartData);
+        if (chartStr) embed.setDescription(`\`\`\`\n${chartStr}\n\`\`\``);
+        else embed.setDescription('価格履歴なし（しばらくお待ちください）');
+    }
     const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId(`stock_buy_${c.id}`).setLabel('📈 買う').setStyle(ButtonStyle.Success).setDisabled(c.stock.availableShares <= 0),
         new ButtonBuilder().setCustomId(`stock_sell_${c.id}`).setLabel('📉 売る').setStyle(ButtonStyle.Danger).setDisabled(userShares <= 0),
@@ -1130,7 +1156,12 @@ async function showCryptoDetail(interaction, coin, econ, user, CRYPTO_FILE, isUp
             { name: '手数料', value: '売買各2%', inline: true }
         );
     if (imageUrl) embed.setImage(imageUrl);
-    else { const chartStr = buildStockChart(history); if (chartStr) embed.setDescription(`\`\`\`\n${chartStr}\n\`\`\``); }
+    else {
+        const chartData = coin.ohlc ? coin.ohlc.map(d => d.c) : history;
+        const chartStr = buildStockChart(chartData);
+        if (chartStr) embed.setDescription(`\`\`\`\n${chartStr}\n\`\`\``);
+        else embed.setDescription('価格履歴なし（しばらくお待ちください）');
+    }
     const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId(`crypto_buy_${coin.id}`).setLabel('💰 買う').setStyle(ButtonStyle.Success).setDisabled(coin.availableSupply <= 0),
         new ButtonBuilder().setCustomId(`crypto_sell_${coin.id}`).setLabel('💸 売る').setStyle(ButtonStyle.Danger).setDisabled(held <= 0),
