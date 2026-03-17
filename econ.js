@@ -201,8 +201,13 @@ const econCommands = [
         .addSubcommand(sub => sub.setName('create').setDescription('会社を設立します（1人2社まで・設立費用10,000枚）')
             .addStringOption(o => o.setName('name').setDescription('会社名').setRequired(true))
             .addStringOption(o => o.setName('description').setDescription('会社の説明').setRequired(true)))
-        .addSubcommand(sub => sub.setName('setting').setDescription('会社の管理・ストア設定').addStringOption(o => o.setName('corp').setDescription('会社名（未指定でセレクト）')))
-        .addSubcommand(sub => sub.setName('deposit').setDescription('会社にお金を入れます').addStringOption(o => o.setName('amount').setDescription('金額（数字・all・half）').setRequired(true)).addStringOption(o => o.setName('corp').setDescription('会社名（未指定でセレクト）'))),
+        .addSubcommand(sub => sub.setName('setting').setDescription('自分の会社の管理・ストア設定').addStringOption(o => o.setName('corp').setDescription('会社名（1社の場合は省略可）')))
+        .addSubcommand(sub => sub.setName('view').setDescription('会社情報・ストアを閲覧します').addStringOption(o => o.setName('corp').setDescription('会社名（未指定でセレクト）')))
+        .addSubcommand(sub => sub.setName('deposit').setDescription('会社にお金を入れます').addStringOption(o => o.setName('amount').setDescription('金額（数字・all・half）').setRequired(true)).addStringOption(o => o.setName('corp').setDescription('会社名（未指定でセレクト）')))
+        .addSubcommand(sub => sub.setName('join').setDescription('会社に就職します').addStringOption(o => o.setName('corp').setDescription('会社名').setRequired(true)))
+        .addSubcommand(sub => sub.setName('leave').setDescription('会社を退職します'))
+        .addSubcommand(sub => sub.setName('kick').setDescription('社員を解雇します（オーナーのみ）').addUserOption(o => o.setName('user').setDescription('解雇するユーザー').setRequired(true)).addStringOption(o => o.setName('corp').setDescription('会社名（未指定でセレクト）')))
+        .addSubcommand(sub => sub.setName('salary').setDescription('日給を設定します（オーナーのみ）').addStringOption(o => o.setName('amount').setDescription('日給額（数字・0で無給）').setRequired(true)).addStringOption(o => o.setName('corp').setDescription('会社名（未指定でセレクト）'))),
     new SlashCommandBuilder().setName('crypto')
         .setDescription('仮想通貨市場')
         .addSubcommand(sub => sub.setName('create').setDescription('仮想通貨を発行します（1人1枚）')
@@ -666,7 +671,11 @@ async function handleEcon(interaction) {
     }
 
     if (commandName === 'econrank') {
-        const sorted = Object.entries(econ).map(([id, u]) => ({ id, balance: u.balance || 0 })).sort((a, b) => b.balance - a.balance).slice(0, 10);
+        const sorted = Object.entries(econ)
+            .map(([id, u]) => ({ id, balance: u.balance || 0 }))
+            .filter(u => u.balance > 0)
+            .sort((a, b) => b.balance - a.balance)
+            .slice(0, 10);
         if (sorted.length === 0) return interaction.reply({ content: 'まだデータがありません。', ...EPH });
         await interaction.deferReply();
         const medals = ['🥇', '🥈', '🥉'];
@@ -712,27 +721,102 @@ async function handleEcon(interaction) {
 
         if (sub === 'setting') {
             const corpName = options.getString('corp');
-            if (corpName) {
-                const c = Object.values(corpData).find(c => c.name.toLowerCase() === corpName.toLowerCase());
-                if (!c) return interaction.reply({ content: `❌ **${corpName}** という会社は存在しません。`, ...EPH });
-                if (c.ownerId !== user.id) return showStore(interaction, c, user);
-                return showStoreManage(interaction, c, corpData, user);
-            }
             const owned = Object.values(corpData).filter(c => c.ownerId === user.id);
-            const all = Object.values(corpData);
-            if (all.length === 0) return interaction.reply({ content: '現在登録されている会社はありません。`/corp create` で設立できます。', ...EPH });
-            if (owned.length === 0) {
-                if (all.length === 1) return showStore(interaction, all[0], user);
-                const select = new StringSelectMenuBuilder().setCustomId('store_select_view').setPlaceholder('見たい会社を選択')
-                    .addOptions(all.map(c => ({ label: c.name, description: `${c.ownerName} | 商品数: ${c.items.length}件`, value: c.id })));
-                return interaction.reply({ content: '🏪 **ストア** — 会社を選択してください', components: [new ActionRowBuilder().addComponents(select)], ...EPH });
+            if (owned.length === 0) return interaction.reply({ content: '❌ 会社を所有していません。`/corp create` で設立できます。', ...EPH });
+            let c;
+            if (corpName) {
+                c = owned.find(c => c.name.toLowerCase() === corpName.toLowerCase());
+                if (!c) return interaction.reply({ content: `❌ **${corpName}** はあなたの会社ではありません。他の会社は \`/corp view\` で閲覧できます。`, ...EPH });
+            } else if (owned.length === 1) {
+                c = owned[0];
+            } else {
+                const select = new StringSelectMenuBuilder().setCustomId('store_select_corp').setPlaceholder('管理する会社を選択')
+                    .addOptions(owned.map(c => ({ label: c.name, description: `残高: ${(c.balance||0).toLocaleString()} 🪙 | 社員: ${(c.employees||[]).length}人`, value: c.id })));
+                return interaction.reply({ content: '⚙️ 管理する会社を選択してください:', components: [new ActionRowBuilder().addComponents(select)], ...EPH });
             }
-            if (owned.length === 1 && all.length === 1) return showStoreManage(interaction, owned[0], corpData, user);
-            const selectOptions = owned.map(c => ({ label: `⚙️ ${c.name} (管理)`, description: '管理画面を開く', value: `manage_${c.id}` }));
-            const viewOptions = all.filter(c => c.ownerId !== user.id).map(c => ({ label: `🏪 ${c.name} (閲覧)`, description: `${c.ownerName} | 商品数: ${c.items.length}件`, value: `view_${c.id}` }));
-            const select = new StringSelectMenuBuilder().setCustomId('store_select_mixed').setPlaceholder('会社を選択')
-                .addOptions([...selectOptions, ...viewOptions].slice(0, 25));
-            return interaction.reply({ content: '🏢 **ストア** — 会社を選択してください', components: [new ActionRowBuilder().addComponents(select)], ...EPH });
+            return showStoreManage(interaction, c, corpData, user);
+        }
+
+        if (sub === 'view') {
+            const corpName = options.getString('corp');
+            const all = Object.values(corpData);
+            if (all.length === 0) return interaction.reply({ content: '現在登録されている会社はありません。', ...EPH });
+            let c;
+            if (corpName) {
+                c = all.find(c => c.name.toLowerCase() === corpName.toLowerCase());
+                if (!c) return interaction.reply({ content: `❌ **${corpName}** という会社は存在しません。`, ...EPH });
+            } else if (all.length === 1) {
+                c = all[0];
+            } else {
+                const select = new StringSelectMenuBuilder().setCustomId('store_select_view').setPlaceholder('見たい会社を選択')
+                    .addOptions(all.slice(0, 25).map(c => ({ label: c.name, description: `${c.ownerName} | 社員: ${(c.employees||[]).length}人 | 日給: ${c.salary||0}🪙`, value: c.id })));
+                return interaction.reply({ content: '🏪 会社を選択してください:', components: [new ActionRowBuilder().addComponents(select)], ...EPH });
+            }
+            return showCorpInfo(interaction, c, econ, user);
+        }
+
+        if (sub === 'join') {
+            const corpName = options.getString('corp');
+            const c = Object.values(corpData).find(c => c.name.toLowerCase() === corpName.toLowerCase());
+            if (!c) return interaction.reply({ content: `❌ **${corpName}** という会社は存在しません。`, ...EPH });
+            if (c.ownerId === user.id) return interaction.reply({ content: '❌ 自分の会社には就職できません。', ...EPH });
+            if (!c.employees) c.employees = [];
+            // 他の会社に既に就職しているか確認
+            const currentJob = Object.values(corpData).find(co => (co.employees||[]).includes(user.id));
+            if (currentJob) return interaction.reply({ content: `❌ すでに **${currentJob.name}** に就職しています。先に \`/corp leave\` で退職してください。`, ...EPH });
+            if (c.employees.includes(user.id)) return interaction.reply({ content: '❌ すでにこの会社に就職しています。', ...EPH });
+            c.employees.push(user.id);
+            save(CORP_FILE, corpData);
+            return interaction.reply({ content: `✅ **${c.name}** に就職しました！\n日給: **${(c.salary||0).toLocaleString()}** 🪙（毎日0時に支給）`, ...EPH });
+        }
+
+        if (sub === 'leave') {
+            const currentJob = Object.values(corpData).find(c => (c.employees||[]).includes(user.id));
+            if (!currentJob) return interaction.reply({ content: '❌ 現在どの会社にも就職していません。', ...EPH });
+            currentJob.employees = currentJob.employees.filter(id => id !== user.id);
+            save(CORP_FILE, corpData);
+            return interaction.reply({ content: `✅ **${currentJob.name}** を退職しました。`, ...EPH });
+        }
+
+        if (sub === 'kick') {
+            const target = options.getUser('user');
+            const corpName = options.getString('corp');
+            const owned = Object.values(corpData).filter(c => c.ownerId === user.id);
+            if (owned.length === 0) return interaction.reply({ content: '❌ 会社を所有していません。', ...EPH });
+            let c;
+            if (corpName) {
+                c = owned.find(c => c.name.toLowerCase() === corpName.toLowerCase());
+                if (!c) return interaction.reply({ content: '❌ あなたの会社ではありません。', ...EPH });
+            } else if (owned.length === 1) {
+                c = owned[0];
+            } else {
+                return interaction.reply({ content: '❌ 会社名を指定してください。', ...EPH });
+            }
+            if (!(c.employees||[]).includes(target.id)) return interaction.reply({ content: `❌ **${target.username}** はこの会社の社員ではありません。`, ...EPH });
+            c.employees = c.employees.filter(id => id !== target.id);
+            save(CORP_FILE, corpData);
+            return interaction.reply({ content: `✅ **${target.username}** を **${c.name}** から解雇しました。`, ...EPH });
+        }
+
+        if (sub === 'salary') {
+            const amtInput = options.getString('amount').trim();
+            const amount = parseInt(amtInput) || 0;
+            if (amount < 0) return interaction.reply({ content: '❌ 0以上の金額を入力してください。', ...EPH });
+            const owned = Object.values(corpData).filter(c => c.ownerId === user.id);
+            if (owned.length === 0) return interaction.reply({ content: '❌ 会社を所有していません。', ...EPH });
+            const corpName = options.getString('corp');
+            let c;
+            if (corpName) {
+                c = owned.find(c => c.name.toLowerCase() === corpName.toLowerCase());
+                if (!c) return interaction.reply({ content: '❌ あなたの会社ではありません。', ...EPH });
+            } else if (owned.length === 1) {
+                c = owned[0];
+            } else {
+                return interaction.reply({ content: '❌ 会社名を指定してください。', ...EPH });
+            }
+            c.salary = amount;
+            save(CORP_FILE, corpData);
+            return interaction.reply({ content: `✅ **${c.name}** の日給を **${amount.toLocaleString()}** 🪙 に設定しました。\n社員 **${(c.employees||[]).length}** 人に毎日0時（JST）に支給されます。`, ...EPH });
         }
 
         if (sub === 'deposit') {
@@ -1127,6 +1211,50 @@ async function doSellStock(interaction, c, amount, econ, u, corpData) {
     return interaction.reply({ content: `✅ **${c.name}** の株を **${amount}** 株 売却！\n小計: ${fmtPrice(subtotal)} 🪙 - 手数料: ${fmtPrice(fee)} 🪙 = **${fmtPrice(total)}** 🪙\n現在株価: **${fmtPrice(c.stock.price)}** 🪙`, components: [delBtn()], ...EPH });
 }
 
+async function showCorpInfo(interaction, c, econ, user) {
+    const employees = c.employees || [];
+    const salary = c.salary || 0;
+    const dailyCost = salary * employees.length;
+    const isEmployee = employees.includes(user.id);
+    const isOwner = c.ownerId === user.id;
+
+    // 社員名を取得
+    let empNames = '（なし）';
+    if (employees.length > 0) {
+        const names = employees.map(id => {
+            const u = econ[id];
+            return u?.username ? `• ${u.username}` : `• ID:${id}`;
+        });
+        empNames = names.join('\n');
+    }
+
+    const embed = new EmbedBuilder()
+        .setTitle(`🏢 ${c.name}`)
+        .setDescription(c.description)
+        .setColor(0xe67e22)
+        .addFields(
+            { name: 'オーナー', value: c.ownerName, inline: true },
+            { name: '日給', value: `**${salary.toLocaleString()}** 🪙`, inline: true },
+            { name: '社員数', value: `**${employees.length}** 人`, inline: true },
+            { name: '会社残高', value: `**${(c.balance||0).toLocaleString()}** 🪙`, inline: true },
+            { name: '日次人件費', value: `**${dailyCost.toLocaleString()}** 🪙`, inline: true },
+            { name: '株式', value: c.stock ? `株価: **${fmtPrice(c.stock.price)}** 🪙` : '未発行', inline: true },
+            { name: `社員一覧 (${employees.length}人)`, value: empNames, inline: false }
+        );
+
+    if (c.items && c.items.length > 0) {
+        embed.addFields({ name: '📦 商品', value: c.items.map(i => `• **${i.name}** — ${i.price.toLocaleString()} 🪙`).join('\n'), inline: false });
+    }
+
+    const rows = [delBtn()];
+    if (!isOwner && !isEmployee) {
+        rows.unshift(new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`corp_join_${c.id}`).setLabel('🏢 就職する').setStyle(ButtonStyle.Success)
+        ));
+    }
+    return interaction.reply({ embeds: [embed], components: rows });
+}
+
 async function showStore(interaction, c, user) {
     const embed = new EmbedBuilder().setTitle(`🏪 ${c.name}`).setDescription(c.description).setColor(0xe67e22)
         .addFields(
@@ -1239,11 +1367,16 @@ async function doSellCrypto(interaction, coin, amtInput, econ, u, cryptoData, CR
 }
 
 async function showStoreManage(interaction, c, corpData, user) {
+    const employees = c.employees || [];
+    const salary = c.salary || 0;
     const embed = new EmbedBuilder().setTitle(`⚙️ ${c.name} 管理`).setColor(0x9b59b6)
         .addFields(
             { name: '会社残高', value: `**${(c.balance || 0).toLocaleString()}** 🪙`, inline: true },
             { name: '商品数', value: `${c.items.length}件`, inline: true },
-            { name: '株式', value: c.stock ? `株価: **${c.stock.price.toLocaleString()}** 🪙` : '未発行', inline: true }
+            { name: '株式', value: c.stock ? `株価: **${fmtPrice(c.stock.price)}** 🪙` : '未発行', inline: true },
+            { name: '日給', value: `**${salary.toLocaleString()}** 🪙`, inline: true },
+            { name: '社員数', value: `**${employees.length}** 人`, inline: true },
+            { name: '日次人件費', value: `**${(salary * employees.length).toLocaleString()}** 🪙`, inline: true }
         );
     const row1 = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId(`store_additem_${c.id}`).setLabel('商品追加').setStyle(ButtonStyle.Primary),
@@ -1262,6 +1395,21 @@ async function handleEconInteraction(interaction) {
     const { user, guild } = interaction;
     const econ = load(ECON_FILE);
     const corpData = load(CORP_FILE);
+
+    // 就職ボタン
+    if (cid.startsWith('corp_join_')) {
+        const corpId = cid.replace('corp_join_', '');
+        const c = corpData[corpId];
+        if (!c) return interaction.reply({ content: '❌ 会社が見つかりません。', ...EPH });
+        if (c.ownerId === user.id) return interaction.reply({ content: '❌ 自分の会社には就職できません。', ...EPH });
+        if (!c.employees) c.employees = [];
+        const currentJob = Object.values(corpData).find(co => (co.employees||[]).includes(user.id));
+        if (currentJob) return interaction.reply({ content: `❌ すでに **${currentJob.name}** に就職しています。先に \`/corp leave\` で退職してください。`, ...EPH });
+        if (c.employees.includes(user.id)) return interaction.reply({ content: '❌ すでにこの会社に就職しています。', ...EPH });
+        c.employees.push(user.id);
+        save(CORP_FILE, corpData);
+        return interaction.reply({ content: `✅ **${c.name}** に就職しました！\n日給: **${(c.salary||0).toLocaleString()}** 🪙（毎日0時JST支給）`, ...EPH });
+    }
 
     // 会社解散ボタン（確認）
     if (cid.startsWith('corp_dissolve_')) {
