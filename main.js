@@ -210,7 +210,7 @@ function buildExchangePanel(s) {
         `**状態:** ${ex.enabled ? '✅ ON' : '❌ OFF'}`,
         `**UNB→maidbot レート:** 1 UNB = **${ex.rateUNBtoBot || 1}** 🪙`,
         `**maidbot→UNB レート:** 1 🪙 = **${ex.rateBotToUNB || 1}** UNB`,
-        `**UNB APIトークン:** ${ex.unbToken ? '設定済み' : '未設定'}`,
+        '**UNB APIトークン:** 環境変数 UNB_TOKEN で管理',
         '',
         'UNB APIトークンは https://unbelievaboat.com/applications で取得できます。',
     ].join('\n');
@@ -219,8 +219,7 @@ function buildExchangePanel(s) {
         components: [
             new ActionRowBuilder().addComponents(
                 new ButtonBuilder().setCustomId('exchange_toggle').setLabel(ex.enabled ? '❌ OFFにする' : '✅ ONにする').setStyle(ex.enabled ? ButtonStyle.Danger : ButtonStyle.Success),
-                new ButtonBuilder().setCustomId('exchange_set_rate').setLabel('レート設定').setStyle(ButtonStyle.Primary),
-                new ButtonBuilder().setCustomId('exchange_set_token').setLabel('APIトークン設定').setStyle(ButtonStyle.Primary)
+                new ButtonBuilder().setCustomId('exchange_set_rate').setLabel('レート設定').setStyle(ButtonStyle.Primary)
             ),
             new ActionRowBuilder().addComponents(
                 new ButtonBuilder().setCustomId('set_back_main').setLabel('← 戻る').setStyle(ButtonStyle.Secondary)
@@ -1633,15 +1632,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
             saveData(SERVERS_FILE, servers);
             await interaction.reply({ content: `✅ レートを設定しました。\nUNB→🪙: 1 UNB = **${r1}** 🪙\n🪙→UNB: 1 🪙 = **${r2}** UNB`, ...EPH });
         }
-
-        if (cid === 'modal_exchange_token') {
-            const token = interaction.fields.getTextInputValue('unb_token').trim();
-            if (!token) return interaction.reply({ content: '❌ トークンを入力してください。', ...EPH });
-            if (!servers[guildId].exchange) servers[guildId].exchange = {};
-            servers[guildId].exchange.unbToken = token;
-            saveData(SERVERS_FILE, servers);
-            await interaction.reply({ content: '✅ UNB APIトークンを設定しました。', ...EPH });
-        }
     }
 
     // ==================== ボタン ====================
@@ -1848,13 +1838,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
             );
             return interaction.showModal(modal);
         }
-        if (cid === 'exchange_set_token') {
-            const modal = new ModalBuilder().setCustomId('modal_exchange_token').setTitle('🔑 UNB APIトークン設定');
-            modal.addComponents(
-                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('unb_token').setLabel('UnbelievaBoat APIトークン').setStyle(TextInputStyle.Short).setPlaceholder('https://unbelievaboat.com/applications で取得').setRequired(true))
-            );
-            return interaction.showModal(modal);
-        }
+
         if (cid === 'autoreply_add') {
             const modal = new ModalBuilder().setCustomId('modal_autoreply_add').setTitle('自動返信 追加');
             modal.addComponents(
