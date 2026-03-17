@@ -231,7 +231,7 @@ function buildAutoReplyPanel(s) {
 setupAuth(app, loadData, saveData, USERS_FILE, CLIENT_ID, CLIENT_SECRET);
 
 // ==================== チャートページ ====================
-const CHART_HTML = (title, dataJson, type) => `<!DOCTYPE html>
+const CHART_HTML = (title, dataEndpoint) => `<!DOCTYPE html>
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
@@ -240,104 +240,154 @@ const CHART_HTML = (title, dataJson, type) => `<!DOCTYPE html>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{background:#1e2124;color:#e0e0e0;font-family:'Segoe UI',sans-serif;padding:12px}
-h1{font-size:17px;margin-bottom:8px;color:#fff}
-#info{display:flex;gap:12px;margin-bottom:10px;font-size:14px;align-items:baseline}
-#price{font-size:22px;font-weight:bold}
+h1{font-size:16px;margin-bottom:8px;color:#fff}
+#info{display:flex;gap:12px;margin-bottom:8px;font-size:14px;align-items:baseline}
+#price{font-size:20px;font-weight:bold}
 .up{color:#26a69a}.dn{color:#ef5350}
-canvas{display:block;width:100%;max-width:700px;background:#2b2d31;border-radius:8px}
+#tabs{display:flex;gap:6px;margin-bottom:8px}
+button{background:#2d3035;color:#9ea3aa;border:none;padding:5px 14px;border-radius:4px;cursor:pointer;font-size:13px}
+button.active{background:#3a3d44;color:#fff}
+canvas{display:block;background:#2b2d31;border-radius:8px}
+#status{font-size:11px;color:#555;margin-top:6px}
 </style>
 </head>
 <body>
 <h1>${title}</h1>
 <div id="info"><span id="price">---</span><span id="change"></span></div>
+<div id="tabs">
+  <button onclick="setTF('1m')" id="btn1m" class="active">1m</button>
+  <button onclick="setTF('1h')" id="btn1h">1h</button>
+  <button onclick="setTF('24h')" id="btn24h">24h</button>
+</div>
 <canvas id="c"></canvas>
+<div id="status">⏳ 読込中...</div>
 <script>
-const raw = ${dataJson};
-let data = raw.ohlc && raw.ohlc.length > 1 ? raw.ohlc
-  : (raw.history||[]).map((c,i,a)=>{
-      const o=i>0?a[i-1]:c, n=Math.abs(c)*0.004;
-      return {o,h:Math.max(o,c)+n,l:Math.min(o,c)-n,c};
-    });
+const API='${dataEndpoint}';
+const fmt=v=>v<0.0001?v.toFixed(6):v<0.001?v.toFixed(5):v<0.01?v.toFixed(4):v<0.1?v.toFixed(4):v<1?v.toFixed(3):v<100?v.toFixed(2):v.toFixed(1);
+let tf='1m', timer=null, allData=[];
 
-const fmt = v => v<0.0001?v.toFixed(6):v<0.001?v.toFixed(5):v<0.01?v.toFixed(4):v<0.1?v.toFixed(4):v<1?v.toFixed(3):v<100?v.toFixed(2):v.toFixed(1);
+function setTF(t){
+  tf=t;
+  ['1m','1h','24h'].forEach(x=>document.getElementById('btn'+x).className=x===t?'active':'');
+  draw(aggregate(allData,t));
+}
 
-if(!data||data.length<2){
-  document.getElementById('price').textContent='データ不足（1分ごとに更新されます）';
-}else{
+function aggregate(raw,tf){
+  if(!raw||!raw.length) return [];
+  if(tf==='1m') return raw.slice(-60);
+  const size=tf==='1h'?60:raw.length;
+  const out=[];
+  for(let i=0;i<raw.length;i+=size){
+    const chunk=raw.slice(i,i+size);
+    if(!chunk.length) continue;
+    out.push({o:chunk[0].o,h:Math.max(...chunk.map(d=>d.h)),l:Math.min(...chunk.map(d=>d.l)),c:chunk[chunk.length-1].c});
+  }
+  return out;
+}
+
+function draw(data){
+  const cv=document.getElementById('c');
+  const DPR=window.devicePixelRatio||1;
+  const W=Math.min(window.innerWidth-24,720), H=300;
+  cv.width=W*DPR; cv.height=H*DPR; cv.style.width=W+'px'; cv.style.height=H+'px';
+  const ctx=cv.getContext('2d'); ctx.scale(DPR,DPR);
+  ctx.fillStyle='#2b2d31'; ctx.fillRect(0,0,W,H);
+
+  if(!data||data.length<2){
+    ctx.fillStyle='#666'; ctx.font='13px sans-serif'; ctx.textAlign='center';
+    ctx.fillText('データ不足（しばらくお待ちください）',W/2,H/2); return;
+  }
+
   const last=data[data.length-1].c, first=data[0].o;
-  const pct=((last-first)/Math.abs(first)*100).toFixed(2);
+  const pct=((last-first)/Math.abs(first||0.001)*100).toFixed(2);
   const isUp=last>=first;
   document.getElementById('price').innerHTML='<span class="'+(isUp?'up':'dn')+'">'+fmt(last)+' 🪙</span>';
   document.getElementById('change').innerHTML='<span class="'+(isUp?'up':'dn')+'">'+(isUp?'▲':'▼')+Math.abs(pct)+'%</span>';
 
-  const cv=document.getElementById('c');
-  const DPR=window.devicePixelRatio||1;
-  const W=Math.min(window.innerWidth-24,700), H=280;
-  cv.width=W*DPR; cv.height=H*DPR; cv.style.height=H+'px';
-  const ctx=cv.getContext('2d'); ctx.scale(DPR,DPR);
-
-  const PAD={t:36,r:16,b:32,l:72};
+  const PAD={t:30,r:12,b:28,l:68};
   const cw=W-PAD.l-PAD.r, ch=H-PAD.t-PAD.b;
-
-  const highs=data.map(d=>d.h), lows=data.map(d=>d.l);
-  const vMax=Math.max(...highs), vMin=Math.min(...lows);
-  const vPad=(vMax-vMin)*0.06||vMin*0.05||0.0001;
+  const vMax=Math.max(...data.map(d=>d.h)), vMin=Math.min(...data.map(d=>d.l));
+  const vPad=(vMax-vMin)*0.07||Math.abs(vMin)*0.05||0.0001;
   const vTop=vMax+vPad, vBot=vMin-vPad, vR=vTop-vBot;
   const toY=v=>PAD.t+ch-(v-vBot)/vR*ch;
   const toX=i=>PAD.l+(i+0.5)*cw/data.length;
 
-  // 背景グリッド
+  // グリッド & Yラベル
   ctx.strokeStyle='#333'; ctx.lineWidth=1;
   for(let i=0;i<=4;i++){
     const y=PAD.t+ch/4*i;
-    ctx.beginPath();ctx.moveTo(PAD.l,y);ctx.lineTo(PAD.l+cw,y);ctx.stroke();
-    const v=vTop-vR/4*i;
+    ctx.beginPath(); ctx.moveTo(PAD.l,y); ctx.lineTo(PAD.l+cw,y); ctx.stroke();
     ctx.fillStyle='#9ea3aa'; ctx.font='10px monospace'; ctx.textAlign='right';
-    ctx.fillText(fmt(v),PAD.l-4,y+3.5);
+    ctx.fillText(fmt(vTop-vR/4*i),PAD.l-4,y+3.5);
   }
 
-  // ロウソク足
-  const cw2=Math.max(2,cw/data.length*0.6);
+  // ロウソク
+  const bw=Math.max(2,cw/data.length*0.65);
   for(let i=0;i<data.length;i++){
-    const {o,h,l,c}=data[i];
-    const up=c>=o;
-    const col=up?'#26a69a':'#ef5350';
-    const x=toX(i);
-    const yO=toY(o),yC=toY(c),yH=toY(h),yL=toY(l);
+    const {o,h,l,c}=data[i], up=c>=o, col=up?'#26a69a':'#ef5350';
+    const x=toX(i), yO=toY(o), yC=toY(c), yH=toY(h), yL=toY(l);
     const bTop=Math.min(yO,yC), bH=Math.max(1,Math.abs(yO-yC));
     ctx.strokeStyle=col; ctx.lineWidth=1;
-    // ヒゲ
-    ctx.beginPath();ctx.moveTo(x,yH);ctx.lineTo(x,bTop);ctx.stroke();
-    ctx.beginPath();ctx.moveTo(x,bTop+bH);ctx.lineTo(x,yL);ctx.stroke();
-    // ボディ
-    ctx.fillStyle=col;
-    ctx.fillRect(x-cw2/2,bTop,cw2,bH);
+    ctx.beginPath(); ctx.moveTo(x,yH); ctx.lineTo(x,bTop); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x,bTop+bH); ctx.lineTo(x,yL); ctx.stroke();
+    ctx.fillStyle=col; ctx.fillRect(x-bw/2,bTop,bw,bH);
   }
 
-  // X軸ラベル
-  ctx.fillStyle='#666'; ctx.font='10px sans-serif'; ctx.textAlign='center';
-  ctx.fillText('← 古',PAD.l+20,H-6);
-  ctx.fillText('新 →',PAD.l+cw-20,H-6);
+  ctx.fillStyle='#555'; ctx.font='10px sans-serif'; ctx.textAlign='center';
+  ctx.fillText('← 古',PAD.l+22,H-6); ctx.fillText('新 →',PAD.l+cw-22,H-6);
 }
+
+async function refresh(){
+  try{
+    const res=await fetch(API); const json=await res.json();
+    allData=json.ohlc&&json.ohlc.length?json.ohlc:(json.history||[]).map((c,i,a)=>{
+      const o=i>0?a[i-1]:c, n=Math.abs(c)*0.004;
+      return {o,h:Math.max(o,c)+n,l:Math.min(o,c)-n,c};
+    });
+    draw(aggregate(allData,tf));
+    document.getElementById('status').textContent='🔄 最終更新: '+new Date().toLocaleTimeString('ja-JP');
+  }catch(e){
+    document.getElementById('status').textContent='❌ 更新失敗: '+e.message;
+  }
+}
+
+refresh();
+timer=setInterval(refresh,5000);
+window.addEventListener('beforeunload',()=>clearInterval(timer));
 </script>
 </body></html>`;
 
 app.get('/chart/stock/:corpid', (req, res) => {
     const { corpid } = req.params;
     const corpData = loadData(path.join(__dirname, 'data', 'corp.json'));
-    const c = corpData[corpid] || Object.values(corpData).find(c => c.name.toLowerCase() === corpid.toLowerCase());
-    if (!c || !c.stock) return res.status(404).send('<p>会社または株式が見つかりません</p>');
-    const data = { ohlc: c.stock.ohlc || null, history: c.stock.history || [] };
-    res.send(CHART_HTML(c.name + ' 株式', JSON.stringify(data), 'stock'));
+    const c = corpData[corpid] || Object.values(corpData).find(x => x.name.toLowerCase() === corpid.toLowerCase());
+    if (!c || !c.stock) return res.status(404).send('<p style="color:#888;padding:32px">会社または株式が見つかりません</p>');
+    res.send(CHART_HTML(`${c.name} 株式チャート`, `/api/chart/stock/${corpid}`));
 });
 
 app.get('/chart/crypto/:symbol', (req, res) => {
     const symbol = req.params.symbol.toUpperCase();
     const cryptoData = loadData(path.join(__dirname, 'data', 'crypto.json'));
     const coin = Object.values(cryptoData).find(c => c.symbol === symbol);
-    if (!coin) return res.status(404).send('<p>通貨が見つかりません</p>');
-    const data = { ohlc: coin.ohlc || null, history: coin.history || [] };
-    res.send(CHART_HTML(`${coin.name} (${symbol})`, JSON.stringify(data), 'crypto'));
+    if (!coin) return res.status(404).send('<p style="color:#888;padding:32px">通貨が見つかりません</p>');
+    res.send(CHART_HTML(`${coin.name} (${symbol}) チャート`, `/api/chart/crypto/${symbol}`));
+});
+
+// データAPIエンドポイント（5秒ごとにフロントから叩く）
+app.get('/api/chart/stock/:corpid', (req, res) => {
+    const { corpid } = req.params;
+    const corpData = loadData(path.join(__dirname, 'data', 'corp.json'));
+    const c = corpData[corpid] || Object.values(corpData).find(x => x.name.toLowerCase() === corpid.toLowerCase());
+    if (!c || !c.stock) return res.status(404).json({ error: 'not found' });
+    res.json({ ohlc: c.stock.ohlc || [], history: c.stock.history || [], price: c.stock.price, name: c.name });
+});
+
+app.get('/api/chart/crypto/:symbol', (req, res) => {
+    const symbol = req.params.symbol.toUpperCase();
+    const cryptoData = loadData(path.join(__dirname, 'data', 'crypto.json'));
+    const coin = Object.values(cryptoData).find(c => c.symbol === symbol);
+    if (!coin) return res.status(404).json({ error: 'not found' });
+    res.json({ ohlc: coin.ohlc || [], history: coin.history || [], price: coin.price, name: coin.name });
 });
 // ==========================================
 app.listen(process.env.PORT || 3000, '0.0.0.0', () => console.log('Web Server Ready'));
