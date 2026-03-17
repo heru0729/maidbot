@@ -270,15 +270,20 @@ client.once(Events.ClientReady, async () => {
             let changed = false;
             for (const c of Object.values(corp)) {
                 if (!c.stock) continue;
-                // 流通率に基づく調整（売られてる比率が高いほど下落圧）
+                const open = c.stock.price;
                 const circRatio = 1 - c.stock.availableShares / c.stock.totalShares;
-                // circRatio 0=全部売れ残り, 1=全部流通
-                const baseDrift = (circRatio - 0.5) * 0.008; // -0.4%〜+0.4%
-                const noise = (Math.random() - 0.5) * 0.012; // ±0.6%
+                const baseDrift = (circRatio - 0.5) * 0.008;
+                const noise = (Math.random() - 0.5) * 0.012;
                 const change = 1 + baseDrift + noise;
-                c.stock.price = r3(Math.max(0.001, c.stock.price * change));
+                const close = r3(Math.max(0.001, open * change));
+                const high = r3(Math.max(open, close) * (1 + Math.random() * 0.005));
+                const low  = r3(Math.min(open, close) * (1 - Math.random() * 0.005));
+                c.stock.price = close;
+                if (!c.stock.ohlc) c.stock.ohlc = [];
+                c.stock.ohlc.push({ o: open, h: high, l: low, c: close, t: Date.now() });
+                if (c.stock.ohlc.length > 60) c.stock.ohlc.shift();
                 c.stock.history = c.stock.history || [];
-                c.stock.history.push(c.stock.price);
+                c.stock.history.push(close);
                 if (c.stock.history.length > 60) c.stock.history.shift();
                 changed = true;
             }
@@ -291,14 +296,23 @@ client.once(Events.ClientReady, async () => {
             const cryptoData = JSON.parse(fs.readFileSync(cryptoPath, 'utf8'));
             let changed = false;
             for (const c of Object.values(cryptoData)) {
+                const open = c.price;
+                // 強い上昇バイアス：流通率に関係なく+2%基礎、さらに流通率で加速
                 const circRatio = 1 - c.availableSupply / c.totalSupply;
-                // 流通率10%以上で上昇圧力、それ以下はほぼ中立
-                const baseDrift = circRatio > 0.1 ? (circRatio - 0.1) * 0.02 : (circRatio - 0.5) * 0.004;
-                const noise = (Math.random() - 0.45) * 0.06; // ±3%、わずかに上昇バイアス
+                const baseDrift = 0.02 + circRatio * 0.03; // +2%〜+5%基礎上昇
+                const noise = (Math.random() - 0.35) * 0.12; // ±6%、上昇バイアス
                 const change = 1 + baseDrift + noise;
-                c.price = r3(Math.max(0.001, c.price * change));
-                c.history = c.history || [];
-                c.history.push(c.price);
+                const close = r3(Math.max(0.001, open * change));
+                // OHLCデータを生成
+                const high = r3(Math.max(open, close) * (1 + Math.random() * 0.03));
+                const low  = r3(Math.min(open, close) * (1 - Math.random() * 0.03));
+                c.price = close;
+                if (!c.ohlc) c.ohlc = [];
+                c.ohlc.push({ o: open, h: high, l: low, c: close, t: Date.now() });
+                if (c.ohlc.length > 60) c.ohlc.shift();
+                // 後方互換のhistoryも更新
+                if (!c.history) c.history = [];
+                c.history.push(close);
                 if (c.history.length > 60) c.history.shift();
                 changed = true;
             }
