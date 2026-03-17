@@ -1077,8 +1077,15 @@ async function showStockDetailUpdate(interaction, c, econ, user) {
 }
 
 async function doBuyStock(interaction, c, amount, econ, user, corpData) {
+    // 自己売買防止
+    if (c.ownerId === user.id) return interaction.reply({ content: '❌ 自分の会社の株は購入できません。', ...EPH });
     const u = getUser(econ, user.id, user);
     const price = c.stock.price;
+    // 1回の購入上限: 残高の30% or 発行総数の10% のうち少ない方
+    const maxByBalance = Math.floor(u.balance * 0.3 / (price * (1 + FEE_RATE)));
+    const maxBySupply = Math.floor(c.stock.totalShares * 0.1);
+    const maxPerTx = Math.max(1, Math.min(maxByBalance, maxBySupply));
+    if (amount > maxPerTx) return interaction.reply({ content: `❌ 1回の購入上限は **${maxPerTx.toLocaleString()}** 株です（残高の30%・発行数の10%制限）。`, ...EPH });
     const subtotal = round3(price * amount);
     const fee = round3(subtotal * FEE_RATE);
     const total = round3(subtotal + fee);
@@ -1088,8 +1095,7 @@ async function doBuyStock(interaction, c, amount, econ, user, corpData) {
     if (!u.stocks) u.stocks = {};
     u.stocks[c.id] = (u.stocks[c.id] || 0) + amount;
     c.stock.availableShares -= amount;
-    c.balance = round3((c.balance || 0) + subtotal);
-    // 需要による価格上昇（小数点対応）
+    // 株式購入代金は会社残高に入れない（自己売買ループ防止）
     const ratio = 1 + 0.01 * Math.min(amount, 10);
     c.stock.price = round3(price * ratio);
     if (!c.stock.history) c.stock.history = [];
@@ -1177,10 +1183,19 @@ async function showCryptoDetail(interaction, coin, econ, user, CRYPTO_FILE, isUp
 }
 
 async function doBuyCrypto(interaction, coin, amtInput, econ, u, cryptoData, CRYPTO_FILE) {
+    // 自己発行通貨は購入不可
+    if (coin.ownerId === u.id || coin.ownerId === interaction.user.id) return interaction.reply({ content: '❌ 自分が発行した通貨は購入できません。', ...EPH });
+    const maxPerTx = Math.floor(coin.totalSupply * 0.05); // 1回の上限: 発行総数の5%
     let amount;
-    if (amtInput === 'all') amount = Math.min(Math.floor(u.balance / (coin.price * (1 + FEE_RATE))), coin.availableSupply);
-    else amount = parseInt(amtInput) || 0;
+    if (amtInput === 'all') {
+        // allは残高10%分まで（引き下げ）
+        const budget = Math.floor(u.balance * 0.1);
+        amount = Math.min(Math.floor(budget / (coin.price * (1 + FEE_RATE))), coin.availableSupply, maxPerTx);
+    } else {
+        amount = parseInt(amtInput) || 0;
+    }
     if (amount <= 0) return interaction.reply({ content: '❌ 有効な枚数を入力してください。', ...EPH });
+    if (amount > maxPerTx) return interaction.reply({ content: `❌ 1回の購入上限は **${maxPerTx.toLocaleString()}** 枚です（発行総数の5%）。`, ...EPH });
     if (coin.availableSupply < amount) return interaction.reply({ content: `❌ 購入可能枚数不足。現在: **${coin.availableSupply.toLocaleString()}** 枚`, ...EPH });
     const subtotal = round3(coin.price * amount);
     const fee = round3(subtotal * FEE_RATE);
@@ -1190,7 +1205,7 @@ async function doBuyCrypto(interaction, coin, amtInput, econ, u, cryptoData, CRY
     if (!u.crypto) u.crypto = {};
     u.crypto[coin.id] = (u.crypto[coin.id] || 0) + amount;
     coin.availableSupply -= amount;
-    const ratio = 1 + 0.02 * Math.min(Math.log10(amount + 1), 5); // 最大+10%
+    const ratio = 1 + 0.02 * Math.min(Math.log10(amount + 1), 5);
     coin.price = round3(Math.max(0.001, coin.price * ratio));
     if (!coin.history) coin.history = [];
     coin.history.push(coin.price);
