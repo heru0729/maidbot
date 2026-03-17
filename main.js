@@ -206,11 +206,18 @@ function createMainSetRow3(s) {
 }
 function buildExchangePanel(s) {
     const ex = s.exchange || {};
+    const r1 = ex.rateUNBtoBot || 10;
+    const r2 = ex.rateBotToUNB || 10;
     return {
-        embeds: [new EmbedBuilder().setTitle('💱 UNB換金設定').setDescription(`**状態:** ${ex.enabled ? '✅ ON' : '❌ OFF'}\n\nONにするとユーザーが \`/exchange\` で1:1換金できます。`).setColor(0x5865f2)],
+        embeds: [new EmbedBuilder().setTitle('💱 UNB換金設定').setDescription(
+            `**状態:** ${ex.enabled ? '✅ ON' : '❌ OFF'}\n` +
+            `**UNB→🪙:** 1 UNB = **${r1}** 🪙\n` +
+            `**🪙→UNB:** ${r2} 🪙 = **1** UNB`
+        ).setColor(0x5865f2)],
         components: [
             new ActionRowBuilder().addComponents(
                 new ButtonBuilder().setCustomId('exchange_toggle').setLabel(ex.enabled ? '❌ OFFにする' : '✅ ONにする').setStyle(ex.enabled ? ButtonStyle.Danger : ButtonStyle.Success),
+                new ButtonBuilder().setCustomId('exchange_set_rate').setLabel('レート設定').setStyle(ButtonStyle.Primary),
                 new ButtonBuilder().setCustomId('set_back_main').setLabel('← 戻る').setStyle(ButtonStyle.Secondary)
             )
         ],
@@ -834,7 +841,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
                     fields: [
                         { name: '💰 残高・送金', value: '`/balance [user]` — 所持金・借入・実質残高を確認\n`/pay [user] [amount]` — 他ユーザーに送金（all/half対応）\n`/bank` — ローン借入・返済（3時間毎5%利子）\n`/econrank` — 所持金ランキング', inline: false },
                         { name: '💸 稼ぐ (サブコマンド)', value: '`/earn daily` — デイリーボーナス（深夜0時リセット）\n`/earn work` — 労働でコインを稼ぐ（CD: 1時間）\n`/earn crime` — 犯罪（CD: 2時間・失敗で罰金）\n`/earn hunt` — 狩猟でアイテムドロップ（CD: 30分）\n`/earn fish` — 釣りで魚をドロップ（CD: 45分）\n`/earn rob [target]` — 他ユーザーから強盗（ID/メンション）\n`/earn flip [amount] [side]` — コインフリップ（omote/ura）\n`/earn slots [amount]` — スロット（最大10倍）\n`/earn bj [amount] [leverage]` — ブラックジャック（レバレッジ2〜10倍）', inline: false },
-                        { name: '🛒 ショップ', value: '`/shop` — 公式ショップ＋会社ストア一覧\n`/buy [item]` — アイテム購入（未指定でセレクト）\n`/sell shop [item]` — ショップに規定価格で売却\n`/sell player [item] [price] [buyer]` — プレイヤーに自由価格で売却\n`/dust [item]` — アイテムを捨てる\n`/inventory [user]` — インベントリ確認', inline: false },
+                        { name: '🛒 ショップ', value: '`/shop` — 公式ショップ＋会社ストア一覧\n`/buy [item]` — アイテム購入（未指定でセレクト）\n`/sell shop [item]` — ショップに規定価格で売却\n`/sell trader [item] [price] [buyer]` — プレイヤーに自由価格で売却\n`/dust [item]` — アイテムを捨てる\n`/inventory [user]` — インベントリ確認', inline: false },
                         { name: '🏢 会社', value: '`/corp create [name] [desc]` — 会社設立（費用10,000🪙・最大2社）\n`/corp setting [corp]` — 管理画面（商品追加・削除・株式発行等）\n`/corp deposit [corp] [amount]` — 会社に入金（all/half対応）', inline: false },
                         { name: '📈 株式', value: '`/stock [corp]` — 株式チャート表示・売買\n`/buystock [amount] [corp]` — 株を購入（all対応・手数料2%）\n`/sellstock [amount] [corp]` — 株を売却（手数料2%）\n※1分ごとに市場が自動調整されます', inline: false },
                         { name: '💹 仮想通貨', value: '`/crypto create [name] [symbol]` — 仮想通貨を発行（1人1枚・初期価格0.005🪙）\n`/crypto list` — 通貨一覧を表示\n`/crypto view [symbol]` — チャート・売買ボタン\n`/crypto buy [amount] [symbol]` — 購入（all対応・手数料2%）\n`/crypto sell [amount] [symbol]` — 売却（手数料2%）', inline: false },
