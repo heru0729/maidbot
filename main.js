@@ -283,19 +283,20 @@ function setTF(t){
   ['1m','1h','24h'].forEach(x=>document.getElementById('btn'+x).className=x===t?'active':'');
   const d=aggregate(allData,t);
   viewData=d;
-  zoomStart=0; zoomEnd=d.length;
+  // 初期表示は直近60本、ズームアウトで全履歴を見られる
+  zoomStart=Math.max(0,d.length-60); zoomEnd=d.length;
   draw();
 }
 
 function resetZoom(){
-  zoomStart=0; zoomEnd=viewData.length;
+  zoomStart=Math.max(0,viewData.length-60); zoomEnd=viewData.length;
   draw();
 }
 
 function aggregate(raw,tf){
   if(!raw||!raw.length) return [];
-  if(tf==='1m') return raw.slice(-120);
-  const size=tf==='1h'?60:raw.length;
+  if(tf==='1m') return raw; // 全データ返す（ズームで絞る）
+  const size=tf==='1h'?60:tf==='24h'?1440:raw.length;
   const out=[];
   for(let i=0;i<raw.length;i+=size){
     const chunk=raw.slice(i,i+size);
@@ -390,11 +391,17 @@ function draw(){
 cv.addEventListener('wheel', e=>{
   e.preventDefault();
   const len=zoomEnd-zoomStart;
-  const delta=e.deltaY>0?1:-1;
-  const step=Math.max(1,Math.round(len*0.1));
-  const center=Math.round((zoomStart+zoomEnd)/2);
-  let ns=zoomStart+delta*step, ne=zoomEnd-delta*step;
-  if(ne-ns<4){const m=Math.round((ns+ne)/2); ns=m-2; ne=m+2;}
+  const delta=e.deltaY>0?1:-1; // 下=ズームアウト(広げる), 上=ズームイン(狭める)
+  const step=Math.max(1,Math.round(len*0.15));
+  // カーソル位置を中心にズーム
+  const rect=cv.getBoundingClientRect();
+  const cx=(e.clientX-rect.left-72)/(cv.clientWidth-72-16); // 0〜1
+  const pivot=zoomStart+Math.round(len*Math.max(0,Math.min(1,cx)));
+  let ns=zoomStart-delta*Math.round(step*cx);
+  let ne=zoomEnd+delta*Math.round(step*(1-cx));
+  // ズームイン下限: 4本
+  if(ne-ns<4){const m=pivot; ns=m-2; ne=m+2;}
+  // ズームアウト上限: 全データ
   ns=Math.max(0,ns); ne=Math.min(viewData.length,ne);
   if(ne-ns>=2){zoomStart=ns; zoomEnd=ne; draw();}
 },{passive:false});
@@ -414,6 +421,7 @@ cv.addEventListener('touchmove',e=>{
     const len=pt.ze-pt.zs, newLen=Math.round(len*ratio);
     const center=Math.round((pt.zs+pt.ze)/2);
     let ns=center-Math.round(newLen/2), ne=center+Math.round(newLen/2);
+    if(ne-ns<4){ns=center-2; ne=center+2;}
     ns=Math.max(0,ns); ne=Math.min(viewData.length,ne);
     if(ne-ns>=2){zoomStart=ns; zoomEnd=ne; draw();}
   } else if(e.touches.length===1&&pt.x!==undefined){
@@ -502,13 +510,17 @@ async function refresh(){
       return {o,h:Math.max(o,c)+n,l:Math.min(o,c)-n,c};
     });
     const prev=allData; allData=raw;
+    const prevLen=viewData.length;
     const d=aggregate(allData,tf); viewData=d;
     // 初回またはズームリセット時のみ全表示
-    if(!prev.length||zoomEnd===prev.length||zoomEnd===0){zoomStart=0; zoomEnd=d.length;}
-    else{
-      // データが増えた分だけ末尾を伸ばす
-      const added=allData.length-prev.length;
-      if(added>0) zoomEnd=Math.min(d.length,zoomEnd+added);
+    if(!prev.length||zoomEnd===0){
+      // 初回: 直近60本表示
+      zoomStart=Math.max(0,d.length-60); zoomEnd=d.length;
+    } else {
+      // 末尾を表示中なら新しいデータに追従
+      const wasAtEnd=zoomEnd>=prevLen;
+      const added=d.length-prevLen;
+      if(wasAtEnd&&added>0){zoomStart+=added; zoomEnd=d.length;}
     }
     draw();
     document.getElementById('status').textContent='🔄 '+new Date().toLocaleTimeString('ja-JP');
@@ -609,10 +621,10 @@ client.once(Events.ClientReady, async () => {
                 c.stock.price = close;
                 if (!c.stock.ohlc) c.stock.ohlc = [];
                 c.stock.ohlc.push({ o: open, h: high, l: low, c: close, t: Date.now() });
-                if (c.stock.ohlc.length > 60) c.stock.ohlc.shift();
+                if (c.stock.ohlc.length > 1440) c.stock.ohlc.shift();
                 c.stock.history = c.stock.history || [];
                 c.stock.history.push(close);
-                if (c.stock.history.length > 60) c.stock.history.shift();
+                if (c.stock.history.length > 1440) c.stock.history.shift();
                 changed = true;
             }
             if (changed) fs.writeFileSync(corpPath, JSON.stringify(corp, null, 4));
@@ -637,11 +649,11 @@ client.once(Events.ClientReady, async () => {
                 c.price = close;
                 if (!c.ohlc) c.ohlc = [];
                 c.ohlc.push({ o: open, h: high, l: low, c: close, t: Date.now() });
-                if (c.ohlc.length > 60) c.ohlc.shift();
+                if (c.ohlc.length > 1440) c.ohlc.shift();
                 // 後方互換のhistoryも更新
                 if (!c.history) c.history = [];
                 c.history.push(close);
-                if (c.history.length > 60) c.history.shift();
+                if (c.history.length > 1440) c.history.shift();
                 changed = true;
             }
             if (changed) fs.writeFileSync(cryptoPath, JSON.stringify(cryptoData, null, 4));
