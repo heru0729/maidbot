@@ -714,10 +714,10 @@ client.once(Events.ClientReady, async () => {
             let changed = false;
             for (const c of Object.values(cryptoData)) {
                 const open = c.price;
-                // 強い上昇バイアス：流通率に関係なく+2%基礎、さらに流通率で加速
                 const circRatio = 1 - c.availableSupply / c.totalSupply;
-                const baseDrift = 0.02 + circRatio * 0.03; // +2%〜+5%基礎上昇
-                const noise = (Math.random() - 0.35) * 0.12; // ±6%、上昇バイアス
+                // 流通率に応じた緩やかな変動（株式と同程度）
+                const baseDrift = (circRatio - 0.5) * 0.01;
+                const noise = (Math.random() - 0.5) * 0.02; // ±1%
                 const change = 1 + baseDrift + noise;
                 const close = r3(Math.max(0.001, open * change));
                 // OHLCデータを生成
@@ -2060,7 +2060,7 @@ client.on(Events.MessageCreate, async (message) => {
             users[message.author.id].username = message.author.username;
             if (users[message.author.id].xp >= getNextLevelXP(users[message.author.id].lv)) {
                 users[message.author.id].lv++;
-                message.reply(`🎉 レベルアップ！ **Lv.${users[message.author.id].lv}** になりました！`);
+                message.reply(`🎉 レベルアップ！ **Lv.${users[message.author.id].lv}** になりました！`).then(msg => setTimeout(() => msg.delete().catch(()=>{}), 8000));
             }
             saveData(USERS_FILE, users);
         }
