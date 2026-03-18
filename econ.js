@@ -215,8 +215,8 @@ const econCommands = [
             .addStringOption(o => o.setName('symbol').setDescription('シンボル（例: BTC）').setRequired(true)))
         .addSubcommand(sub => sub.setName('list').setDescription('仮想通貨一覧を表示します'))
         .addSubcommand(sub => sub.setName('view').setDescription('チャートと詳細を表示します').addStringOption(o => o.setName('symbol').setDescription('シンボル（未指定でセレクト）')))
-        .addSubcommand(sub => sub.setName('buy').setDescription('仮想通貨を購入します').addStringOption(o => o.setName('amount').setDescription('購入枚数（数字・all）').setRequired(true)).addStringOption(o => o.setName('symbol').setDescription('シンボル（未指定でセレクト）')))
-        .addSubcommand(sub => sub.setName('sell').setDescription('仮想通貨を売却します').addStringOption(o => o.setName('amount').setDescription('売却枚数（数字・all）').setRequired(true)).addStringOption(o => o.setName('symbol').setDescription('シンボル（未指定でセレクト）'))),
+        .addSubcommand(sub => sub.setName('buy').setDescription('仮想通貨を購入します').addStringOption(o => o.setName('amount').setDescription('購入枚数（数字・小数・all 例: 0.5）').setRequired(true)).addStringOption(o => o.setName('symbol').setDescription('シンボル（未指定でセレクト）')))
+        .addSubcommand(sub => sub.setName('sell').setDescription('仮想通貨を売却します').addStringOption(o => o.setName('amount').setDescription('売却枚数（数字・小数・all 例: 0.5）').setRequired(true)).addStringOption(o => o.setName('symbol').setDescription('シンボル（未指定でセレクト）'))),
     new SlashCommandBuilder().setName('stock').setDescription('株式市場（会社の株売買・チャート）').addStringOption(o => o.setName('corp').setDescription('会社名（未指定でセレクト表示）')),
     new SlashCommandBuilder().setName('buystock').setDescription('株を購入します').addStringOption(o => o.setName('amount').setDescription('購入株数（数字・all）').setRequired(true)).addStringOption(o => o.setName('corp').setDescription('会社名（未指定でセレクト表示）')),
     new SlashCommandBuilder().setName('sellstock').setDescription('株を売却します').addIntegerOption(o => o.setName('amount').setDescription('売却株数').setRequired(true).setMinValue(1)).addStringOption(o => o.setName('corp').setDescription('会社名（未指定でセレクト表示）')),
@@ -1354,18 +1354,17 @@ async function showCryptoDetail(interaction, coin, econ, user, CRYPTO_FILE, isUp
 async function doBuyCrypto(interaction, coin, amtInput, econ, u, cryptoData, CRYPTO_FILE) {
     // 自己発行通貨は購入不可
     if (coin.ownerId === u.id || coin.ownerId === interaction.user.id) return interaction.reply({ content: '❌ 自分が発行した通貨は購入できません。', ...EPH });
-    const maxPerTx = Math.floor(coin.totalSupply * 0.05); // 1回の上限: 発行総数の5%
+    const maxPerTx = round3(coin.totalSupply * 0.05); // 1回の上限: 発行総数の5%
     let amount;
     if (amtInput === 'all') {
-        // allは残高10%分まで（引き下げ）
-        const budget = Math.floor(u.balance * 0.1);
-        amount = Math.min(Math.floor(budget / (coin.price * (1 + FEE_RATE))), coin.availableSupply, maxPerTx);
+        const budget = round3(u.balance * 0.1);
+        amount = round3(Math.min(budget / (coin.price * (1 + FEE_RATE)), coin.availableSupply, maxPerTx));
     } else {
-        amount = parseInt(amtInput) || 0;
+        amount = round3(parseFloat(amtInput) || 0); // 小数点対応
     }
-    if (amount <= 0) return interaction.reply({ content: '❌ 有効な枚数を入力してください。', ...EPH });
-    if (amount > maxPerTx) return interaction.reply({ content: `❌ 1回の購入上限は **${maxPerTx.toLocaleString()}** 枚です（発行総数の5%）。`, ...EPH });
-    if (coin.availableSupply < amount) return interaction.reply({ content: `❌ 購入可能枚数不足。現在: **${coin.availableSupply.toLocaleString()}** 枚`, ...EPH });
+    if (amount <= 0) return interaction.reply({ content: '❌ 有効な枚数を入力してください。（小数点可: 例 0.5）', ...EPH });
+    if (amount > maxPerTx) return interaction.reply({ content: `❌ 1回の購入上限は **${fmtPrice(maxPerTx)}** 枚です（発行総数の5%）。`, ...EPH });
+    if (coin.availableSupply < amount) return interaction.reply({ content: `❌ 購入可能枚数不足。現在: **${fmtPrice(coin.availableSupply)}** 枚`, ...EPH });
     const subtotal = round3(coin.price * amount);
     const fee = round3(subtotal * FEE_RATE);
     const total = round3(subtotal + fee);
@@ -1385,17 +1384,17 @@ async function doBuyCrypto(interaction, coin, amtInput, econ, u, cryptoData, CRY
 }
 
 async function doSellCrypto(interaction, coin, amtInput, econ, u, cryptoData, CRYPTO_FILE) {
-    const held = (u.crypto || {})[coin.id] || 0;
+    const held = round3((u.crypto || {})[coin.id] || 0);
     let amount;
     if (amtInput === 'all') amount = held;
-    else amount = parseInt(amtInput) || 0;
-    if (amount <= 0) return interaction.reply({ content: '❌ 有効な枚数を入力してください。', ...EPH });
-    if (held < amount) return interaction.reply({ content: `❌ 保有枚数不足。現在: **${held.toLocaleString()}** 枚`, ...EPH });
+    else amount = round3(parseFloat(amtInput) || 0);
+    if (amount <= 0) return interaction.reply({ content: '❌ 有効な枚数を入力してください。（小数点可: 例 0.5）', ...EPH });
+    if (held < amount) return interaction.reply({ content: `❌ 保有枚数不足。現在: **${fmtPrice(held)}** 枚`, ...EPH });
     const subtotal = round3(coin.price * amount);
     const fee = round3(subtotal * FEE_RATE);
     const total = round3(subtotal - fee);
     u.balance = round3(u.balance + total);
-    u.crypto[coin.id] = held - amount;
+    u.crypto[coin.id] = round3(held - amount);
     coin.availableSupply += amount;
     const ratio = 1 - 0.015 * Math.min(Math.log10(amount + 1), 5); // 最大-7.5%
     coin.price = round3(Math.max(0.001, coin.price * ratio));
