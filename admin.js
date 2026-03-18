@@ -294,7 +294,42 @@ async function handleAdminCommands(msg, client, OWNER_IDS, loadData, saveData, U
         }
     }
 
-    // !crash [stock/crypto/all] [percent] [name?]
+    // !resetprice [stock/crypto] [銘柄名] [新価格]
+    if (cmd === 'resetprice') {
+        const target = args[0]?.toLowerCase();
+        const newPrice = parseFloat(args[args.length - 1]) || 0;
+        const name = args.slice(1, -1).join(' ').toLowerCase();
+        if (!['stock', 'crypto'].includes(target) || !name || newPrice <= 0) {
+            return msg.reply('使用法: !resetprice [stock/crypto] [銘柄名] [新価格]\n例: !resetprice crypto BTC 0.005');
+        }
+        const fs = require('fs'), path = require('path');
+        const r3 = x => Math.round(x * 1000) / 1000;
+        const price = r3(newPrice);
+
+        if (target === 'stock') {
+            const corpPath = path.join(__dirname, 'data', 'corp.json');
+            const corpData = JSON.parse(fs.readFileSync(corpPath, 'utf8'));
+            const c = Object.values(corpData).find(c => c.name.toLowerCase() === name && c.stock);
+            if (!c) return msg.reply(`❌ 株式「${name}」が見つかりません。`);
+            c.stock.price = price;
+            c.stock.history = [price];
+            c.stock.ohlc = [{ o: price, h: price, l: price, c: price, t: Date.now() }];
+            fs.writeFileSync(corpPath, JSON.stringify(corpData, null, 4));
+            return msg.reply(`✅ **${c.name}** 株価を **${price}** 🪙 にリセットしました。`);
+        }
+
+        if (target === 'crypto') {
+            const cryptoPath = path.join(__dirname, 'data', 'crypto.json');
+            const cryptoData = JSON.parse(fs.readFileSync(cryptoPath, 'utf8'));
+            const c = Object.values(cryptoData).find(c => c.name.toLowerCase() === name || c.symbol.toLowerCase() === name);
+            if (!c) return msg.reply(`❌ 仮想通貨「${name}」が見つかりません。`);
+            c.price = price;
+            c.history = [price];
+            c.ohlc = [{ o: price, h: price, l: price, c: price, t: Date.now() }];
+            fs.writeFileSync(cryptoPath, JSON.stringify(cryptoData, null, 4));
+            return msg.reply(`✅ **${c.name} (${c.symbol})** を **${price}** 🪙 にリセットしました。`);
+        }
+    }
     if (cmd === 'crash') {
         const target = args[0]?.toLowerCase();
         const percent = parseInt(args[1]) || 0;
