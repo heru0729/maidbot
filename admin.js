@@ -295,7 +295,7 @@ async function handleAdminCommands(msg, client, OWNER_IDS, loadData, saveData, U
     }
 
     // !resetprice [stock/crypto] [銘柄名] [新価格]
-    if (cmd === 'resetprice') {
+    if (command === 'resetprice') {
         const target = args[0]?.toLowerCase();
         const newPrice = parseFloat(args[args.length - 1]) || 0;
         const name = args.slice(1, -1).join(' ').toLowerCase();
@@ -330,7 +330,7 @@ async function handleAdminCommands(msg, client, OWNER_IDS, loadData, saveData, U
             return msg.reply(`✅ **${c.name} (${c.symbol})** を **${price}** 🪙 にリセットしました。`);
         }
     }
-    if (cmd === 'crash') {
+    if (command === 'crash') {
         const target = args[0]?.toLowerCase();
         const percent = parseInt(args[1]) || 0;
         const name = args.slice(2).join(' ').toLowerCase() || null;
