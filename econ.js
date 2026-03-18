@@ -1481,7 +1481,7 @@ async function handleEconInteraction(interaction) {
     if (cid.startsWith('corp_dissolve_')) {
         const corpId = cid.replace('corp_dissolve_', '');
         const c = corpData[corpId];
-        if (!c || c.ownerId !== user.id) return interaction.reply({ content: '❌ 権限がありません。', ...EPH });
+        if (!c || c.ownerId !== user.id) return interaction.reply({ content: '❌ 会社のオーナーのみ解散できます。', ...EPH });
         const embed = new EmbedBuilder().setTitle('⚠️ 会社解散の確認').setColor(0xff4757)
             .setDescription(`**${c.name}** を解散しますか？\n\n以下が自動処理されます：\n• 会社残高 **${(c.balance || 0).toLocaleString()}** 🪙 をオーナーに返還\n• 株式保有者に現在株価で自動買い戻し\n\n**この操作は取り消せません。**`);
         const row = new ActionRowBuilder().addComponents(
@@ -1496,7 +1496,7 @@ async function handleEconInteraction(interaction) {
         const corpId = cid.replace('corp_dissolve_confirm_', '');
         const corpData2 = load(CORP_FILE);
         const c = corpData2[corpId];
-        if (!c || c.ownerId !== user.id) return interaction.reply({ content: '❌ 権限がありません。', ...EPH });
+        if (!c || c.ownerId !== user.id) return interaction.reply({ content: '❌ 会社のオーナーのみ解散できます。', ...EPH });
         const u = getUser(econ, user.id, user);
 
         // 会社残高をオーナーに返還
