@@ -293,6 +293,66 @@ async function handleAdminCommands(msg, client, OWNER_IDS, loadData, saveData, U
             await msg.reply(`❌ 取得失敗: ${e.message}`);
         }
     }
+
+    // !crash [stock/crypto/all] [percent] [name?]
+    if (cmd === 'crash') {
+        const target = args[0]?.toLowerCase();
+        const percent = parseInt(args[1]) || 0;
+        const name = args.slice(2).join(' ').toLowerCase() || null;
+        if (!['stock', 'crypto', 'all'].includes(target)) return msg.reply('使用法: !crash [stock/crypto/all] [下落率%] [銘柄名(省略可)]');
+        if (percent <= 0 || percent >= 100) return msg.reply('❌ 下落率は1〜99の数値で指定してください。');
+        const fs = require('fs'), path = require('path');
+        const ratio = 1 - percent / 100;
+        const r3 = x => Math.round(x * 1000) / 1000;
+        const results = [];
+
+        if (target === 'stock' || target === 'all') {
+            const corpPath = path.join(__dirname, 'data', 'corp.json');
+            if (fs.existsSync(corpPath)) {
+                const corpData = JSON.parse(fs.readFileSync(corpPath, 'utf8'));
+                let changed = false;
+                for (const c of Object.values(corpData)) {
+                    if (!c.stock) continue;
+                    if (name && c.name.toLowerCase() !== name) continue;
+                    const before = c.stock.price;
+                    c.stock.price = r3(Math.max(0.001, before * ratio));
+                    if (!c.stock.history) c.stock.history = [];
+                    c.stock.history.push(c.stock.price);
+                    if (c.stock.ohlc) c.stock.ohlc.push({ o: before, h: before, l: c.stock.price, c: c.stock.price, t: Date.now() });
+                    results.push(`📉 **${c.name}** 株: ${before} → **${c.stock.price}** 🪙`);
+                    changed = true;
+                }
+                if (changed) fs.writeFileSync(corpPath, JSON.stringify(corpData, null, 4));
+            }
+        }
+
+        if (target === 'crypto' || target === 'all') {
+            const cryptoPath = path.join(__dirname, 'data', 'crypto.json');
+            if (fs.existsSync(cryptoPath)) {
+                const cryptoData = JSON.parse(fs.readFileSync(cryptoPath, 'utf8'));
+                let changed = false;
+                for (const c of Object.values(cryptoData)) {
+                    if (name && c.name.toLowerCase() !== name && c.symbol.toLowerCase() !== name) continue;
+                    const before = c.price;
+                    c.price = r3(Math.max(0.001, before * ratio));
+                    if (!c.history) c.history = [];
+                    c.history.push(c.price);
+                    if (c.ohlc) c.ohlc.push({ o: before, h: before, l: c.price, c: c.price, t: Date.now() });
+                    results.push(`📉 **${c.name} (${c.symbol})**: ${before} → **${c.price}** 🪙`);
+                    changed = true;
+                }
+                if (changed) fs.writeFileSync(cryptoPath, JSON.stringify(cryptoData, null, 4));
+            }
+        }
+
+        if (results.length === 0) return msg.reply('❌ 対象が見つかりませんでした。');
+        const embed = new EmbedBuilder()
+            .setTitle(`💥 強制下落 -${percent}%`)
+            .setDescription(results.join('\n'))
+            .setColor(0xff4757)
+            .setTimestamp();
+        await msg.reply({ embeds: [embed] });
+    }
 }
 
 module.exports = handleAdminCommands;
