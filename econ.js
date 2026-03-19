@@ -230,9 +230,22 @@ async function handleEcon(interaction) {
         const target = options.getUser('user') || user;
         const u = getUser(econ, target.id, target);
         const corp = load(CORP_FILE);
+        const cryptoData = load(CRYPTO_FILE);
         const ownedCorps = Object.values(corp).filter(c => c.ownerId === target.id);
         const loan = u.loan || 0;
         const netBalance = round3(u.balance - loan);
+
+        // 仮想通貨保有情報
+        const heldCrypto = Object.entries(u.crypto || {}).filter(([, amt]) => amt > 0);
+        let cryptoValue = 0;
+        const cryptoLines = heldCrypto.map(([id, amt]) => {
+            const coin = cryptoData[id];
+            if (!coin) return null;
+            const val = round3(amt * coin.price);
+            cryptoValue += val;
+            return `${coin.symbol}: **${fmtPrice(amt)}** 枚 (≒ **${fmtPrice(val)}** 🪙)`;
+        }).filter(Boolean);
+
         const embed = new EmbedBuilder()
             .setTitle(`${CURRENCY} ${target.username} の所持金`)
             .setThumbnail(target.displayAvatarURL())
@@ -241,7 +254,9 @@ async function handleEcon(interaction) {
                 { name: '残高', value: `**${fmtPrice(u.balance)}** ${CURRENCY}`, inline: true },
                 { name: '借入残高', value: loan > 0 ? `**-${fmtPrice(loan)}** ${CURRENCY}` : 'なし', inline: true },
                 { name: '実質残高', value: `**${fmtPrice(netBalance)}** ${CURRENCY}${netBalance < 0 ? ' 🔴' : ''}`, inline: true },
-                { name: '保有会社', value: ownedCorps.length > 0 ? ownedCorps.map(c => c.name).join(', ') : 'なし', inline: true }
+                { name: '保有会社', value: ownedCorps.length > 0 ? ownedCorps.map(c => c.name).join(', ') : 'なし', inline: true },
+                { name: '💹 仮想通貨', value: cryptoLines.length > 0 ? cryptoLines.join('\n') : 'なし', inline: false },
+                { name: '仮想通貨評価額', value: `**${fmtPrice(cryptoValue)}** 🪙`, inline: true }
             ).setTimestamp();
         const isSelf = target.id === user.id;
         const rows = [delBtn()];
@@ -1583,9 +1598,19 @@ async function handleEconInteraction(interaction) {
     if (cid === 'balance_reload') {
         const u = getUser(econ, user.id, user);
         const corp = load(CORP_FILE);
+        const cryptoData = load(CRYPTO_FILE);
         const ownedCorps = Object.values(corp).filter(c => c.ownerId === user.id);
         const loan = u.loan || 0;
         const netBalance = round3(u.balance - loan);
+        const heldCrypto = Object.entries(u.crypto || {}).filter(([, amt]) => amt > 0);
+        let cryptoValue = 0;
+        const cryptoLines = heldCrypto.map(([id, amt]) => {
+            const coin = cryptoData[id];
+            if (!coin) return null;
+            const val = round3(amt * coin.price);
+            cryptoValue += val;
+            return `${coin.symbol}: **${fmtPrice(amt)}** 枚 (≒ **${fmtPrice(val)}** 🪙)`;
+        }).filter(Boolean);
         const embed = new EmbedBuilder()
             .setTitle(`${CURRENCY} ${user.username} の所持金`)
             .setThumbnail(user.displayAvatarURL())
@@ -1594,7 +1619,9 @@ async function handleEconInteraction(interaction) {
                 { name: '残高', value: `**${fmtPrice(u.balance)}** ${CURRENCY}`, inline: true },
                 { name: '借入残高', value: loan > 0 ? `**-${fmtPrice(loan)}** ${CURRENCY}` : 'なし', inline: true },
                 { name: '実質残高', value: `**${fmtPrice(netBalance)}** ${CURRENCY}${netBalance < 0 ? ' 🔴' : ''}`, inline: true },
-                { name: '保有会社', value: ownedCorps.length > 0 ? ownedCorps.map(c => c.name).join(', ') : 'なし', inline: true }
+                { name: '保有会社', value: ownedCorps.length > 0 ? ownedCorps.map(c => c.name).join(', ') : 'なし', inline: true },
+                { name: '💹 仮想通貨', value: cryptoLines.length > 0 ? cryptoLines.join('\n') : 'なし', inline: false },
+                { name: '仮想通貨評価額', value: `**${fmtPrice(cryptoValue)}** 🪙`, inline: true }
             ).setTimestamp();
         const row = new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId('balance_reload').setLabel('🔄 更新').setStyle(ButtonStyle.Secondary)
