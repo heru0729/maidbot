@@ -1352,8 +1352,6 @@ async function showCryptoDetail(interaction, coin, econ, user, CRYPTO_FILE, isUp
 }
 
 async function doBuyCrypto(interaction, coin, amtInput, econ, u, cryptoData, CRYPTO_FILE) {
-    // 自己発行通貨は購入不可
-    if (coin.ownerId === u.id || coin.ownerId === interaction.user.id) return interaction.reply({ content: '❌ 自分が発行した通貨は購入できません。', ...EPH });
     const maxPerTx = round3(coin.totalSupply * 0.05); // 1回の上限: 発行総数の5%
     let amount;
     if (amtInput === 'all') {
