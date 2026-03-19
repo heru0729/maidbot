@@ -905,7 +905,7 @@ async function handleEcon(interaction) {
             if (owned.length >= 1) return interaction.reply({ content: '❌ 仮想通貨は1人1枚までです。', ...EPH });
             if (Object.values(cryptoData).some(c => c.symbol === symbol)) return interaction.reply({ content: `❌ シンボル **${symbol}** はすでに使用されています。`, ...EPH });
             const coinId = `coin_${Date.now()}_${user.id}`;
-            const TOTAL_SUPPLY = 1000000;
+            const TOTAL_SUPPLY = 100000000; // 1億枚
             cryptoData[coinId] = {
                 id: coinId, name, symbol,
                 ownerId: user.id, ownerName: user.username,
