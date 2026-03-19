@@ -621,6 +621,83 @@ client.once(Events.ClientReady, async () => {
         if (changed) fs.writeFileSync(econPath, JSON.stringify(econ, null, 4));
     }, 3600000);
 
+    // オークション自動落札（1分ごと）
+    setInterval(async () => {
+        const fs = require('fs'), path = require('path');
+        const auctionPath = path.join(__dirname, 'data', 'auctions.json');
+        const econPath = path.join(__dirname, 'data', 'econ.json');
+        if (!fs.existsSync(auctionPath) || !fs.existsSync(econPath)) return;
+        const auctions = JSON.parse(fs.readFileSync(auctionPath, 'utf8'));
+        const econ = JSON.parse(fs.readFileSync(econPath, 'utf8'));
+        let changed = false;
+        for (const [guildId, guildAuctions] of Object.entries(auctions)) {
+            for (const a of Object.values(guildAuctions)) {
+                if (a.status !== 'active' || a.endAt > Date.now()) continue;
+                if (a.topBidderId) {
+                    // 落札者にアイテム付与（代金は入札時に引き落とし済み）
+                    const winner = econ[a.topBidderId];
+                    if (winner) {
+                        if (!winner.inventory) winner.inventory = [];
+                        winner.inventory.push({ ...a.item, boughtAt: Date.now() });
+                    }
+                    // 出品者に代金を渡す
+                    const seller = econ[a.sellerId];
+                    if (seller) seller.balance = (seller.balance || 0) + a.currentPrice;
+                    a.status = 'completed';
+                    // 落札通知
+                    const guild = client.guilds.cache.get(guildId);
+                    if (guild) {
+                        const ch = guild.channels.cache.find(c => c.type === 0 && c.name.includes('general') || c.type === 0);
+                        if (ch) ch.send(`🔨 **オークション終了！** **${a.item.name}** が <@${a.topBidderId}> に **${a.currentPrice.toLocaleString()}** 🪙 で落札されました！`).catch(()=>{});
+                    }
+                } else {
+                    // 入札者なし → 出品者に返却
+                    const seller = econ[a.sellerId];
+                    if (seller) {
+                        if (!seller.inventory) seller.inventory = [];
+                        seller.inventory.push(a.item);
+                    }
+                    a.status = 'no_bid';
+                }
+                changed = true;
+            }
+        }
+        if (changed) {
+            fs.writeFileSync(auctionPath, JSON.stringify(auctions, null, 4));
+            fs.writeFileSync(econPath, JSON.stringify(econ, null, 4));
+        }
+    }, 60000);
+
+    // 誕生日通知（1分ごとにチェック、JST 0時台に通知）
+    setInterval(async () => {
+        const fs = require('fs'), path = require('path');
+        const bdPath = path.join(__dirname, 'data', 'birthday.json');
+        if (!fs.existsSync(bdPath)) return;
+        const birthday = JSON.parse(fs.readFileSync(bdPath, 'utf8'));
+        const jstNow = new Date(Date.now() + 9 * 3600000);
+        const todayStr = `${jstNow.getUTCFullYear()}-${jstNow.getUTCMonth()+1}-${jstNow.getUTCDate()}`;
+        const month = jstNow.getUTCMonth() + 1;
+        const day = jstNow.getUTCDate();
+        const hour = jstNow.getUTCHours();
+        if (hour !== 0) return; // 0時台のみ実行
+        for (const [guildId, users] of Object.entries(birthday)) {
+            if (guildId === '_settings') continue;
+            const channelId = birthday._settings?.[guildId]?.channelId;
+            if (!channelId) continue;
+            const guild = client.guilds.cache.get(guildId);
+            if (!guild) continue;
+            const ch = guild.channels.cache.get(channelId);
+            if (!ch) continue;
+            for (const [userId, data] of Object.entries(users)) {
+                if (data.month !== month || data.day !== day) continue;
+                if (data.lastNotified === todayStr) continue;
+                await ch.send(`🎂 今日は <@${userId}> の誕生日です！🎉 おめでとうございます！`).catch(()=>{});
+                data.lastNotified = todayStr;
+            }
+        }
+        fs.writeFileSync(bdPath, JSON.stringify(birthday, null, 4));
+    }, 60000);
+
     // 日給支払い＋株式配当（1分ごとにチェック、JST 0時に支給）
     setInterval(() => {
         const fs = require('fs'), path = require('path');
@@ -1386,7 +1463,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
 
         // econコマンド
-        const econCommandNames = ['balance','earn','pay','exchange','bank','account','shop','buy','sell','dust','inventory','econrank','corp','crypto','stock','buystock','sellstock'];
+        const econCommandNames = ['balance','earn','pay','exchange','bank','account','shop','buy','sell','dust','inventory','econrank','corp','crypto','stock','buystock','sellstock','birthday','loan','trade','auction'];
         if (econCommandNames.includes(commandName)) {
             await handleEcon(interaction);
         }
@@ -1874,7 +1951,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
 
         // econ ボタン
-        const econBtnPrefixes = ['bj_hit_', 'bj_stand_', 'bj_double_', 'bank_loan', 'bank_repay', 'bank_reload', 'balance_reload', 'stock_buy_', 'stock_sell_', 'stock_refresh_', 'crypto_buy_', 'crypto_sell_', 'crypto_refresh_', 'store_issuestock_', 'store_additem_', 'store_removeitem_', 'store_withdraw_', 'corp_dissolve_', 'corp_join_', 'exchange_unb_to_bot', 'exchange_bot_to_unb'];
+        const econBtnPrefixes = ['bj_hit_', 'bj_stand_', 'bj_double_', 'bank_loan', 'bank_repay', 'bank_reload', 'balance_reload', 'stock_buy_', 'stock_sell_', 'stock_refresh_', 'crypto_buy_', 'crypto_sell_', 'crypto_refresh_', 'store_issuestock_', 'store_additem_', 'store_removeitem_', 'store_withdraw_', 'corp_dissolve_', 'corp_join_', 'auction_bid_', 'exchange_unb_to_bot', 'exchange_bot_to_unb'];
         if (econBtnPrefixes.some(p => cid.startsWith(p))) {
             await handleEconInteraction(interaction);
         }
@@ -1900,7 +1977,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     // econ モーダル
-    if (interaction.isModalSubmit() && (interaction.customId.startsWith('modal_store_') || interaction.customId.startsWith('modal_earn_') || interaction.customId.startsWith('modal_bank_') || interaction.customId.startsWith('modal_stock_') || interaction.customId.startsWith('modal_crypto_') || interaction.customId.startsWith('modal_exchange_'))) {
+    if (interaction.isModalSubmit() && (interaction.customId.startsWith('modal_store_') || interaction.customId.startsWith('modal_earn_') || interaction.customId.startsWith('modal_bank_') || interaction.customId.startsWith('modal_stock_') || interaction.customId.startsWith('modal_crypto_') || interaction.customId.startsWith('modal_exchange_') || interaction.customId.startsWith('modal_auction_'))) {
         await handleEconModal(interaction);
     }
 });
