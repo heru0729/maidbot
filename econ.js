@@ -14,6 +14,7 @@ try {
 const ECON_FILE  = path.join(__dirname, 'data', 'econ.json');
 const CORP_FILE  = path.join(__dirname, 'data', 'corp.json');
 const SHOP_FILE  = path.join(__dirname, 'data', 'shop.json');
+const CRYPTO_FILE = path.join(__dirname, 'data', 'crypto.json');
 const BIRTHDAY_FILE = path.join(__dirname, 'data', 'birthday.json');
 const LOAN_FILE  = path.join(__dirname, 'data', 'loans.json');
 const TRADE_FILE = path.join(__dirname, 'data', 'trades.json');
