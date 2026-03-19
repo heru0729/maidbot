@@ -766,12 +766,13 @@ client.once(Events.ClientReady, async () => {
                 if (!c.stock) continue;
                 const open = c.stock.price;
                 const circRatio = 1 - c.stock.availableShares / c.stock.totalShares;
-                const baseDrift = (circRatio - 0.5) * 0.008;
-                const noise = (Math.random() - 0.5) * 0.012;
+                // 流通率が高いほど微上昇、低いほど微下落。ノイズは±0.15%
+                const baseDrift = (circRatio - 0.5) * 0.002 + 0.0001;
+                const noise = (Math.random() - 0.5) * 0.003;
                 const change = 1 + baseDrift + noise;
                 const close = r3(Math.max(0.001, open * change));
-                const high = r3(Math.max(open, close) * (1 + Math.random() * 0.005));
-                const low  = r3(Math.min(open, close) * (1 - Math.random() * 0.005));
+                const high = r3(Math.max(open, close) * (1 + Math.random() * 0.001));
+                const low  = r3(Math.min(open, close) * (1 - Math.random() * 0.001));
                 c.stock.price = close;
                 if (!c.stock.ohlc) c.stock.ohlc = [];
                 c.stock.ohlc.push({ o: open, h: high, l: low, c: close, t: Date.now() });
@@ -792,14 +793,13 @@ client.once(Events.ClientReady, async () => {
             for (const c of Object.values(cryptoData)) {
                 const open = c.price;
                 const circRatio = 1 - c.availableSupply / c.totalSupply;
-                // 流通率に応じた緩やかな変動（株式と同程度）
-                const baseDrift = (circRatio - 0.5) * 0.01;
-                const noise = (Math.random() - 0.5) * 0.02; // ±1%
+                // 流通率に応じた緩やかな変動、ノイズは±0.15%
+                const baseDrift = (circRatio - 0.5) * 0.002 + 0.0001;
+                const noise = (Math.random() - 0.5) * 0.003;
                 const change = 1 + baseDrift + noise;
                 const close = r3(Math.max(0.001, open * change));
-                // OHLCデータを生成
-                const high = r3(Math.max(open, close) * (1 + Math.random() * 0.03));
-                const low  = r3(Math.min(open, close) * (1 - Math.random() * 0.03));
+                const high = r3(Math.max(open, close) * (1 + Math.random() * 0.001));
+                const low  = r3(Math.min(open, close) * (1 - Math.random() * 0.001));
                 c.price = close;
                 if (!c.ohlc) c.ohlc = [];
                 c.ohlc.push({ o: open, h: high, l: low, c: close, t: Date.now() });
