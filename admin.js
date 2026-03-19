@@ -294,6 +294,33 @@ async function handleAdminCommands(msg, client, OWNER_IDS, loadData, saveData, U
         }
     }
 
+    // !resetcoins [supply?] → 全仮想通貨の発行量を指定枚数に変更（デフォルト1億）
+    if (command === 'resetcoins') {
+        const newSupply = parseInt(args[0]) || 100000000;
+        const fs = require('fs'), path = require('path');
+        const cryptoPath = path.join(__dirname, 'data', 'crypto.json');
+        if (!fs.existsSync(cryptoPath)) return msg.reply('❌ crypto.jsonが見つかりません。');
+        const cryptoData = JSON.parse(fs.readFileSync(cryptoPath, 'utf8'));
+        const coins = Object.values(cryptoData);
+        if (coins.length === 0) return msg.reply('❌ 仮想通貨がありません。');
+        const results = [];
+        for (const c of coins) {
+            const oldSupply = c.totalSupply;
+            const soldAmount = oldSupply - c.availableSupply;
+            c.totalSupply = newSupply;
+            c.availableSupply = Math.max(0, newSupply - soldAmount);
+            results.push(`• **${c.name} (${c.symbol})**: ${oldSupply.toLocaleString()} → **${newSupply.toLocaleString()}** 枚`);
+        }
+        fs.writeFileSync(cryptoPath, JSON.stringify(cryptoData, null, 4));
+        const embed = new EmbedBuilder()
+            .setTitle(`🔄 発行量変更完了`)
+            .setDescription(results.join('\n'))
+            .setColor(0x3498db)
+            .setFooter({ text: `新発行量: ${newSupply.toLocaleString()} 枚` })
+            .setTimestamp();
+        await msg.reply({ embeds: [embed] });
+    }
+
     // !resetprice [stock/crypto] [銘柄名] [新価格]
     if (command === 'resetprice') {
         const target = args[0]?.toLowerCase();
