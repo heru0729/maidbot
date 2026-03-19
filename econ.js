@@ -14,6 +14,10 @@ try {
 const ECON_FILE  = path.join(__dirname, 'data', 'econ.json');
 const CORP_FILE  = path.join(__dirname, 'data', 'corp.json');
 const SHOP_FILE  = path.join(__dirname, 'data', 'shop.json');
+const BIRTHDAY_FILE = path.join(__dirname, 'data', 'birthday.json');
+const LOAN_FILE  = path.join(__dirname, 'data', 'loans.json');
+const TRADE_FILE = path.join(__dirname, 'data', 'trades.json');
+const AUCTION_FILE = path.join(__dirname, 'data', 'auctions.json');
 const EPH = { flags: MessageFlags.Ephemeral };
 const CURRENCY = '🪙';
 const CORP_COST = 10000;
@@ -220,6 +224,39 @@ const econCommands = [
     new SlashCommandBuilder().setName('stock').setDescription('株式市場（会社の株売買・チャート）').addStringOption(o => o.setName('corp').setDescription('会社名（未指定でセレクト表示）')),
     new SlashCommandBuilder().setName('buystock').setDescription('株を購入します').addStringOption(o => o.setName('amount').setDescription('購入株数（数字・all）').setRequired(true)).addStringOption(o => o.setName('corp').setDescription('会社名（未指定でセレクト表示）')),
     new SlashCommandBuilder().setName('sellstock').setDescription('株を売却します').addIntegerOption(o => o.setName('amount').setDescription('売却株数').setRequired(true).setMinValue(1)).addStringOption(o => o.setName('corp').setDescription('会社名（未指定でセレクト表示）')),
+
+    // 誕生日
+    new SlashCommandBuilder().setName('birthday')
+        .setDescription('誕生日を管理します')
+        .addSubcommand(sub => sub.setName('set').setDescription('誕生日を登録します').addStringOption(o => o.setName('date').setDescription('誕生日（例: 03/20）').setRequired(true)))
+        .addSubcommand(sub => sub.setName('check').setDescription('誕生日を確認します').addUserOption(o => o.setName('user').setDescription('対象ユーザー（未指定なら自分）')))
+        .addSubcommand(sub => sub.setName('list').setDescription('サーバーの誕生日一覧を表示します'))
+        .addSubcommand(sub => sub.setName('channel').setDescription('誕生日通知チャンネルを設定します（管理者）').addChannelOption(o => o.setName('channel').setDescription('通知先チャンネル').setRequired(true))),
+
+    // 融資
+    new SlashCommandBuilder().setName('loan')
+        .setDescription('会社からの融資管理')
+        .addSubcommand(sub => sub.setName('request').setDescription('会社に融資を申請します').addStringOption(o => o.setName('corp').setDescription('融資先の会社名').setRequired(true)).addIntegerOption(o => o.setName('amount').setDescription('融資額').setRequired(true).setMinValue(1)))
+        .addSubcommand(sub => sub.setName('repay').setDescription('融資を返済します').addStringOption(o => o.setName('amount').setDescription('返済額（数字・all）').setRequired(true)))
+        .addSubcommand(sub => sub.setName('list').setDescription('融資申請一覧（会社オーナー用）').addStringOption(o => o.setName('corp').setDescription('会社名（未指定でセレクト）')))
+        .addSubcommand(sub => sub.setName('approve').setDescription('融資を承認します（会社オーナー用）').addStringOption(o => o.setName('id').setDescription('申請ID').setRequired(true)))
+        .addSubcommand(sub => sub.setName('deny').setDescription('融資を却下します（会社オーナー用）').addStringOption(o => o.setName('id').setDescription('申請ID').setRequired(true)))
+        .addSubcommand(sub => sub.setName('setlimit').setDescription('融資上限を設定します（会社オーナー用）').addIntegerOption(o => o.setName('amount').setDescription('上限額（0で無効）').setRequired(true).setMinValue(0)).addStringOption(o => o.setName('corp').setDescription('会社名（未指定でセレクト）'))),
+
+    // 会社間取引
+    new SlashCommandBuilder().setName('trade')
+        .setDescription('会社間でアイテムを取引します')
+        .addSubcommand(sub => sub.setName('offer').setDescription('他社にアイテムを売却オファーします').addStringOption(o => o.setName('item').setDescription('アイテム名').setRequired(true)).addIntegerOption(o => o.setName('price').setDescription('希望価格').setRequired(true).setMinValue(1)).addStringOption(o => o.setName('target').setDescription('取引相手の会社名').setRequired(true)).addStringOption(o => o.setName('corp').setDescription('自分の会社名（未指定でセレクト）')))
+        .addSubcommand(sub => sub.setName('accept').setDescription('取引オファーを承認します').addStringOption(o => o.setName('id').setDescription('オファーID').setRequired(true)))
+        .addSubcommand(sub => sub.setName('deny').setDescription('取引オファーを却下します').addStringOption(o => o.setName('id').setDescription('オファーID').setRequired(true)))
+        .addSubcommand(sub => sub.setName('list').setDescription('届いているオファー一覧を表示します').addStringOption(o => o.setName('corp').setDescription('会社名（未指定でセレクト）'))),
+
+    // オークション
+    new SlashCommandBuilder().setName('auction')
+        .setDescription('オークション管理')
+        .addSubcommand(sub => sub.setName('start').setDescription('オークションを開始します').addStringOption(o => o.setName('item').setDescription('出品するアイテム名').setRequired(true)).addIntegerOption(o => o.setName('start_price').setDescription('開始価格').setRequired(true).setMinValue(1)).addIntegerOption(o => o.setName('minutes').setDescription('終了までの時間（分）').setRequired(true).setMinValue(1).setMaxValue(1440)))
+        .addSubcommand(sub => sub.setName('list').setDescription('開催中のオークション一覧'))
+        .addSubcommand(sub => sub.setName('cancel').setDescription('自分のオークションをキャンセルします').addStringOption(o => o.setName('id').setDescription('オークションID').setRequired(true))),
 ];
 
 async function handleEcon(interaction) {
@@ -717,6 +754,287 @@ async function handleEcon(interaction) {
             embed.setDescription(Object.entries(counts).map(([name, count]) => `• **${name}** × ${count}`).join('\n'));
         }
         return interaction.reply({ embeds: [embed], components: [delBtn()] });
+    }
+
+    // ==================== 誕生日 ====================
+    if (commandName === 'birthday') {
+        const sub = options.getSubcommand();
+        const birthday = load(BIRTHDAY_FILE);
+        if (!birthday[guildId]) birthday[guildId] = {};
+
+        if (sub === 'set') {
+            const date = options.getString('date').trim();
+            if (!/^\d{1,2}\/\d{1,2}$/.test(date)) return interaction.reply({ content: '❌ 形式が違います。例: `03/20`', ...EPH });
+            const [m, d] = date.split('/').map(Number);
+            if (m < 1 || m > 12 || d < 1 || d > 31) return interaction.reply({ content: '❌ 無効な日付です。', ...EPH });
+            birthday[guildId][user.id] = { month: m, day: d, username: user.username };
+            save(BIRTHDAY_FILE, birthday);
+            return interaction.reply({ content: `🎂 誕生日を **${m}月${d}日** に登録しました！`, ...EPH });
+        }
+        if (sub === 'check') {
+            const target = options.getUser('user') || user;
+            const data = birthday[guildId]?.[target.id];
+            if (!data) return interaction.reply({ content: `❌ **${target.username}** の誕生日は登録されていません。`, ...EPH });
+            return interaction.reply({ content: `🎂 **${target.username}** の誕生日は **${data.month}月${data.day}日** です！` });
+        }
+        if (sub === 'list') {
+            const entries = Object.entries(birthday[guildId] || {});
+            if (entries.length === 0) return interaction.reply({ content: '誕生日が登録されているユーザーはいません。', ...EPH });
+            const sorted = entries.sort((a, b) => a[1].month * 100 + a[1].day - (b[1].month * 100 + b[1].day));
+            const lines = sorted.map(([, d]) => `• **${d.username}** — ${d.month}月${d.day}日`).join('\n');
+            const embed = new EmbedBuilder().setTitle('🎂 誕生日一覧').setDescription(lines).setColor(0xff9ff3).setTimestamp();
+            return interaction.reply({ embeds: [embed], components: [delBtn()] });
+        }
+        if (sub === 'channel') {
+            if (!interaction.member.permissions.has('Administrator')) return interaction.reply({ content: '❌ 管理者のみ設定できます。', ...EPH });
+            const ch = options.getChannel('channel');
+            if (!birthday._settings) birthday._settings = {};
+            if (!birthday._settings[guildId]) birthday._settings[guildId] = {};
+            birthday._settings[guildId].channelId = ch.id;
+            save(BIRTHDAY_FILE, birthday);
+            return interaction.reply({ content: `✅ 誕生日通知チャンネルを <#${ch.id}> に設定しました。`, ...EPH });
+        }
+    }
+
+    // ==================== 融資 ====================
+    if (commandName === 'loan') {
+        const sub = options.getSubcommand();
+        const loans = load(LOAN_FILE);
+        const corpData = load(CORP_FILE);
+        if (!loans[guildId]) loans[guildId] = {};
+
+        if (sub === 'request') {
+            const corpName = options.getString('corp');
+            const amount = options.getInteger('amount');
+            const c = Object.values(corpData).find(c => c.name.toLowerCase() === corpName.toLowerCase());
+            if (!c) return interaction.reply({ content: `❌ **${corpName}** という会社は存在しません。`, ...EPH });
+            if (c.ownerId === user.id) return interaction.reply({ content: '❌ 自分の会社には申請できません。', ...EPH });
+            const limit = c.loanLimit || 0;
+            if (limit <= 0) return interaction.reply({ content: `❌ **${c.name}** は融資を受け付けていません。`, ...EPH });
+            if (amount > limit) return interaction.reply({ content: `❌ **${c.name}** の融資上限は **${limit.toLocaleString()}** 🪙です。`, ...EPH });
+            // 既存申請チェック
+            const existing = Object.values(loans[guildId]).find(l => l.userId === user.id && l.corpId === c.id && l.status === 'pending');
+            if (existing) return interaction.reply({ content: '❌ すでに申請中の融資があります。', ...EPH });
+            const id = `loan_${Date.now()}_${user.id}`;
+            loans[guildId][id] = { id, userId: user.id, username: user.username, corpId: c.id, corpName: c.name, amount, status: 'pending', createdAt: Date.now() };
+            save(LOAN_FILE, loans);
+            return interaction.reply({ content: `✅ **${c.name}** に **${amount.toLocaleString()}** 🪙 の融資を申請しました。（申請ID: \`${id}\`）`, ...EPH });
+        }
+        if (sub === 'repay') {
+            const amtInput = options.getString('amount').toLowerCase();
+            const u = getUser(econ, user.id, user);
+            const activeLoan = Object.values(loans[guildId]).find(l => l.userId === user.id && l.status === 'active');
+            if (!activeLoan) return interaction.reply({ content: '❌ 返済すべき融資がありません。', ...EPH });
+            let amount;
+            if (amtInput === 'all') amount = activeLoan.remaining;
+            else amount = parseInt(amtInput) || 0;
+            if (amount <= 0) return interaction.reply({ content: '❌ 有効な金額を入力してください。', ...EPH });
+            if (u.balance < amount) return interaction.reply({ content: `❌ 残高不足。現在: **${u.balance.toLocaleString()}** 🪙`, ...EPH });
+            amount = Math.min(amount, activeLoan.remaining);
+            u.balance -= amount;
+            const c = corpData[activeLoan.corpId];
+            if (c) c.balance = (c.balance || 0) + amount;
+            activeLoan.remaining = round3(activeLoan.remaining - amount);
+            if (activeLoan.remaining <= 0) activeLoan.status = 'repaid';
+            save(ECON_FILE, econ);
+            save(CORP_FILE, corpData);
+            save(LOAN_FILE, loans);
+            return interaction.reply({ content: `✅ **${activeLoan.corpName}** に **${amount.toLocaleString()}** 🪙 を返済しました。残債: **${activeLoan.remaining.toLocaleString()}** 🪙`, ...EPH });
+        }
+        if (sub === 'list') {
+            const corpName = options.getString('corp');
+            const owned = Object.values(corpData).filter(c => c.ownerId === user.id);
+            if (owned.length === 0) return interaction.reply({ content: '❌ 会社を所有していません。', ...EPH });
+            let c;
+            if (corpName) c = owned.find(co => co.name.toLowerCase() === corpName.toLowerCase());
+            else if (owned.length === 1) c = owned[0];
+            else {
+                const select = new StringSelectMenuBuilder().setCustomId('loan_list_select').setPlaceholder('会社を選択').addOptions(owned.map(co => ({ label: co.name, value: co.id })));
+                return interaction.reply({ content: '会社を選択:', components: [new ActionRowBuilder().addComponents(select)], ...EPH });
+            }
+            if (!c) return interaction.reply({ content: '❌ 会社が見つかりません。', ...EPH });
+            const pending = Object.values(loans[guildId]).filter(l => l.corpId === c.id && l.status === 'pending');
+            if (pending.length === 0) return interaction.reply({ content: '申請中の融資はありません。', ...EPH });
+            const embed = new EmbedBuilder().setTitle(`📋 ${c.name} への融資申請`).setColor(0x3498db)
+                .setDescription(pending.map(l => `**${l.username}** — **${l.amount.toLocaleString()}** 🪙\nID: \`${l.id}\``).join('\n\n'));
+            return interaction.reply({ embeds: [embed], components: [delBtn()], ...EPH });
+        }
+        if (sub === 'approve' || sub === 'deny') {
+            const id = options.getString('id');
+            const l = loans[guildId]?.[id];
+            if (!l || l.status !== 'pending') return interaction.reply({ content: '❌ 申請が見つかりません。', ...EPH });
+            const c = corpData[l.corpId];
+            if (!c || c.ownerId !== user.id) return interaction.reply({ content: '❌ 権限がありません。', ...EPH });
+            if (sub === 'deny') {
+                l.status = 'denied';
+                save(LOAN_FILE, loans);
+                return interaction.reply({ content: `❌ **${l.username}** の融資申請を却下しました。`, ...EPH });
+            }
+            if ((c.balance || 0) < l.amount) return interaction.reply({ content: `❌ 会社残高不足。現在: **${(c.balance||0).toLocaleString()}** 🪙`, ...EPH });
+            const u = getUser(econ, l.userId, null);
+            u.balance += l.amount;
+            c.balance = (c.balance || 0) - l.amount;
+            l.status = 'active';
+            l.remaining = l.amount;
+            l.approvedAt = Date.now();
+            save(ECON_FILE, econ);
+            save(CORP_FILE, corpData);
+            save(LOAN_FILE, loans);
+            return interaction.reply({ content: `✅ **${l.username}** への **${l.amount.toLocaleString()}** 🪙 の融資を承認しました。`, ...EPH });
+        }
+        if (sub === 'setlimit') {
+            const amount = options.getInteger('amount');
+            const corpName = options.getString('corp');
+            const owned = Object.values(corpData).filter(c => c.ownerId === user.id);
+            if (owned.length === 0) return interaction.reply({ content: '❌ 会社を所有していません。', ...EPH });
+            let c;
+            if (corpName) c = owned.find(co => co.name.toLowerCase() === corpName.toLowerCase());
+            else if (owned.length === 1) c = owned[0];
+            else return interaction.reply({ content: '❌ 会社名を指定してください。', ...EPH });
+            if (!c) return interaction.reply({ content: '❌ あなたの会社ではありません。', ...EPH });
+            c.loanLimit = amount;
+            save(CORP_FILE, corpData);
+            return interaction.reply({ content: amount > 0 ? `✅ **${c.name}** の融資上限を **${amount.toLocaleString()}** 🪙 に設定しました。` : `✅ **${c.name}** の融資を無効にしました。`, ...EPH });
+        }
+    }
+
+    // ==================== 会社間取引 ====================
+    if (commandName === 'trade') {
+        const sub = options.getSubcommand();
+        const trades = load(TRADE_FILE);
+        const corpData = load(CORP_FILE);
+        if (!trades[guildId]) trades[guildId] = {};
+
+        if (sub === 'offer') {
+            const itemName = options.getString('item');
+            const price = options.getInteger('price');
+            const targetName = options.getString('target');
+            const corpName = options.getString('corp');
+            const owned = Object.values(corpData).filter(c => c.ownerId === user.id);
+            if (owned.length === 0) return interaction.reply({ content: '❌ 会社を所有していません。', ...EPH });
+            let fromCorp;
+            if (corpName) fromCorp = owned.find(c => c.name.toLowerCase() === corpName.toLowerCase());
+            else if (owned.length === 1) fromCorp = owned[0];
+            else return interaction.reply({ content: '❌ 会社名を指定してください（複数保有のため）。', ...EPH });
+            if (!fromCorp) return interaction.reply({ content: '❌ あなたの会社ではありません。', ...EPH });
+            const toCorp = Object.values(corpData).find(c => c.name.toLowerCase() === targetName.toLowerCase());
+            if (!toCorp) return interaction.reply({ content: `❌ **${targetName}** という会社は存在しません。`, ...EPH });
+            if (fromCorp.id === toCorp.id) return interaction.reply({ content: '❌ 自分の会社には取引できません。', ...EPH });
+            // 在庫確認（会社の商品として持っているか）
+            const item = fromCorp.items?.find(i => i.name.toLowerCase() === itemName.toLowerCase());
+            if (!item) return interaction.reply({ content: `❌ **${fromCorp.name}** のストアに **${itemName}** がありません。`, ...EPH });
+            const id = `trade_${Date.now()}_${user.id}`;
+            trades[guildId][id] = { id, fromCorpId: fromCorp.id, fromCorpName: fromCorp.name, toCorpId: toCorp.id, toCorpName: toCorp.name, itemName, price, status: 'pending', createdAt: Date.now() };
+            save(TRADE_FILE, trades);
+            return interaction.reply({ content: `✅ **${toCorp.name}** に **${itemName}** を **${price.toLocaleString()}** 🪙 で取引オファーを送りました。（ID: \`${id}\`）`, ...EPH });
+        }
+        if (sub === 'list') {
+            const corpName = options.getString('corp');
+            const owned = Object.values(corpData).filter(c => c.ownerId === user.id);
+            if (owned.length === 0) return interaction.reply({ content: '❌ 会社を所有していません。', ...EPH });
+            let c;
+            if (corpName) c = owned.find(co => co.name.toLowerCase() === corpName.toLowerCase());
+            else if (owned.length === 1) c = owned[0];
+            else return interaction.reply({ content: '❌ 会社名を指定してください。', ...EPH });
+            const incoming = Object.values(trades[guildId]).filter(t => t.toCorpId === c.id && t.status === 'pending');
+            if (incoming.length === 0) return interaction.reply({ content: `**${c.name}** への取引オファーはありません。`, ...EPH });
+            const embed = new EmbedBuilder().setTitle(`📦 ${c.name} への取引オファー`).setColor(0xe67e22)
+                .setDescription(incoming.map(t => `**${t.fromCorpName}** → **${t.itemName}** — **${t.price.toLocaleString()}** 🪙\nID: \`${t.id}\``).join('\n\n'));
+            return interaction.reply({ embeds: [embed], components: [delBtn()], ...EPH });
+        }
+        if (sub === 'accept' || sub === 'deny') {
+            const id = options.getString('id');
+            const t = trades[guildId]?.[id];
+            if (!t || t.status !== 'pending') return interaction.reply({ content: '❌ オファーが見つかりません。', ...EPH });
+            const toCorp = corpData[t.toCorpId];
+            if (!toCorp || toCorp.ownerId !== user.id) return interaction.reply({ content: '❌ 権限がありません。', ...EPH });
+            if (sub === 'deny') {
+                t.status = 'denied';
+                save(TRADE_FILE, trades);
+                return interaction.reply({ content: `❌ **${t.fromCorpName}** からのオファーを却下しました。`, ...EPH });
+            }
+            const fromCorp = corpData[t.fromCorpId];
+            if (!fromCorp) return interaction.reply({ content: '❌ 取引元の会社が見つかりません。', ...EPH });
+            if ((toCorp.balance || 0) < t.price) return interaction.reply({ content: `❌ **${toCorp.name}** の残高不足。現在: **${(toCorp.balance||0).toLocaleString()}** 🪙`, ...EPH });
+            const itemIdx = fromCorp.items?.findIndex(i => i.name.toLowerCase() === t.itemName.toLowerCase());
+            if (itemIdx === undefined || itemIdx < 0) return interaction.reply({ content: '❌ 取引元の会社にアイテムがありません。', ...EPH });
+            const item = fromCorp.items.splice(itemIdx, 1)[0];
+            if (!toCorp.items) toCorp.items = [];
+            toCorp.items.push(item);
+            toCorp.balance = (toCorp.balance || 0) - t.price;
+            fromCorp.balance = (fromCorp.balance || 0) + t.price;
+            t.status = 'completed';
+            save(CORP_FILE, corpData);
+            save(TRADE_FILE, trades);
+            const embed = new EmbedBuilder().setTitle('🤝 会社間取引完了').setColor(0x2ecc71)
+                .addFields(
+                    { name: '売り手', value: fromCorp.name, inline: true },
+                    { name: '買い手', value: toCorp.name, inline: true },
+                    { name: 'アイテム', value: t.itemName, inline: true },
+                    { name: '価格', value: `**${t.price.toLocaleString()}** 🪙`, inline: true }
+                );
+            return interaction.reply({ embeds: [embed], components: [delBtn()] });
+        }
+    }
+
+    // ==================== オークション ====================
+    if (commandName === 'auction') {
+        const sub = options.getSubcommand();
+        const auctions = load(AUCTION_FILE);
+        if (!auctions[guildId]) auctions[guildId] = {};
+
+        if (sub === 'start') {
+            const itemName = options.getString('item');
+            const startPrice = options.getInteger('start_price');
+            const minutes = options.getInteger('minutes');
+            const u = getUser(econ, user.id, user);
+            const itemIdx = u.inventory?.findIndex(i => i.name.toLowerCase() === itemName.toLowerCase());
+            if (itemIdx === undefined || itemIdx < 0) return interaction.reply({ content: `❌ **${itemName}** をインベントリに持っていません。`, ...EPH });
+            const item = u.inventory.splice(itemIdx, 1)[0];
+            save(ECON_FILE, econ);
+            const endAt = Date.now() + minutes * 60000;
+            const id = `auc_${Date.now()}_${user.id}`;
+            auctions[guildId][id] = { id, sellerId: user.id, sellerName: user.username, item, currentPrice: startPrice, startPrice, topBidderId: null, topBidderName: null, endAt, status: 'active' };
+            save(AUCTION_FILE, auctions);
+            const embed = new EmbedBuilder().setTitle('🔨 オークション開始！').setColor(0xf1c40f)
+                .addFields(
+                    { name: '出品者', value: user.username, inline: true },
+                    { name: 'アイテム', value: itemName, inline: true },
+                    { name: '開始価格', value: `**${startPrice.toLocaleString()}** 🪙`, inline: true },
+                    { name: '終了時刻', value: `<t:${Math.floor(endAt / 1000)}:R>`, inline: true },
+                    { name: 'ID', value: `\`${id}\``, inline: true }
+                );
+            const row = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId(`auction_bid_${id}`).setLabel('💰 入札する').setStyle(ButtonStyle.Success)
+            );
+            return interaction.reply({ embeds: [embed], components: [row] });
+        }
+        if (sub === 'list') {
+            const active = Object.values(auctions[guildId]).filter(a => a.status === 'active' && a.endAt > Date.now());
+            if (active.length === 0) return interaction.reply({ content: '現在開催中のオークションはありません。', ...EPH });
+            const embed = new EmbedBuilder().setTitle('🔨 オークション一覧').setColor(0xf1c40f)
+                .setDescription(active.map(a =>
+                    `**${a.item.name}** — 現在価格: **${a.currentPrice.toLocaleString()}** 🪙\n出品者: ${a.sellerName}　終了: <t:${Math.floor(a.endAt / 1000)}:R>\n入札者: ${a.topBidderName || 'なし'}　ID: \`${a.id}\``
+                ).join('\n\n'));
+            const rows = active.slice(0, 4).map(a => new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId(`auction_bid_${a.id}`).setLabel(`💰 ${a.item.name} に入札`).setStyle(ButtonStyle.Success)
+            ));
+            return interaction.reply({ embeds: [embed], components: [...rows, delBtn()] });
+        }
+        if (sub === 'cancel') {
+            const id = options.getString('id');
+            const a = auctions[guildId]?.[id];
+            if (!a || a.status !== 'active') return interaction.reply({ content: '❌ オークションが見つかりません。', ...EPH });
+            if (a.sellerId !== user.id) return interaction.reply({ content: '❌ 自分のオークションのみキャンセルできます。', ...EPH });
+            if (a.topBidderId) return interaction.reply({ content: '❌ 入札者がいるためキャンセルできません。', ...EPH });
+            a.status = 'cancelled';
+            const u = getUser(econ, user.id, user);
+            if (!u.inventory) u.inventory = [];
+            u.inventory.push(a.item);
+            save(ECON_FILE, econ);
+            save(AUCTION_FILE, auctions);
+            return interaction.reply({ content: `✅ **${a.item.name}** のオークションをキャンセルし、アイテムを返却しました。`, ...EPH });
+        }
     }
 
     if (commandName === 'econrank') {
@@ -1474,6 +1792,23 @@ async function handleEconInteraction(interaction) {
         return interaction.showModal(modal);
     }
 
+    // オークション入札ボタン
+    if (cid.startsWith('auction_bid_')) {
+        const auctionId = cid.replace('auction_bid_', '');
+        const auctions = load(AUCTION_FILE);
+        const a = auctions[guildId]?.[auctionId];
+        if (!a || a.status !== 'active') return interaction.reply({ content: '❌ このオークションは終了しています。', ...EPH });
+        if (a.endAt < Date.now()) return interaction.reply({ content: '❌ オークションの時間が終了しています。', ...EPH });
+        if (a.sellerId === user.id) return interaction.reply({ content: '❌ 自分のオークションには入札できません。', ...EPH });
+        const modal = new ModalBuilder().setCustomId(`modal_auction_bid_${auctionId}`).setTitle(`🔨 ${a.item.name} に入札`);
+        modal.addComponents(
+            new ActionRowBuilder().addComponents(
+                new TextInputBuilder().setCustomId('bid_amount').setLabel(`入札額（現在: ${a.currentPrice.toLocaleString()} 🪙 より高く）`).setStyle(TextInputStyle.Short).setPlaceholder(`例: ${a.currentPrice + 100}`).setRequired(true)
+            )
+        );
+        return interaction.showModal(modal);
+    }
+
     // 就職ボタン
     if (cid.startsWith('corp_join_')) {
         const corpId = cid.replace('corp_join_', '');
@@ -1931,6 +2266,41 @@ async function handleEconModal(interaction) {
         const u = getUser(econ, user.id, user);
         if (isBuy) return doBuyCrypto(interaction, coin, amtInput, econ, u, cryptoData, CRYPTO_FILE);
         else return doSellCrypto(interaction, coin, amtInput, econ, u, cryptoData, CRYPTO_FILE);
+    }
+
+    // ==================== オークション入札モーダル ====================
+    if (cid.startsWith('modal_auction_bid_')) {
+        const auctionId = cid.replace('modal_auction_bid_', '');
+        const auctions = load(AUCTION_FILE);
+        const a = auctions[interaction.guildId]?.[auctionId];
+        if (!a || a.status !== 'active' || a.endAt < Date.now()) return interaction.reply({ content: '❌ このオークションは終了しています。', ...EPH });
+        const bidAmount = parseInt(interaction.fields.getTextInputValue('bid_amount').replace(/,/g, '')) || 0;
+        if (bidAmount <= a.currentPrice) return interaction.reply({ content: `❌ 現在価格 **${a.currentPrice.toLocaleString()}** 🪙 より高い金額を入力してください。`, ...EPH });
+        const u = getUser(econ, user.id, user);
+        if (u.balance < bidAmount) return interaction.reply({ content: `❌ 残高不足。現在: **${u.balance.toLocaleString()}** 🪙`, ...EPH });
+        // 前の入札者に返金
+        if (a.topBidderId && a.topBidderId !== user.id) {
+            const prev = getUser(econ, a.topBidderId, null);
+            if (prev) prev.balance += a.currentPrice;
+        } else if (a.topBidderId === user.id) {
+            u.balance += a.currentPrice; // 自分の前入札分を返金
+        }
+        u.balance -= bidAmount;
+        a.currentPrice = bidAmount;
+        a.topBidderId = user.id;
+        a.topBidderName = user.username;
+        save(ECON_FILE, econ);
+        save(AUCTION_FILE, auctions);
+        const embed = new EmbedBuilder().setTitle('💰 入札しました！').setColor(0x26a69a)
+            .addFields(
+                { name: 'アイテム', value: a.item.name, inline: true },
+                { name: '入札額', value: `**${bidAmount.toLocaleString()}** 🪙`, inline: true },
+                { name: '終了', value: `<t:${Math.floor(a.endAt / 1000)}:R>`, inline: true }
+            );
+        const row = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`auction_bid_${auctionId}`).setLabel('💰 再入札する').setStyle(ButtonStyle.Success)
+        );
+        return interaction.reply({ embeds: [embed], components: [row], ...EPH });
     }
 
     // ==================== 換金モーダル ====================
