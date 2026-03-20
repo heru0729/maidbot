@@ -1473,7 +1473,7 @@ async function showStockDetail(interaction, c, econ, user) {
     const userShares = (u.stocks || {})[c.id] || 0;
     const prev = history[history.length - 2] || price;
     const accentColor = price > prev ? 0x57f287 : price < prev ? 0xff4757 : 0x3498db;
-    const { attachment, imageUrl } = await makeChart(c.stock?.ohlc || history, `${c.name} 株式`, price > prev ? '#26a69a' : price < prev ? '#ef5350' : '#5865f2');
+    const { attachment, imageUrl } = await makeChart(c.stock?.ohlc || history, `${c.name} 株式`, price > prev ? '#26a69a' : price < prev ? '#ef5350' : '#5865f2').catch(() => ({ attachment: null, imageUrl: null }));
     const embed = new EmbedBuilder()
         .setTitle(`📈 ${c.name} 株式情報`)
         .setColor(accentColor)
@@ -1495,6 +1495,7 @@ async function showStockDetail(interaction, c, econ, user) {
     }
     const publicUrl = process.env.PUBLIC_URL || '';
     const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`stock_buy_${c.id}`).setLabel('📈 買う').setStyle(ButtonStyle.Success).setDisabled(c.stock.availableShares <= 0),
         new ButtonBuilder().setCustomId(`stock_sell_${c.id}`).setLabel('📉 売る').setStyle(ButtonStyle.Danger).setDisabled(userShares <= 0),
         new ButtonBuilder().setCustomId(`stock_refresh_${c.id}`).setLabel('🔄 更新').setStyle(ButtonStyle.Secondary),
         ...(publicUrl ? [new ButtonBuilder().setLabel('📊 ロウソク足').setStyle(ButtonStyle.Link).setURL(`${publicUrl}/chart/stock/${c.id}`)] : [])
