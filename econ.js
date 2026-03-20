@@ -49,8 +49,8 @@ function getUser(econ, userId, user) {
 const isInf = (u) => u.infinite === true;
 const fmtBal = (u) => isInf(u) ? '∞' : fmtPrice(u.balance);
 const canAfford = (u, amount) => isInf(u) || u.balance >= amount;
-const deduct = (u, amount) => { if (!isInf(u)) u.balance = round3(u.balance - amount); };
-const addBal = (u, amount) => { if (!isInf(u)) u.balance = round3(u.balance + amount); };
+const deduct = (u, amount) => { if (!isInf(u)) deduct(u, amount); };
+const addBal = (u, amount) => { if (!isInf(u)) addBal(u, amount); };
 
 // ==================== 株式チャート ====================
 // チャートを生成（canvas画像 or テキストフォールバック）
@@ -337,7 +337,7 @@ async function handleEcon(interaction) {
             const streak = (u.dailyStreak || 0) + 1;
             const base = Math.floor(Math.random() * 201) + 200;
             const bonus = Math.min(streak, 7) * 50;
-            u.balance += base + bonus; u.dailyLast = now; u.dailyStreak = streak; u.dailyDate = todayStr;
+            addBal(u, base + bonus); u.dailyLast = now; u.dailyStreak = streak; u.dailyDate = todayStr;
             save(ECON_FILE, econ);
             const embed = new EmbedBuilder().setTitle('🎁 デイリーボーナス')
                 .setDescription(`<@${user.id}> **+${base + bonus}** ${CURRENCY} を受け取りました！\n残高: **${u.balance.toLocaleString()}** ${CURRENCY}`)
@@ -469,7 +469,7 @@ async function handleEcon(interaction) {
             let embed;
             if (success) {
                 const stolen = Math.floor(victim.balance * (0.1 + Math.random() * 0.2));
-                u.balance += stolen; victim.balance -= stolen;
+                addBal(u, stolen); deduct(victim, stolen);
                 embed = new EmbedBuilder().setTitle('🔫 強盗成功！').setDescription(`**${targetName}** から **${stolen.toLocaleString()}** 🪙 を奪った！\n残高: **${u.balance.toLocaleString()}** 🪙`).setColor(0x57f287);
             } else {
                 const fine = Math.floor(u.balance * 0.1 + 200);
@@ -519,7 +519,7 @@ async function handleEcon(interaction) {
             else if (s[0]===s[1]||s[1]===s[2]||s[0]===s[2]) multiplier = 1.5;
             const win = multiplier > 0;
             const payout = win ? Math.floor(amount * multiplier) : 0;
-            u.balance += payout - amount;
+            addBal(u, payout - amount);
             save(ECON_FILE, econ);
             const embed = new EmbedBuilder().setTitle('🎰 スロット')
                 .setDescription(`**[ ${s.join(' | ')} ]**\n\n${win?`🎉 **${multiplier}x** 当たり！ **+${payout.toLocaleString()}** 🪙`:`💸 ハズレ... **-${amount.toLocaleString()}** 🪙`}`)
@@ -544,7 +544,7 @@ async function handleEcon(interaction) {
             const gameKey = `${user.id}_${Date.now()}`;
             const gameObj = { userId: user.id, bet, leverage, deck, playerCards, dealerCards };
             if (calcBJ(playerCards) === 21) {
-                u.balance += Math.floor(bet * leverage * 1.5);
+                addBal(u, Math.floor(bet * leverage * 1.5));
                 save(ECON_FILE, econ);
                 return interaction.reply({ embeds: [buildBJEmbed(gameObj, 'bj', u.balance, user)], components: [delBtn()], ...EPH });
             }
@@ -568,7 +568,7 @@ async function handleEcon(interaction) {
         if (amount <= 0) return interaction.reply({ content: '❌ 有効な金額を入力してください。', ...EPH });
         if (sender.balance < amount) return interaction.reply({ content: `❌ 残高不足。現在: **${sender.balance.toLocaleString()}** ${CURRENCY}`, ...EPH });
         sender.balance -= amount;
-        receiver.balance += amount;
+        addBal(receiver, amount);
         save(ECON_FILE, econ);
         const embed = new EmbedBuilder().setTitle('💸 送金完了').setColor(0x2ecc71)
             .addFields(
@@ -741,7 +741,7 @@ async function handleEcon(interaction) {
                 if (buyerData.balance < price) return interaction.reply({ content: `❌ **${buyer.username}** の残高不足。（必要: **${price.toLocaleString()}** 🪙 / 現在: **${buyerData.balance.toLocaleString()}** 🪙）`, ...EPH });
                 const idx = u.inventory.findIndex(i => i.name.toLowerCase() === itemName.toLowerCase());
                 u.inventory.splice(idx, 1);
-                buyerData.balance -= price;
+                deduct(buyerData, price);
                 addBal(u, price);
                 if (!buyerData.inventory) buyerData.inventory = [];
                 buyerData.inventory.push({ ...item, boughtAt: Date.now() });
@@ -892,7 +892,7 @@ async function handleEcon(interaction) {
             }
             if ((c.balance || 0) < l.amount) return interaction.reply({ content: `❌ 会社残高不足。現在: **${(c.balance||0).toLocaleString()}** 🪙`, ...EPH });
             const u = getUser(econ, l.userId, null);
-            u.balance += l.amount;
+            addBal(u, l.amount);
             c.balance = (c.balance || 0) - l.amount;
             l.status = 'active';
             l.remaining = l.amount;
@@ -1098,7 +1098,7 @@ async function handleEcon(interaction) {
             if (isEmployee && owned.length >= 1) return interaction.reply({ content: '❌ 他の会社に就職中は1社までしか設立できません。', ...EPH });
             if (Object.values(corpData).some(c => c.name.toLowerCase() === corpName.toLowerCase())) return interaction.reply({ content: `❌ **${corpName}** という会社はすでに存在します。`, ...EPH });
             if (u.balance < CORP_COST) return interaction.reply({ content: `❌ 設立費用不足。必要: **${CORP_COST.toLocaleString()}** ${CURRENCY}　現在: **${u.balance.toLocaleString()}** ${CURRENCY}`, ...EPH });
-            u.balance -= CORP_COST;
+            deduct(u, CORP_COST);
             const corpId = `corp_${Date.now()}_${user.id}`;
             corpData[corpId] = { id: corpId, name: corpName, description: corpDesc, ownerId: user.id, ownerName: user.username, createdAt: Date.now(), balance: 0, items: [], employees: [] };
             save(ECON_FILE, econ);
@@ -1479,7 +1479,7 @@ async function doSellItem(interaction, itemName, sellCount, econ, u) {
     if (indices.length < sellCount) return interaction.reply({ content: `❌ **${itemName}** は ${indices.length} 個しか持っていません。`, ...EPH });
     const totalPrice = indices.reduce((sum, i) => sum + (u.inventory[i].sellPrice || 0), 0);
     for (const i of [...indices].reverse()) u.inventory.splice(i, 1);
-    u.balance += totalPrice;
+    addBal(u, totalPrice);
     save(ECON_FILE, econ);
     return interaction.reply({ content: `✅ **${itemName}** × ${sellCount} を **${totalPrice.toLocaleString()}** 🪙 で売却しました。\n残高: **${u.balance.toLocaleString()}** 🪙`, components: [delBtn()], ...EPH });
 }
@@ -1578,7 +1578,7 @@ async function doBuyStock(interaction, c, amount, econ, user, corpData) {
     const total = round3(subtotal + fee);
     if (!canAfford(u, total)) return interaction.reply({ content: `❌ 残高不足。必要: **${fmtPrice(total)}** 🪙 (手数料${fmtPrice(fee)}含)\n現在: **${fmtPrice(u.balance)}** 🪙`, ...EPH });
     if (c.stock.availableShares < amount) return interaction.reply({ content: `❌ 購入可能株数が不足。現在: **${c.stock.availableShares}** 株`, ...EPH });
-    u.balance = round3(u.balance - total);
+    deduct(u, total);
     if (!u.stocks) u.stocks = {};
     u.stocks[c.id] = (u.stocks[c.id] || 0) + amount;
     c.stock.availableShares -= amount;
@@ -1601,7 +1601,7 @@ async function doSellStock(interaction, c, amount, econ, u, corpData) {
     const subtotal = round3(price * amount);
     const fee = round3(subtotal * FEE_RATE);
     const total = round3(subtotal - fee);
-    u.balance = round3(u.balance + total);
+    addBal(u, total);
     u.stocks[c.id] -= amount;
     c.stock.availableShares += amount;
     // 売却手数料の50%も配当プールに積立
@@ -1732,7 +1732,7 @@ async function doBuyCrypto(interaction, coin, amtInput, econ, u, cryptoData, CRY
     const fee = round3(subtotal * FEE_RATE);
     const total = round3(subtotal + fee);
     if (!canAfford(u, total)) return interaction.reply({ content: `❌ 残高不足。必要: **${fmtPrice(total)}** 🪙 (手数料${fmtPrice(fee)}含)\n現在: **${fmtPrice(u.balance)}** 🪙`, ...EPH });
-    u.balance = round3(u.balance - total);
+    deduct(u, total);
     if (!u.crypto) u.crypto = {};
     u.crypto[coin.id] = (u.crypto[coin.id] || 0) + amount;
     coin.availableSupply -= amount;
@@ -1756,7 +1756,7 @@ async function doSellCrypto(interaction, coin, amtInput, econ, u, cryptoData, CR
     const subtotal = round3(coin.price * amount);
     const fee = round3(subtotal * FEE_RATE);
     const total = round3(subtotal - fee);
-    u.balance = round3(u.balance + total);
+    addBal(u, total);
     u.crypto[coin.id] = round3(held - amount);
     coin.availableSupply += amount;
     const ratio = 1 - 0.015 * Math.min(Math.log10(amount + 1), 5); // 最大-7.5%
@@ -1879,7 +1879,7 @@ async function handleEconInteraction(interaction) {
         const u = getUser(econ, user.id, user);
 
         // 会社残高をオーナーに返還
-        if (c.balance > 0) u.balance += c.balance;
+        if (c.balance > 0) addBal(u, c.balance);
 
         // 株主に現在株価で自動買い戻し
         let stockRefundMsg = '';
@@ -2049,7 +2049,7 @@ async function handleEconInteraction(interaction) {
         if (playerTotal > 21) {
             const econ2 = load(ECON_FILE);
             const u = getUser(econ2, user.id, user);
-            u.balance -= game.bet * (game.leverage || 2);
+            deduct(u, game.bet * (game.leverage || 2));
             const debtMsg = applyDebt(u);
             save(ECON_FILE, econ2);
             bjGames.delete(gameKey);
@@ -2071,9 +2071,9 @@ async function handleEconInteraction(interaction) {
         const u = getUser(econ2, user.id, user);
         const lev = game.leverage || 2;
         let result;
-        if (dealerTotal > 21 || playerTotal > dealerTotal) { u.balance += game.bet * lev; result = 'win'; }
+        if (dealerTotal > 21 || playerTotal > dealerTotal) { addBal(u, game.bet * lev); result = 'win'; }
         else if (playerTotal === dealerTotal) { result = 'push'; }
-        else { u.balance -= game.bet * lev; result = 'lose'; }
+        else { deduct(u, game.bet * lev); result = 'lose'; }
         const debtMsg = applyDebt(u);
         save(ECON_FILE, econ2);
         bjGames.delete(gameKey);
@@ -2096,10 +2096,10 @@ async function handleEconInteraction(interaction) {
         while (calcBJ(game.dealerCards) < 17) game.dealerCards.push(drawCard(game.deck));
         const dealerTotal = calcBJ(game.dealerCards);
         let result;
-        if (playerTotal > 21) { u.balance -= game.bet * lev; result = 'bust'; }
-        else if (dealerTotal > 21 || playerTotal > dealerTotal) { u.balance += game.bet * lev; result = 'win'; }
+        if (playerTotal > 21) { deduct(u, game.bet * lev); result = 'bust'; }
+        else if (dealerTotal > 21 || playerTotal > dealerTotal) { addBal(u, game.bet * lev); result = 'win'; }
         else if (playerTotal === dealerTotal) { result = 'push'; }
-        else { u.balance -= game.bet * lev; result = 'lose'; }
+        else { deduct(u, game.bet * lev); result = 'lose'; }
         const debtMsg = applyDebt(u);
         save(ECON_FILE, econ2);
         bjGames.delete(gameKey);
@@ -2203,7 +2203,7 @@ async function handleEconInteraction(interaction) {
         if (!item) return interaction.reply({ content: '❌ 商品が見つかりません。', ...EPH });
         const u = getUser(econ, user.id, user);
         if (u.balance < item.price) return interaction.reply({ content: `❌ 残高不足。必要: **${item.price.toLocaleString()}** / 現在: **${u.balance.toLocaleString()}** 🪙`, ...EPH });
-        u.balance -= item.price;
+        deduct(u, item.price);
         c.balance = (c.balance || 0) + item.price;
         if (!u.inventory) u.inventory = [];
         u.inventory.push({ name: item.name, boughtAt: Date.now(), sellPrice: Math.floor(item.price * 0.3), from: c.name });
@@ -2315,9 +2315,9 @@ async function handleEconModal(interaction) {
             const prev = getUser(econ, a.topBidderId, null);
             if (prev) prev.balance += a.currentPrice;
         } else if (a.topBidderId === user.id) {
-            u.balance += a.currentPrice; // 自分の前入札分を返金
+            addBal(u, a.currentPrice); // 自分の前入札分を返金
         }
-        u.balance -= bidAmount;
+        deduct(u, bidAmount);
         a.currentPrice = bidAmount;
         a.topBidderId = user.id;
         a.topBidderName = user.username;
@@ -2454,7 +2454,7 @@ async function handleEconModal(interaction) {
         if (amount <= 0) return interaction.reply({ content: '❌ 有効な金額を入力してください。', ...EPH });
         if (!canAfford(u, amount)) return interaction.reply({ content: `❌ 残高不足。現在: **${u.balance.toLocaleString()}** ${CURRENCY}`, ...EPH });
         const actual = Math.min(amount, loan);
-        u.balance -= actual;
+        deduct(u, actual);
         u.loan = loan - actual;
         if (u.loan <= 0) { u.loan = 0; delete u.loanDate; delete u.lastInterestCharge; }
         save(ECON_FILE, econ);
