@@ -3,7 +3,7 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const setupAuth = require('./auth.js');
-const handleAdminCommands = require('./admin.js');
+const { handleAdminCommands, handleAdminModal } = require('./admin.js');
 const { econCommands, handleEcon, handleEconInteraction, handleEconModal, handleEconSelect } = require('./econ.js');
 
 const app = express();
@@ -1588,10 +1588,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     // ==================== モーダル ====================
-    // adminメニューのモーダルはcollector内で処理するため、ここでインタラクションをadminに渡す
-    if ((interaction.isButton() || interaction.isModalSubmit()) && (interaction.customId?.startsWith('amenu_') || interaction.customId?.startsWith('amodal_') || interaction.customId?.startsWith('admin_members_') || interaction.customId?.startsWith('admin_ch_'))) {
+    // adminメニューのボタンはcollectorで処理
+    if (interaction.isButton() && (interaction.customId?.startsWith('amenu_') || interaction.customId?.startsWith('admin_members_') || interaction.customId?.startsWith('admin_ch_'))) {
         if (OWNER_IDS.includes(interaction.user.id)) return; // collectorが処理
         return interaction.reply({ content: '❌ 権限がありません。', ...EPH });
+    }
+    // adminモーダルはここで処理
+    if (interaction.isModalSubmit() && interaction.customId?.startsWith('amodal_')) {
+        return handleAdminModal(interaction, client, OWNER_IDS);
     }
 
     if (interaction.isModalSubmit()) {
