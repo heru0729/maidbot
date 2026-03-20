@@ -1584,6 +1584,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     // ==================== モーダル ====================
+    // adminメニューのモーダルはcollector内で処理するため、ここでインタラクションをadminに渡す
+    if ((interaction.isButton() || interaction.isModalSubmit()) && (interaction.customId?.startsWith('amenu_') || interaction.customId?.startsWith('amodal_') || interaction.customId?.startsWith('admin_members_') || interaction.customId?.startsWith('admin_ch_'))) {
+        if (OWNER_IDS.includes(interaction.user.id)) return; // collectorが処理
+        return interaction.reply({ content: '❌ 権限がありません。', ...EPH });
+    }
+
     if (interaction.isModalSubmit()) {
         const cid = interaction.customId;
         if (cid === 'modal_welcome_message') {
