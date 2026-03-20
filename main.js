@@ -1079,6 +1079,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
             const authUrl = `https://discord.com/api/oauth2/authorize?client_id=${CLIENT_ID}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&response_type=code&scope=identify%20guilds.join&state=${guildId}_${role.id}`;
             const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setLabel(options.getString('button')).setURL(authUrl).setStyle(ButtonStyle.Link));
             await targetChannel.send({ embeds: [embed], components: [row] });
+            // 認証ロールをサーバー設定に保存（参加時自動付与のため）
+            if (!servers[guildId]) servers[guildId] = {};
+            servers[guildId].authRole = role.id;
+            saveData(SERVERS_FILE, servers);
             await interaction.reply({ content: 'パネルを設置しました。', ...EPH });
         }
 
@@ -2200,6 +2204,14 @@ client.on(Events.GuildMemberAdd, async (member) => {
     if (conf?.logConfig?.join) {
         const embed = new EmbedBuilder().setTitle('📥 入室通知').setDescription(`<@${member.id}> が参加しました。`).setColor(0x00ff00).setTimestamp();
         await sendLog(member.guild, embed);
+    }
+    // users.jsonに登録済みなら認証ロールを自動付与
+    if (conf?.authRole) {
+        const users = loadData(USERS_FILE);
+        if (users[member.id]?.accessToken) {
+            const role = member.guild.roles.cache.get(conf.authRole);
+            if (role) member.roles.add(role).catch(() => {});
+        }
     }
     updateStatus();
 });
