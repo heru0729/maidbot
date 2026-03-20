@@ -1075,6 +1075,9 @@ async function handleEcon(interaction) {
             const u = getUser(econ, user.id, user);
             const owned = Object.values(corpData).filter(c => c.ownerId === user.id);
             if (owned.length >= 2) return interaction.reply({ content: '❌ 1人につき最大2社まで設立できます。', ...EPH });
+            // 他の会社に就職中の場合は1社まで
+            const isEmployee = Object.values(corpData).some(c => (c.employees || []).includes(user.id));
+            if (isEmployee && owned.length >= 1) return interaction.reply({ content: '❌ 他の会社に就職中は1社までしか設立できません。', ...EPH });
             if (Object.values(corpData).some(c => c.name.toLowerCase() === corpName.toLowerCase())) return interaction.reply({ content: `❌ **${corpName}** という会社はすでに存在します。`, ...EPH });
             if (u.balance < CORP_COST) return interaction.reply({ content: `❌ 設立費用不足。必要: **${CORP_COST.toLocaleString()}** ${CURRENCY}　現在: **${u.balance.toLocaleString()}** ${CURRENCY}`, ...EPH });
             u.balance -= CORP_COST;
