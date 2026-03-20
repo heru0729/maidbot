@@ -574,6 +574,11 @@ async function handleEcon(interaction) {
         if (!ex.enabled) return interaction.reply({ content: '❌ このサーバーでは換金機能が無効です。管理者が `/set` → **UNB換金** から有効化できます。', ...EPH });
         if (!process.env.UNB_TOKEN) return interaction.reply({ content: '❌ UNB_TOKENが環境変数に設定されていません。', ...EPH });
 
+        // メンバー数チェック（30人以上のサーバーのみ）
+        const MIN_MEMBERS = 30;
+        const memberCount = interaction.guild?.memberCount || 0;
+        if (memberCount < MIN_MEMBERS) return interaction.reply({ content: `❌ この機能はメンバーが **${MIN_MEMBERS}人以上** のサーバーでのみ利用できます。\n現在: **${memberCount}人**`, ...EPH });
+
         // UNB残高を取得して表示
         let unbBalance = 0;
         try {
