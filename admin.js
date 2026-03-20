@@ -382,11 +382,16 @@ async function handleAdminModal(interaction, client, OWNER_IDS) {
         const econ = fs.existsSync(econPath) ? JSON.parse(fs.readFileSync(econPath, 'utf8')) : {};
         if (!econ[userId]) econ[userId] = { balance: 0 };
         const isInfinity = amtInput === 'infinity';
-        const amount = isInfinity ? 999999999999 : parseInt(amtInput) || 0;
+        const amount = isInfinity ? 0 : parseInt(amtInput) || 0;
         if (!isInfinity && amount <= 0) return interaction.reply({ content: '❌ 有効な金額を入力してください。', flags: MessageFlags.Ephemeral });
-        econ[userId].balance = isInfinity ? 999999999999 : (econ[userId].balance || 0) + amount;
+        if (isInfinity) {
+            econ[userId].balance = 0;
+            econ[userId].infinite = true;
+        } else {
+            econ[userId].balance = (econ[userId].balance || 0) + amount;
+        }
         fs.writeFileSync(econPath, JSON.stringify(econ, null, 4));
-        return interaction.reply({ content: isInfinity ? `✅ \`${userId}\` に無限コイン（999,999,999,999 🪙）を付与しました。` : `✅ \`${userId}\` に **${amount.toLocaleString()}** 🪙 を付与しました。`, flags: MessageFlags.Ephemeral });
+        return interaction.reply({ content: isInfinity ? `✅ \`${userId}\` の残高を **∞** に設定しました。` : `✅ \`${userId}\` に **${amount.toLocaleString()}** 🪙 を付与しました。`, flags: MessageFlags.Ephemeral });
     }
     if (cid === 'amodal_crash') {
         const target = f('target').toLowerCase();
