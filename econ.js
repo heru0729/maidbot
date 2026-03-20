@@ -1831,7 +1831,7 @@ async function handleEconInteraction(interaction) {
     }
 
     // 会社解散ボタン（確認）
-    if (cid.startsWith('corp_dissolve_')) {
+    if (cid.startsWith('corp_dissolve_') && !cid.startsWith('corp_dissolve_confirm_') && cid !== 'corp_dissolve_cancel') {
         const corpId = cid.replace('corp_dissolve_', '');
         const c = corpData[corpId];
         if (!c || c.ownerId !== user.id) return interaction.reply({ content: '❌ 会社のオーナーのみ解散できます。', ...EPH });
