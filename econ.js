@@ -49,8 +49,8 @@ function getUser(econ, userId, user) {
 const isInf = (u) => u.infinite === true;
 const fmtBal = (u) => isInf(u) ? '∞' : fmtPrice(u.balance);
 const canAfford = (u, amount) => isInf(u) || u.balance >= amount;
-const deduct = (u, amount) => { if (!isInf(u)) deduct(u, amount); };
-const addBal = (u, amount) => { if (!isInf(u)) addBal(u, amount); };
+const deduct = (u, amount) => { if (!isInf(u)) u.balance = round3(u.balance - amount); };
+const addBal = (u, amount) => { if (!isInf(u)) u.balance = round3(u.balance + amount); };
 
 // ==================== 株式チャート ====================
 // チャートを生成（canvas画像 or テキストフォールバック）
@@ -1568,11 +1568,11 @@ async function doBuyStock(interaction, c, amount, econ, user, corpData) {
     if (c.ownerId === user.id) return interaction.reply({ content: '❌ 自分の会社の株は購入できません。', ...EPH });
     const u = getUser(econ, user.id, user);
     const price = c.stock.price;
-    // 1回の購入上限: 残高の30% or 発行総数の10% のうち少ない方
-    const maxByBalance = Math.floor(u.balance * 0.3 / (price * (1 + FEE_RATE)));
+    // 1回の購入上限: 発行総数の10%（infiniteユーザーは残高制限なし）
+    const maxByBalance = isInf(u) ? Infinity : Math.floor(u.balance * 0.3 / (price * (1 + FEE_RATE)));
     const maxBySupply = Math.floor(c.stock.totalShares * 0.1);
     const maxPerTx = Math.max(1, Math.min(maxByBalance, maxBySupply));
-    if (amount > maxPerTx) return interaction.reply({ content: `❌ 1回の購入上限は **${maxPerTx.toLocaleString()}** 株です（残高の30%・発行数の10%制限）。`, ...EPH });
+    if (amount > maxPerTx) return interaction.reply({ content: `❌ 1回の購入上限は **${maxPerTx.toLocaleString()}** 株です（発行数の10%制限）。`, ...EPH });
     const subtotal = round3(price * amount);
     const fee = round3(subtotal * FEE_RATE);
     const total = round3(subtotal + fee);
@@ -1582,8 +1582,8 @@ async function doBuyStock(interaction, c, amount, econ, user, corpData) {
     if (!u.stocks) u.stocks = {};
     u.stocks[c.id] = (u.stocks[c.id] || 0) + amount;
     c.stock.availableShares -= amount;
-    // 手数料の50%を配当プールに積立（自己売買ループ防止のため購入代金は会社残高に入れない）
-    c.stock.feePool = round3((c.stock.feePool || 0) + fee * 0.5);
+    // infiniteユーザーの支払いはfeePoolに反映しない（無限生成防止）
+    if (!isInf(u)) c.balance = round3((c.balance || 0) + fee);
     const ratio = 1 + 0.01 * Math.min(amount, 10);
     c.stock.price = round3(Math.min(MAX_STOCK_PRICE, price * ratio));
     if (!c.stock.history) c.stock.history = [];
@@ -1604,8 +1604,8 @@ async function doSellStock(interaction, c, amount, econ, u, corpData) {
     addBal(u, total);
     u.stocks[c.id] -= amount;
     c.stock.availableShares += amount;
-    // 売却手数料の50%も配当プールに積立
-    c.stock.feePool = round3((c.stock.feePool || 0) + fee * 0.5);
+    // infiniteユーザーの手数料はfeePoolに反映しない
+    if (!isInf(u)) c.balance = round3((c.balance || 0) + fee);
     // 供給による価格下落（小数点対応）
     const ratio = 1 - 0.008 * Math.min(amount, 10);
     c.stock.price = round3(Math.max(0.001, price * ratio));
