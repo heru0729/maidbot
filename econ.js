@@ -23,8 +23,15 @@ const EPH = { flags: MessageFlags.Ephemeral };
 const CURRENCY = '🪙';
 const CORP_COST = 10000;
 const FEE_RATE = 0.02; // 売買手数料2%
+const MAX_STOCK_PRICE = 10000000; // 株価上限1000万
 const round3 = (x) => Math.round(x * 1000) / 1000;
-const fmtPrice = (x) => Number.isInteger(x) ? x.toLocaleString() : x.toFixed(3).replace(/\.?0+$/, '');
+const fmtPrice = (x) => {
+    if (x === null || x === undefined || isNaN(x) || !isFinite(x)) return '0';
+    if (x >= 1e15) return (x / 1e15).toFixed(2) + '京';
+    if (x >= 1e12) return (x / 1e12).toFixed(2) + '兆';
+    if (x >= 1e8) return (x / 1e8).toFixed(2) + '億';
+    return Number.isInteger(x) ? x.toLocaleString() : parseFloat(x.toFixed(3)).toLocaleString();
+};
 
 function load(f) {
     if (!fs.existsSync(path.dirname(f))) fs.mkdirSync(path.dirname(f), { recursive: true });
@@ -1469,6 +1476,10 @@ async function doSellItem(interaction, itemName, sellCount, econ, u) {
 async function showStockDetail(interaction, c, econ, user) {
     const u = getUser(econ, user.id, user);
     const price = c.stock.price;
+    // 壊れたデータチェック
+    if (!isFinite(price) || !isFinite(c.stock.totalShares) || !isFinite(c.stock.availableShares)) {
+        return interaction.reply({ content: `❌ **${c.name}** の株式データが壊れています。管理者に連絡してください。`, ...EPH });
+    }
     const history = c.stock.history || [];
     const userShares = (u.stocks || {})[c.id] || 0;
     const prev = history[history.length - 2] || price;
@@ -1563,7 +1574,7 @@ async function doBuyStock(interaction, c, amount, econ, user, corpData) {
     // 手数料の50%を配当プールに積立（自己売買ループ防止のため購入代金は会社残高に入れない）
     c.stock.feePool = round3((c.stock.feePool || 0) + fee * 0.5);
     const ratio = 1 + 0.01 * Math.min(amount, 10);
-    c.stock.price = round3(price * ratio);
+    c.stock.price = round3(Math.min(MAX_STOCK_PRICE, price * ratio));
     if (!c.stock.history) c.stock.history = [];
     c.stock.history.push(c.stock.price);
     if (c.stock.history.length > 1440) c.stock.history.shift();
@@ -2495,19 +2506,25 @@ async function handleEconModal(interaction) {
         const corpData = load(CORP_FILE);
         const c = corpData[corpId];
         if (!c || c.ownerId !== user.id) return interaction.reply({ content: '❌ 権限がありません。', ...EPH });
+        const MAX_SHARES = 1000000; // 最大発行株数上限
         const shares = parseInt(interaction.fields.getTextInputValue('stock_total_shares')) || 0;
         if (shares <= 0) return interaction.reply({ content: '❌ 有効な株数を入力してください。', ...EPH });
         if (c.stock) {
             // 追加発行
+            const remaining = MAX_SHARES - c.stock.totalShares;
+            if (remaining <= 0) return interaction.reply({ content: `❌ すでに上限（**${MAX_SHARES.toLocaleString()}** 株）に達しています。`, ...EPH });
+            if (shares > remaining) return interaction.reply({ content: `❌ 追加発行できるのは最大 **${remaining.toLocaleString()}** 株です（上限: ${MAX_SHARES.toLocaleString()} 株）。`, ...EPH });
             c.stock.totalShares += shares;
             c.stock.availableShares += shares;
             save(CORP_FILE, corpData);
             return interaction.reply({ content: `✅ **${c.name}** の株式を **${shares.toLocaleString()}** 株 追加発行しました！\n総発行株数: **${c.stock.totalShares.toLocaleString()}** 株　現在株価: **${fmtPrice(c.stock.price)}** 🪙`, ...EPH });
         } else {
             // 新規発行
+            if (shares > MAX_SHARES) return interaction.reply({ content: `❌ 発行株数の上限は **${MAX_SHARES.toLocaleString()}** 株です。`, ...EPH });
             const price = parseFloat(interaction.fields.getTextInputValue('stock_initial_price')) || 0;
             if (price <= 0) return interaction.reply({ content: '❌ 有効な株価を入力してください。', ...EPH });
-            c.stock = { price: round3(price), totalShares: shares, availableShares: shares, history: [round3(price)] };
+            if (price > 9999999) return interaction.reply({ content: '❌ 初期株価の上限は **9,999,999** 🪙です。', ...EPH });
+            c.stock = { price: round3(price), totalShares: shares, availableShares: shares, history: [round3(price)], feePool: 0 };
             save(CORP_FILE, corpData);
             return interaction.reply({ content: `✅ **${c.name}** の株式を新規発行しました！\n初期株価: **${fmtPrice(price)}** 🪙　発行数: **${shares.toLocaleString()}** 株`, ...EPH });
         }
