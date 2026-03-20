@@ -45,6 +45,13 @@ function getUser(econ, userId, user) {
     return econ[userId];
 }
 
+// 無限残高ヘルパー
+const isInf = (u) => u.infinite === true;
+const fmtBal = (u) => isInf(u) ? '∞' : fmtPrice(u.balance);
+const canAfford = (u, amount) => isInf(u) || u.balance >= amount;
+const deduct = (u, amount) => { if (!isInf(u)) u.balance = round3(u.balance - amount); };
+const addBal = (u, amount) => { if (!isInf(u)) u.balance = round3(u.balance + amount); };
+
 // ==================== 株式チャート ====================
 // チャートを生成（canvas画像 or テキストフォールバック）
 async function makeChart(ohlcOrHistory, label, color) {
@@ -278,7 +285,7 @@ async function handleEcon(interaction) {
         const cryptoData = load(CRYPTO_FILE);
         const ownedCorps = Object.values(corp).filter(c => c.ownerId === target.id);
         const loan = u.loan || 0;
-        const netBalance = round3(u.balance - loan);
+        const netBalance = isInf(u) ? '∞' : round3(u.balance - loan);
 
         // 仮想通貨保有情報
         const heldCrypto = Object.entries(u.crypto || {}).filter(([, amt]) => amt > 0);
@@ -294,11 +301,11 @@ async function handleEcon(interaction) {
         const embed = new EmbedBuilder()
             .setTitle(`${CURRENCY} ${target.username} の所持金`)
             .setThumbnail(target.displayAvatarURL())
-            .setColor(netBalance < 0 ? 0xff4757 : 0xf1c40f)
+            .setColor(isInf(u) ? 0xf1c40f : (typeof netBalance === 'number' && netBalance < 0) ? 0xff4757 : 0xf1c40f)
             .addFields(
-                { name: '残高', value: `**${fmtPrice(u.balance)}** ${CURRENCY}`, inline: true },
+                { name: '残高', value: `**${fmtBal(u)}** ${CURRENCY}`, inline: true },
                 { name: '借入残高', value: loan > 0 ? `**-${fmtPrice(loan)}** ${CURRENCY}` : 'なし', inline: true },
-                { name: '実質残高', value: `**${fmtPrice(netBalance)}** ${CURRENCY}${netBalance < 0 ? ' 🔴' : ''}`, inline: true },
+                { name: '実質残高', value: `**${typeof netBalance === 'number' ? fmtPrice(netBalance) : netBalance}** ${CURRENCY}${typeof netBalance === 'number' && netBalance < 0 ? ' 🔴' : ''}`, inline: true },
                 { name: '保有会社', value: ownedCorps.length > 0 ? ownedCorps.map(c => c.name).join(', ') : 'なし', inline: true },
                 { name: '💹 仮想通貨', value: cryptoLines.length > 0 ? cryptoLines.join('\n') : 'なし', inline: false },
                 { name: '仮想通貨評価額', value: `**${fmtPrice(cryptoValue)}** 🪙`, inline: true }
@@ -356,7 +363,7 @@ async function handleEcon(interaction) {
             ];
             const job = jobs[Math.floor(Math.random() * jobs.length)];
             const amount = Math.floor(Math.random() * (job.max - job.min + 1)) + job.min;
-            u.balance += amount; u.workLast = now;
+            addBal(u, amount); u.workLast = now;
             save(ECON_FILE, econ);
             const embed = new EmbedBuilder().setTitle(`💼 ${job.name} として働いた`)
                 .setDescription(`<@${user.id}> ${job.desc}！\n**+${amount}** ${CURRENCY} を獲得！\n残高: **${u.balance.toLocaleString()}** ${CURRENCY}`)
@@ -380,7 +387,7 @@ async function handleEcon(interaction) {
             let embed;
             if (success) {
                 const amount = Math.floor(Math.random() * (crime.gain[1] - crime.gain[0] + 1)) + crime.gain[0];
-                u.balance += amount;
+                addBal(u, amount);
                 embed = new EmbedBuilder().setTitle(`🦹 ${crime.name} 成功！`).setDescription(`<@${user.id}> **+${amount}** ${CURRENCY}！\n残高: **${u.balance.toLocaleString()}** ${CURRENCY}`).setColor(0x57f287);
             } else {
                 const fine = Math.floor(Math.random() * (crime.fine[1] - crime.fine[0] + 1)) + crime.fine[0];
@@ -482,10 +489,10 @@ async function handleEcon(interaction) {
             else amount = parseInt(amtInput) || 0;
             const side = (sideInput === 'omote' || sideInput === '表') ? 'heads' : 'tails';
             if (amount <= 0) return interaction.reply({ content: '❌ 有効な金額を入力してください。', ...EPH });
-            if (u.balance < amount) return interaction.reply({ content: `❌ 残高不足。現在: **${u.balance.toLocaleString()}** 🪙`, ...EPH });
+            if (!canAfford(u, amount)) return interaction.reply({ content: `❌ 残高不足。現在: **${u.balance.toLocaleString()}** 🪙`, ...EPH });
             const result = Math.random() < 0.5 ? 'heads' : 'tails';
             const win = result === side;
-            if (win) u.balance += amount; else u.balance -= amount;
+            if (win) addBal(u, amount); else deduct(u, amount);
             save(ECON_FILE, econ);
             const embed = new EmbedBuilder().setTitle(win ? '🎉 勝利！' : '😢 敗北...').setColor(win ? 0x57f287 : 0xff4757)
                 .addFields(
@@ -503,7 +510,7 @@ async function handleEcon(interaction) {
             else if (amtInput === 'half') amount = Math.floor(u.balance / 2);
             else amount = parseInt(amtInput) || 0;
             if (amount <= 0) return interaction.reply({ content: '❌ 有効な金額を入力してください。', ...EPH });
-            if (u.balance < amount) return interaction.reply({ content: `❌ 残高不足。現在: **${u.balance.toLocaleString()}** 🪙`, ...EPH });
+            if (!canAfford(u, amount)) return interaction.reply({ content: `❌ 残高不足。現在: **${u.balance.toLocaleString()}** 🪙`, ...EPH });
             const symbols = ['🍒', '🍋', '🍊', '🍇', '⭐', '💎'];
             const roll = () => symbols[Math.floor(Math.random() * symbols.length)];
             const s = [roll(), roll(), roll()];
@@ -530,7 +537,7 @@ async function handleEcon(interaction) {
             else if (amtInput === 'half') bet = Math.floor(u.balance / 2);
             else bet = parseInt(amtInput) || 0;
             if (bet <= 0) return interaction.reply({ content: '❌ 有効な金額を入力してください。', ...EPH });
-            if (u.balance < bet) return interaction.reply({ content: `❌ 残高不足。現在: **${u.balance.toLocaleString()}** 🪙`, ...EPH });
+            if (!canAfford(u, bet)) return interaction.reply({ content: `❌ 残高不足。現在: **${u.balance.toLocaleString()}** 🪙`, ...EPH });
             const deck = buildDeck();
             const playerCards = [drawCard(deck), drawCard(deck)];
             const dealerCards = [drawCard(deck), drawCard(deck)];
@@ -735,7 +742,7 @@ async function handleEcon(interaction) {
                 const idx = u.inventory.findIndex(i => i.name.toLowerCase() === itemName.toLowerCase());
                 u.inventory.splice(idx, 1);
                 buyerData.balance -= price;
-                u.balance += price;
+                addBal(u, price);
                 if (!buyerData.inventory) buyerData.inventory = [];
                 buyerData.inventory.push({ ...item, boughtAt: Date.now() });
                 save(ECON_FILE, econ);
@@ -842,9 +849,9 @@ async function handleEcon(interaction) {
             if (amtInput === 'all') amount = activeLoan.remaining;
             else amount = parseInt(amtInput) || 0;
             if (amount <= 0) return interaction.reply({ content: '❌ 有効な金額を入力してください。', ...EPH });
-            if (u.balance < amount) return interaction.reply({ content: `❌ 残高不足。現在: **${u.balance.toLocaleString()}** 🪙`, ...EPH });
+            if (!canAfford(u, amount)) return interaction.reply({ content: `❌ 残高不足。現在: **${u.balance.toLocaleString()}** 🪙`, ...EPH });
             amount = Math.min(amount, activeLoan.remaining);
-            u.balance -= amount;
+            deduct(u, amount);
             const c = corpData[activeLoan.corpId];
             if (c) c.balance = (c.balance || 0) + amount;
             activeLoan.remaining = round3(activeLoan.remaining - amount);
@@ -1052,9 +1059,13 @@ async function handleEcon(interaction) {
 
     if (commandName === 'econrank') {
         const sorted = Object.entries(econ)
-            .map(([id, u]) => ({ id, balance: u.balance || 0 }))
-            .filter(u => u.balance > 0)
-            .sort((a, b) => b.balance - a.balance)
+            .map(([id, u]) => ({ id, balance: u.balance || 0, infinite: u.infinite === true }))
+            .filter(u => u.balance > 0 || u.infinite)
+            .sort((a, b) => {
+                if (a.infinite && !b.infinite) return -1;
+                if (!a.infinite && b.infinite) return 1;
+                return b.balance - a.balance;
+            })
             .slice(0, 10);
         if (sorted.length === 0) return interaction.reply({ content: 'まだデータがありません。', ...EPH });
         await interaction.deferReply();
@@ -1065,7 +1076,7 @@ async function handleEcon(interaction) {
                 const member = await guild?.members.fetch(u.id).catch(() => null);
                 if (member) { name = member.user.username; econ[u.id].username = name; } else name = `ID:${u.id}`;
             }
-            return `${medals[i] || `**${i + 1}.**`} ${name} — **${u.balance.toLocaleString()}** ${CURRENCY}`;
+            return `${medals[i] || `**${i + 1}.**`} ${name} — **${u.infinite ? '∞' : u.balance.toLocaleString()}** ${CURRENCY}`;
         }));
         save(ECON_FILE, econ);
         const embed = new EmbedBuilder().setTitle(`${CURRENCY} 所持金ランキング`).setColor(0xf1c40f).setDescription(lines.join('\n')).setTimestamp();
@@ -1225,8 +1236,8 @@ async function handleEcon(interaction) {
             else if (amtInput === 'half') amount = Math.floor(u.balance / 2);
             else amount = parseInt(amtInput) || 0;
             if (amount <= 0) return interaction.reply({ content: '❌ 有効な金額を入力してください。', ...EPH });
-            if (u.balance < amount) return interaction.reply({ content: `❌ 残高不足。現在: **${u.balance.toLocaleString()}** ${CURRENCY}`, ...EPH });
-            u.balance -= amount;
+            if (!canAfford(u, amount)) return interaction.reply({ content: `❌ 残高不足。現在: **${u.balance.toLocaleString()}** ${CURRENCY}`, ...EPH });
+            deduct(u, amount);
             c.balance = (c.balance || 0) + amount;
             save(ECON_FILE, econ);
             save(CORP_FILE, corpData);
@@ -1442,8 +1453,8 @@ async function doBuyItem(interaction, itemName, amount, econ, user, guild, shop)
     if (!item) return interaction.reply({ content: `❌ **${itemName}** は存在しません。`, ...EPH });
     const u = getUser(econ, user.id, user);
     const total = item.price * amount;
-    if (u.balance < total) return interaction.reply({ content: `❌ 残高不足。必要: **${total.toLocaleString()}** / 現在: **${u.balance.toLocaleString()}** 🪙`, ...EPH });
-    u.balance -= total;
+    if (!canAfford(u, total)) return interaction.reply({ content: `❌ 残高不足。必要: **${total.toLocaleString()}** / 現在: **${u.balance.toLocaleString()}** 🪙`, ...EPH });
+    deduct(u, total);
     if (!u.inventory) u.inventory = [];
     for (let i = 0; i < amount; i++) {
         u.inventory.push({ name: item.name, boughtAt: Date.now(), sellPrice: Math.floor(item.price * 0.5) });
@@ -1565,7 +1576,7 @@ async function doBuyStock(interaction, c, amount, econ, user, corpData) {
     const subtotal = round3(price * amount);
     const fee = round3(subtotal * FEE_RATE);
     const total = round3(subtotal + fee);
-    if (u.balance < total) return interaction.reply({ content: `❌ 残高不足。必要: **${fmtPrice(total)}** 🪙 (手数料${fmtPrice(fee)}含)\n現在: **${fmtPrice(u.balance)}** 🪙`, ...EPH });
+    if (!canAfford(u, total)) return interaction.reply({ content: `❌ 残高不足。必要: **${fmtPrice(total)}** 🪙 (手数料${fmtPrice(fee)}含)\n現在: **${fmtPrice(u.balance)}** 🪙`, ...EPH });
     if (c.stock.availableShares < amount) return interaction.reply({ content: `❌ 購入可能株数が不足。現在: **${c.stock.availableShares}** 株`, ...EPH });
     u.balance = round3(u.balance - total);
     if (!u.stocks) u.stocks = {};
@@ -1720,7 +1731,7 @@ async function doBuyCrypto(interaction, coin, amtInput, econ, u, cryptoData, CRY
     const subtotal = round3(coin.price * amount);
     const fee = round3(subtotal * FEE_RATE);
     const total = round3(subtotal + fee);
-    if (u.balance < total) return interaction.reply({ content: `❌ 残高不足。必要: **${fmtPrice(total)}** 🪙 (手数料${fmtPrice(fee)}含)\n現在: **${fmtPrice(u.balance)}** 🪙`, ...EPH });
+    if (!canAfford(u, total)) return interaction.reply({ content: `❌ 残高不足。必要: **${fmtPrice(total)}** 🪙 (手数料${fmtPrice(fee)}含)\n現在: **${fmtPrice(u.balance)}** 🪙`, ...EPH });
     u.balance = round3(u.balance - total);
     if (!u.crypto) u.crypto = {};
     u.crypto[coin.id] = (u.crypto[coin.id] || 0) + amount;
@@ -2261,8 +2272,8 @@ async function handleEconInteraction(interaction) {
         else if (amtInput === 'half') amount = Math.floor(u.balance / 2);
         else amount = parseInt(amtInput) || 0;
         if (amount <= 0) return interaction.reply({ content: '❌ 有効な金額を入力してください。', ...EPH });
-        if (u.balance < amount) return interaction.reply({ content: `❌ 残高不足。現在: **${u.balance.toLocaleString()}** 🪙`, ...EPH });
-        u.balance -= amount;
+        if (!canAfford(u, amount)) return interaction.reply({ content: `❌ 残高不足。現在: **${u.balance.toLocaleString()}** 🪙`, ...EPH });
+        deduct(u, amount);
         c.balance = (c.balance || 0) + amount;
         save(ECON_FILE, econ);
         save(CORP_FILE, corpData);
@@ -2354,7 +2365,7 @@ async function handleEconModal(interaction) {
             try { await unbClient.editUserBalance(interaction.guildId, user.id, { cash: -amount }, `maidbot換金 by ${user.username}`); }
             catch(e) { return interaction.reply({ content: `❌ UNB減算失敗: ${e.message}`, ...EPH }); }
             // maidbot加算
-            u.balance += receive;
+            addBal(u, receive);
             save(ECON_FILE, econ);
             return interaction.reply({ embeds: [new EmbedBuilder().setTitle('💱 換金完了').setColor(0x26a69a)
                 .addFields(
@@ -2366,15 +2377,15 @@ async function handleEconModal(interaction) {
         } else {
             const rate = ex.rateBotToUNB || 1;
             const receive = Math.floor(amount * rate);
-            if (u.balance < amount) return interaction.reply({ content: `❌ maidbot残高不足。現在: **${u.balance.toLocaleString()}** 🪙`, ...EPH });
+            if (!canAfford(u, amount)) return interaction.reply({ content: `❌ maidbot残高不足。現在: **${u.balance.toLocaleString()}** 🪙`, ...EPH });
             // maidbot減算（先に引く）
-            u.balance -= amount;
+            deduct(u, amount);
             save(ECON_FILE, econ);
             // UNBに加算
             try { await unbClient.editUserBalance(interaction.guildId, user.id, { cash: receive }, `maidbot換金 by ${user.username}`); }
             catch(e) {
                 // 失敗したら返金
-                u.balance += amount;
+                addBal(u, amount);
                 save(ECON_FILE, econ);
                 return interaction.reply({ content: `❌ UNB加算失敗: ${e.message}`, ...EPH });
             }
@@ -2403,7 +2414,7 @@ async function handleEconModal(interaction) {
         if (amount <= 0) return interaction.reply({ content: '❌ 有効な金額を入力してください。', ...EPH });
         if (amount > balance) return interaction.reply({ content: `❌ 会社残高が不足しています。現在: **${balance.toLocaleString()}** 🪙`, ...EPH });
         const u = getUser(econ, user.id, user);
-        u.balance += amount;
+        addBal(u, amount);
         c.balance = balance - amount;
         save(ECON_FILE, econ);
         save(CORP_FILE, corpData);
@@ -2424,7 +2435,7 @@ async function handleEconModal(interaction) {
         if (amount <= 0) return interaction.reply({ content: '❌ 有効な金額を入力してください。', ...EPH });
         if (amount > remaining) return interaction.reply({ content: `❌ 借入上限を超えます。あと **${remaining.toLocaleString()}** ${CURRENCY} まで借りられます。`, ...EPH });
         u.loan = current + amount;
-        u.balance += amount;
+        addBal(u, amount);
         u.loanDate = u.loanDate || Date.now();
         u.lastInterestCharge = u.lastInterestCharge || Date.now();
         save(ECON_FILE, econ);
@@ -2441,7 +2452,7 @@ async function handleEconModal(interaction) {
         else if (input === 'half') amount = Math.ceil(loan / 2);
         else amount = parseInt(input) || 0;
         if (amount <= 0) return interaction.reply({ content: '❌ 有効な金額を入力してください。', ...EPH });
-        if (u.balance < amount) return interaction.reply({ content: `❌ 残高不足。現在: **${u.balance.toLocaleString()}** ${CURRENCY}`, ...EPH });
+        if (!canAfford(u, amount)) return interaction.reply({ content: `❌ 残高不足。現在: **${u.balance.toLocaleString()}** ${CURRENCY}`, ...EPH });
         const actual = Math.min(amount, loan);
         u.balance -= actual;
         u.loan = loan - actual;
@@ -2460,9 +2471,9 @@ async function handleEconModal(interaction) {
         if (!c || !c.stock) return interaction.reply({ content: '❌ 会社が見つかりません。', ...EPH });
         const u = getUser(econ, user.id, user);
         const total = c.stock.price * amount;
-        if (u.balance < total) return interaction.reply({ content: `❌ 残高不足。必要: **${total.toLocaleString()}** / 現在: **${u.balance.toLocaleString()}** ${CURRENCY}`, ...EPH });
+        if (!canAfford(u, total)) return interaction.reply({ content: `❌ 残高不足。必要: **${total.toLocaleString()}** / 現在: **${u.balance.toLocaleString()}** ${CURRENCY}`, ...EPH });
         if (c.stock.availableShares < amount) return interaction.reply({ content: `❌ 購入可能株数が不足。現在: **${c.stock.availableShares}** 株`, ...EPH });
-        u.balance -= total;
+        deduct(u, total);
         if (!u.stocks) u.stocks = {};
         u.stocks[c.id] = (u.stocks[c.id] || 0) + amount;
         c.stock.availableShares -= amount;
@@ -2488,7 +2499,7 @@ async function handleEconModal(interaction) {
         const held = (u.stocks || {})[c.id] || 0;
         if (held < amount) return interaction.reply({ content: `❌ 保有株数不足。現在: **${held}** 株`, ...EPH });
         const total = c.stock.price * amount;
-        u.balance += total;
+        addBal(u, total);
         u.stocks[c.id] -= amount;
         c.stock.availableShares += amount;
         c.stock.price = Math.max(1, Math.floor(c.stock.price * (1 - 0.008 * Math.min(amount, 10))));
