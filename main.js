@@ -766,9 +766,9 @@ client.once(Events.ClientReady, async () => {
                 if (!c.stock) continue;
                 const open = c.stock.price;
                 const circRatio = 1 - c.stock.availableShares / c.stock.totalShares;
-                // 流通率が高いほど微上昇、低いほど微下落。ノイズは±0.15%
-                const baseDrift = (circRatio - 0.5) * 0.002 + 0.0001;
-                const noise = (Math.random() - 0.5) * 0.003;
+                // 流通率が高いほど上昇しやすい、常に微上昇バイアス
+                const baseDrift = (circRatio - 0.5) * 0.002 + 0.0003;
+                const noise = (Math.random() - 0.48) * 0.003; // 上昇に少し偏ったノイズ
                 const change = 1 + baseDrift + noise;
                 const close = r3(Math.max(0.001, open * change));
                 const high = r3(Math.max(open, close) * (1 + Math.random() * 0.001));
@@ -793,9 +793,9 @@ client.once(Events.ClientReady, async () => {
             for (const c of Object.values(cryptoData)) {
                 const open = c.price;
                 const circRatio = 1 - c.availableSupply / c.totalSupply;
-                // 流通率に応じた緩やかな変動、ノイズは±0.15%
-                const baseDrift = (circRatio - 0.5) * 0.002 + 0.0001;
-                const noise = (Math.random() - 0.5) * 0.003;
+                // 流通率に応じた変動、常に微上昇バイアス
+                const baseDrift = (circRatio - 0.5) * 0.002 + 0.0003;
+                const noise = (Math.random() - 0.48) * 0.003; // 上昇に少し偏ったノイズ
                 const change = 1 + baseDrift + noise;
                 const close = r3(Math.max(0.001, open * change));
                 const high = r3(Math.max(open, close) * (1 + Math.random() * 0.001));
