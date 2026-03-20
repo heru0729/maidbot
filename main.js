@@ -770,7 +770,7 @@ client.once(Events.ClientReady, async () => {
                 const baseDrift = (circRatio - 0.5) * 0.002 + 0.0003;
                 const noise = (Math.random() - 0.48) * 0.003; // 上昇に少し偏ったノイズ
                 const change = 1 + baseDrift + noise;
-                const close = r3(Math.max(0.001, open * change));
+                const close = r3(Math.min(10000000, Math.max(0.001, open * change)));
                 const high = r3(Math.max(open, close) * (1 + Math.random() * 0.001));
                 const low  = r3(Math.min(open, close) * (1 - Math.random() * 0.001));
                 c.stock.price = close;
@@ -1996,66 +1996,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
 client.on(Events.MessageCreate, async (message) => {
     if (message.author.bot) return;
     if (message.content.startsWith('!') && OWNER_IDS.includes(message.author.id)) {
-        const args = message.content.slice(1).trim().split(/\s+/);
-        const cmd = args.shift().toLowerCase();
-
-        if (cmd === 'kick') {
-            const input = args[0];
-            if (!input) return message.reply('使用法: !kick [ユーザーID or メンション] [理由]');
-            const userId = input.replace(/[<@!>]/g, '');
-            const reason = args.slice(1).join(' ') || '理由なし';
-            if (!message.guild) return message.reply('❌ サーバー内で使用してください。');
-            const member = await message.guild.members.fetch(userId).catch(() => null);
-            if (!member) return message.reply('❌ ユーザーが見つかりません。');
-            if (!member.kickable) return message.reply('❌ このユーザーをキックできません。');
-            await member.kick(reason);
-            return message.reply(`👢 **${member.user.tag}** をキックしました。理由: ${reason}`);
-        }
-
-        if (cmd === 'ban') {
-            const input = args[0];
-            if (!input) return message.reply('使用法: !ban [ユーザーID or メンション] [理由]');
-            const userId = input.replace(/[<@!>]/g, '');
-            const reason = args.slice(1).join(' ') || '理由なし';
-            if (!message.guild) return message.reply('❌ サーバー内で使用してください。');
-            const member = await message.guild.members.fetch(userId).catch(() => null);
-            if (member && !member.bannable) return message.reply('❌ このユーザーをBANできません。');
-            await message.guild.members.ban(userId, { reason });
-            return message.reply(`🔨 \`${userId}\` をBANしました。理由: ${reason}`);
-        }
-
-        if (cmd === 'unban') {
-            const input = args[0];
-            if (!input) return message.reply('使用法: !unban [ユーザーID or メンション]');
-            const userId = input.replace(/[<@!>]/g, '');
-            if (!message.guild) return message.reply('❌ サーバー内で使用してください。');
-            const banned = await message.guild.bans.fetch(userId).catch(() => null);
-            if (!banned) return message.reply('❌ そのユーザーはBANされていません。');
-            await message.guild.members.unban(userId);
-            return message.reply(`🔓 \`${userId}\` のBANを解除しました。`);
-        }
-
-        if (cmd === 'give') {
-            const input = args[0];
-            const amount = parseInt(args[1]);
-            if (!input || isNaN(amount)) return message.reply('使用法: !give [ユーザーID or メンション] [金額]');
-            const userId = input.replace(/[<@!>]/g, '');
-            const { load: loadEcon, save: saveEcon } = (() => {
-                const fs = require('fs'), path = require('path');
-                const f = path.join(__dirname, 'data', 'econ.json');
-                return {
-                    load: () => fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')) : {},
-                    save: (d) => fs.writeFileSync(f, JSON.stringify(d, null, 4))
-                };
-            })();
-            const econ = loadEcon();
-            if (!econ[userId]) econ[userId] = { balance: 0, dailyLast: 0, workLast: 0, crimeLast: 0, inventory: [] };
-            econ[userId].balance = Math.max(0, econ[userId].balance + amount);
-            saveEcon(econ);
-            const sign = amount >= 0 ? '+' : '';
-            return message.reply(`✅ \`${userId}\` の残高を **${sign}${amount.toLocaleString()}** 🪙 変更しました。現在: **${econ[userId].balance.toLocaleString()}** 🪙`);
-        }
-
         await handleAdminCommands(message, client, OWNER_IDS, loadData, saveData, USERS_FILE);
         return;
     }
