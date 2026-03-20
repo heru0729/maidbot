@@ -77,6 +77,7 @@ function buildEconMenu() {
         new ButtonBuilder().setCustomId('amenu_resetcoins').setLabel('🪙 発行量変更').setStyle(ButtonStyle.Primary)
     );
     const row2 = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('amenu_resetall').setLabel('🗑️ 全経済リセット').setStyle(ButtonStyle.Danger),
         new ButtonBuilder().setCustomId('amenu_back').setLabel('← 戻る').setStyle(ButtonStyle.Secondary)
     );
     return { embeds: [embed], components: [row, row2] };
@@ -209,6 +210,35 @@ async function handleAdminCommands(msg, client, OWNER_IDS, loadData, saveData, U
                 new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('price').setLabel('新価格').setStyle(TextInputStyle.Short).setRequired(true))
             );
             return interaction.showModal(modal);
+        }
+
+        if (id === 'amenu_resetall') {
+            const embed = new EmbedBuilder().setTitle('⚠️ 全経済リセット確認').setColor(0xff4757)
+                .setDescription('以下のデータが**すべて削除**されます：\n• 全ユーザーの残高・インベントリ\n• 全会社データ（株式含む）\n• 全仮想通貨データ\n• オークション・融資・取引データ\n\n**この操作は取り消せません。**');
+            const row = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('amenu_resetall_confirm').setLabel('✅ リセット実行').setStyle(ButtonStyle.Danger),
+                new ButtonBuilder().setCustomId('amenu_econ').setLabel('❌ キャンセル').setStyle(ButtonStyle.Secondary)
+            );
+            return interaction.update({ embeds: [embed], components: [row] });
+        }
+
+        if (id === 'amenu_resetall_confirm') {
+            const fs = require('fs'), path = require('path');
+            const dataDir = path.join(__dirname, 'data');
+            const files = ['econ.json', 'corp.json', 'crypto.json', 'auctions.json', 'loans.json', 'trades.json'];
+            const results = [];
+            for (const file of files) {
+                const p = path.join(dataDir, file);
+                if (fs.existsSync(p)) {
+                    fs.writeFileSync(p, JSON.stringify({}, null, 4));
+                    results.push(`✅ ${file}`);
+                } else {
+                    results.push(`⏭️ ${file}（存在しない）`);
+                }
+            }
+            const embed = new EmbedBuilder().setTitle('🗑️ 全経済リセット完了').setColor(0x2ecc71)
+                .setDescription(results.join('\n')).setTimestamp();
+            return interaction.update({ embeds: [embed], components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('amenu_econ').setLabel('← 戻る').setStyle(ButtonStyle.Secondary))] });
         }
 
         if (id === 'amenu_resetcoins') {
