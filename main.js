@@ -1315,7 +1315,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
                 if (!banned) return interaction.reply({ content: '❌ そのユーザーはBANされていません。', ...EPH });
                 await interaction.guild.members.unban(input);
                 const embed = new EmbedBuilder().setTitle('🔓 BAN解除').setColor(0x57f287).addFields({ name: '対象', value: `${banned.user.tag} (\`${input}\`)` }).setTimestamp();
-                await interaction.reply({ embeds: [embed] });
+                await interaction.reply({ embeds: [embed], components: [delBtn()] });
             } catch (e) {
                 await interaction.reply({ content: `❌ BAN解除に失敗しました: ${e.message}`, ...EPH });
             }
@@ -1368,7 +1368,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
             if (!member.kickable) return interaction.reply({ content: '❌ このユーザーをキックできません。（権限不足）', ...EPH });
             await member.kick(reason);
             const embed = new EmbedBuilder().setTitle('👢 キック').setColor(0xff6b35).addFields({ name: '対象', value: `${target.tag} (${target.id})`, inline: true }, { name: '理由', value: reason, inline: true }).setTimestamp();
-            await interaction.reply({ embeds: [embed] });
+            await interaction.reply({ embeds: [embed], components: [delBtn()] });
         }
 
         if (commandName === 'ban') {
@@ -1378,7 +1378,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
             if (member && !member.bannable) return interaction.reply({ content: '❌ このユーザーをBANできません。（権限不足）', ...EPH });
             await interaction.guild.members.ban(target.id, { reason });
             const embed = new EmbedBuilder().setTitle('🔨 BAN').setColor(0xff0000).addFields({ name: '対象', value: `${target.tag} (${target.id})`, inline: true }, { name: '理由', value: reason, inline: true }).setTimestamp();
-            await interaction.reply({ embeds: [embed] });
+            await interaction.reply({ embeds: [embed], components: [delBtn()] });
         }
 
         if (commandName === 'embed') {
@@ -1406,7 +1406,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
             if (member.roles.cache.has(muteRoleId)) return interaction.reply({ content: '⚠️ 既にミュートされています。', ...EPH });
             await member.roles.add(muteRoleId, reason);
             const embed = new EmbedBuilder().setTitle('🔇 ミュート').setColor(0xff6b35).addFields({ name: '対象', value: `${target.tag} (${target.id})`, inline: true }, { name: '理由', value: reason, inline: true }).setTimestamp();
-            await interaction.reply({ embeds: [embed] });
+            await interaction.reply({ embeds: [embed], components: [delBtn()] });
         }
 
         if (commandName === 'unmute') {
@@ -1418,7 +1418,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
             if (!member.roles.cache.has(muteRoleId)) return interaction.reply({ content: '⚠️ このユーザーはミュートされていません。', ...EPH });
             await member.roles.remove(muteRoleId);
             const embed = new EmbedBuilder().setTitle('🔊 ミュート解除').setColor(0x57f287).addFields({ name: '対象', value: `${target.tag} (${target.id})` }).setTimestamp();
-            await interaction.reply({ embeds: [embed] });
+            await interaction.reply({ embeds: [embed], components: [delBtn()] });
         }
 
         if (commandName === 'serverlock') {
