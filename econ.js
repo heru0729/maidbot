@@ -343,7 +343,7 @@ async function handleEcon(interaction) {
                 .setDescription(`<@${user.id}> **+${base + bonus}** ${CURRENCY} を受け取りました！\n残高: **${u.balance.toLocaleString()}** ${CURRENCY}`)
                 .addFields({ name: '内訳', value: `ベース: ${base} + 連続: ${bonus}`, inline: true }, { name: '連続ログイン', value: `${streak}日目 🔥`, inline: true })
                 .setColor(0x57f287).setTimestamp();
-            return interaction.reply({ embeds: [embed], components: [delBtn()], ...EPH });
+            return interaction.reply({ embeds: [embed], components: [], ...EPH });
         }
 
         if (sub === 'work') {
@@ -368,7 +368,7 @@ async function handleEcon(interaction) {
             const embed = new EmbedBuilder().setTitle(`💼 ${job.name} として働いた`)
                 .setDescription(`<@${user.id}> ${job.desc}！\n**+${amount}** ${CURRENCY} を獲得！\n残高: **${u.balance.toLocaleString()}** ${CURRENCY}`)
                 .setColor(0x3498db).setTimestamp();
-            return interaction.reply({ embeds: [embed], components: [delBtn()], ...EPH });
+            return interaction.reply({ embeds: [embed], components: [], ...EPH });
         }
 
         if (sub === 'crime') {
@@ -395,7 +395,7 @@ async function handleEcon(interaction) {
                 embed = new EmbedBuilder().setTitle(`🚔 ${crime.name} 失敗！`).setDescription(`<@${user.id}> 捕まった！**${fine}** ${CURRENCY} 没収。\n残高: **${u.balance.toLocaleString()}** ${CURRENCY}`).setColor(0xff4757);
             }
             save(ECON_FILE, econ);
-            return interaction.reply({ embeds: [embed], components: [delBtn()], ...EPH });
+            return interaction.reply({ embeds: [embed], components: [], ...EPH });
         }
 
         if (sub === 'hunt') {
@@ -477,7 +477,7 @@ async function handleEcon(interaction) {
                 embed = new EmbedBuilder().setTitle('🚔 強盗失敗！').setDescription(`捕まった！罰金 **${fine.toLocaleString()}** 🪙\n残高: **${u.balance.toLocaleString()}** 🪙`).setColor(0xff4757);
             }
             save(ECON_FILE, econ);
-            return interaction.reply({ embeds: [embed], components: [delBtn()], ...EPH });
+            return interaction.reply({ embeds: [embed], components: [], ...EPH });
         }
 
         if (sub === 'flip') {
@@ -500,7 +500,7 @@ async function handleEcon(interaction) {
                     { name: '結果', value: result === 'heads' ? '表 🪙' : '裏 🔄', inline: true },
                     { name: win ? `+${amount.toLocaleString()} 獲得` : `-${amount.toLocaleString()} 没収`, value: `残高: **${u.balance.toLocaleString()}** 🪙`, inline: false }
                 );
-            return interaction.reply({ embeds: [embed], components: [delBtn()], ...EPH });
+            return interaction.reply({ embeds: [embed], components: [], ...EPH });
         }
 
         if (sub === 'slots') {
@@ -525,7 +525,7 @@ async function handleEcon(interaction) {
                 .setDescription(`**[ ${s.join(' | ')} ]**\n\n${win?`🎉 **${multiplier}x** 当たり！ **+${payout.toLocaleString()}** 🪙`:`💸 ハズレ... **-${amount.toLocaleString()}** 🪙`}`)
                 .setColor(win ? 0xf1c40f : 0x95a5a6)
                 .addFields({ name: '残高', value: `**${u.balance.toLocaleString()}** 🪙`, inline: true });
-            return interaction.reply({ embeds: [embed], components: [delBtn()], ...EPH });
+            return interaction.reply({ embeds: [embed], components: [], ...EPH });
         }
 
         if (sub === 'bj') {
@@ -546,7 +546,7 @@ async function handleEcon(interaction) {
             if (calcBJ(playerCards) === 21) {
                 addBal(u, Math.floor(bet * leverage * 1.5));
                 save(ECON_FILE, econ);
-                return interaction.reply({ embeds: [buildBJEmbed(gameObj, 'bj', u.balance, user)], components: [delBtn()], ...EPH });
+                return interaction.reply({ embeds: [buildBJEmbed(gameObj, 'bj', u.balance, user)], components: [], ...EPH });
             }
             bjGames.set(gameKey, gameObj);
             return interaction.reply({ embeds: [buildBJEmbed(gameObj, 'playing', null, user)], components: buildBJRows(gameKey), ...EPH });
@@ -622,7 +622,7 @@ async function handleEcon(interaction) {
             new ButtonBuilder().setCustomId('exchange_unb_to_bot').setLabel('UNB → 🪙').setStyle(ButtonStyle.Success),
             new ButtonBuilder().setCustomId('exchange_bot_to_unb').setLabel('🪙 → UNB').setStyle(ButtonStyle.Primary)
         );
-        return interaction.reply({ embeds: [embed], components: [row, delBtn()], ...EPH });
+        return interaction.reply({ embeds: [embed], components: [row], ...EPH });
     }
 
     if (commandName === 'dust') {
@@ -877,7 +877,7 @@ async function handleEcon(interaction) {
             if (pending.length === 0) return interaction.reply({ content: '申請中の融資はありません。', ...EPH });
             const embed = new EmbedBuilder().setTitle(`📋 ${c.name} への融資申請`).setColor(0x3498db)
                 .setDescription(pending.map(l => `**${l.username}** — **${l.amount.toLocaleString()}** 🪙\nID: \`${l.id}\``).join('\n\n'));
-            return interaction.reply({ embeds: [embed], components: [delBtn()], ...EPH });
+            return interaction.reply({ embeds: [embed], components: [], ...EPH });
         }
         if (sub === 'approve' || sub === 'deny') {
             const id = options.getString('id');
@@ -960,7 +960,7 @@ async function handleEcon(interaction) {
             if (incoming.length === 0) return interaction.reply({ content: `**${c.name}** への取引オファーはありません。`, ...EPH });
             const embed = new EmbedBuilder().setTitle(`📦 ${c.name} への取引オファー`).setColor(0xe67e22)
                 .setDescription(incoming.map(t => `**${t.fromCorpName}** → **${t.itemName}** — **${t.price.toLocaleString()}** 🪙\nID: \`${t.id}\``).join('\n\n'));
-            return interaction.reply({ embeds: [embed], components: [delBtn()], ...EPH });
+            return interaction.reply({ embeds: [embed], components: [], ...EPH });
         }
         if (sub === 'accept' || sub === 'deny') {
             const id = options.getString('id');
@@ -1110,7 +1110,7 @@ async function handleEcon(interaction) {
                     { name: '設立費用', value: `${CORP_COST.toLocaleString()} ${CURRENCY}`, inline: true },
                     { name: '説明', value: corpDesc, inline: false }
                 ).setTimestamp();
-            return interaction.reply({ embeds: [embed], components: [delBtn()], ...EPH });
+            return interaction.reply({ embeds: [embed], components: [], ...EPH });
         }
 
         if (sub === 'setting') {
@@ -1284,7 +1284,7 @@ async function handleEcon(interaction) {
                     { name: '発行枚数', value: `${TOTAL_SUPPLY.toLocaleString()} 枚`, inline: true },
                     { name: '初期価格', value: `0.005 🪙`, inline: true }
                 ).setTimestamp();
-            return interaction.reply({ embeds: [embed], components: [delBtn()], ...EPH });
+            return interaction.reply({ embeds: [embed], components: [], ...EPH });
         }
 
         if (sub === 'list') {
@@ -1297,7 +1297,7 @@ async function handleEcon(interaction) {
                     return `${arrow} **${c.name}** (${c.symbol})\n価格: **${fmtPrice(c.price)}** 🪙　時価総額: **${fmtPrice(round3(c.price * c.totalSupply))}** 🪙`;
                 }).join('\n\n'))
                 .setFooter({ text: '/crypto view [symbol] で詳細 | 手数料2%' });
-            return interaction.reply({ embeds: [embed], components: [delBtn()], ...EPH });
+            return interaction.reply({ embeds: [embed], components: [], ...EPH });
         }
 
         if (sub === 'view') {
@@ -1362,7 +1362,7 @@ async function handleEcon(interaction) {
                 const embed = new EmbedBuilder().setTitle('📊 株式市場').setColor(0x3498db)
                     .setDescription(allCorps.map((c, i) => `**${i + 1}. ${c.name}**\n${c.stock ? `株価: **${c.stock.price.toLocaleString()}** ${CURRENCY}` : '株式未発行'}`).join('\n'))
                     .setFooter({ text: 'まだ株式を発行している会社はありません' });
-                return interaction.reply({ embeds: [embed], components: [delBtn()], ...EPH });
+                return interaction.reply({ embeds: [embed], components: [], ...EPH });
             }
             if (stockCorps.length === 1) {
                 // 1社しかなければ直接表示
@@ -1466,7 +1466,7 @@ async function doBuyItem(interaction, itemName, amount, econ, user, guild, shop)
     }
     const embed = new EmbedBuilder().setTitle('✅ 購入完了').setColor(0x57f287)
         .setDescription(`**${item.name}** × ${amount} を購入しました！\n合計: **${total.toLocaleString()}** 🪙\n残高: **${u.balance.toLocaleString()}** 🪙${item.roleId ? '\n🏷️ ロールが付与されました。' : ''}`).setTimestamp();
-    return interaction.reply({ embeds: [embed], components: [delBtn()], ...EPH });
+    return interaction.reply({ embeds: [embed], components: [], ...EPH });
 }
 
 async function doSellItem(interaction, itemName, sellCount, econ, u) {
@@ -1481,7 +1481,7 @@ async function doSellItem(interaction, itemName, sellCount, econ, u) {
     for (const i of [...indices].reverse()) u.inventory.splice(i, 1);
     addBal(u, totalPrice);
     save(ECON_FILE, econ);
-    return interaction.reply({ content: `✅ **${itemName}** × ${sellCount} を **${totalPrice.toLocaleString()}** 🪙 で売却しました。\n残高: **${u.balance.toLocaleString()}** 🪙`, components: [delBtn()], ...EPH });
+    return interaction.reply({ content: `✅ **${itemName}** × ${sellCount} を **${totalPrice.toLocaleString()}** 🪙 で売却しました。\n残高: **${u.balance.toLocaleString()}** 🪙`, components: [], ...EPH });
 }
 
 async function showStockDetail(interaction, c, econ, user) {
@@ -1591,7 +1591,7 @@ async function doBuyStock(interaction, c, amount, econ, user, corpData) {
     if (c.stock.history.length > 1440) c.stock.history.shift();
     save(ECON_FILE, econ);
     save(CORP_FILE, corpData);
-    return interaction.reply({ content: `✅ **${c.name}** の株を **${amount}** 株 購入！\n小計: ${fmtPrice(subtotal)} 🪙 + 手数料: ${fmtPrice(fee)} 🪙\n現在株価: **${fmtPrice(c.stock.price)}** 🪙`, components: [delBtn()], ...EPH });
+    return interaction.reply({ content: `✅ **${c.name}** の株を **${amount}** 株 購入！\n小計: ${fmtPrice(subtotal)} 🪙 + 手数料: ${fmtPrice(fee)} 🪙\n現在株価: **${fmtPrice(c.stock.price)}** 🪙`, components: [], ...EPH });
 }
 
 async function doSellStock(interaction, c, amount, econ, u, corpData) {
@@ -1614,7 +1614,7 @@ async function doSellStock(interaction, c, amount, econ, u, corpData) {
     if (c.stock.history.length > 1440) c.stock.history.shift();
     save(ECON_FILE, econ);
     save(CORP_FILE, corpData);
-    return interaction.reply({ content: `✅ **${c.name}** の株を **${amount}** 株 売却！\n小計: ${fmtPrice(subtotal)} 🪙 - 手数料: ${fmtPrice(fee)} 🪙 = **${fmtPrice(total)}** 🪙\n現在株価: **${fmtPrice(c.stock.price)}** 🪙`, components: [delBtn()], ...EPH });
+    return interaction.reply({ content: `✅ **${c.name}** の株を **${amount}** 株 売却！\n小計: ${fmtPrice(subtotal)} 🪙 - 手数料: ${fmtPrice(fee)} 🪙 = **${fmtPrice(total)}** 🪙\n現在株価: **${fmtPrice(c.stock.price)}** 🪙`, components: [], ...EPH });
 }
 
 async function showCorpInfo(interaction, c, econ, user) {
@@ -1743,7 +1743,7 @@ async function doBuyCrypto(interaction, coin, amtInput, econ, u, cryptoData, CRY
     if (coin.history.length > 60) coin.history.shift();
     save(ECON_FILE, econ);
     save(CRYPTO_FILE, cryptoData);
-    return interaction.reply({ content: `✅ **${coin.name}** を **${amount.toLocaleString()}** 枚 購入！\n小計: ${fmtPrice(subtotal)} 🪙 + 手数料: ${fmtPrice(fee)} 🪙\n現在価格: **${fmtPrice(coin.price)}** 🪙`, components: [delBtn()], ...EPH });
+    return interaction.reply({ content: `✅ **${coin.name}** を **${amount.toLocaleString()}** 枚 購入！\n小計: ${fmtPrice(subtotal)} 🪙 + 手数料: ${fmtPrice(fee)} 🪙\n現在価格: **${fmtPrice(coin.price)}** 🪙`, components: [], ...EPH });
 }
 
 async function doSellCrypto(interaction, coin, amtInput, econ, u, cryptoData, CRYPTO_FILE) {
@@ -1766,7 +1766,7 @@ async function doSellCrypto(interaction, coin, amtInput, econ, u, cryptoData, CR
     if (coin.history.length > 60) coin.history.shift();
     save(ECON_FILE, econ);
     save(CRYPTO_FILE, cryptoData);
-    return interaction.reply({ content: `✅ **${coin.name}** を **${amount.toLocaleString()}** 枚 売却！\n小計: ${fmtPrice(subtotal)} 🪙 - 手数料: ${fmtPrice(fee)} 🪙 = **${fmtPrice(total)}** 🪙\n現在価格: **${fmtPrice(coin.price)}** 🪙`, components: [delBtn()], ...EPH });
+    return interaction.reply({ content: `✅ **${coin.name}** を **${amount.toLocaleString()}** 枚 売却！\n小計: ${fmtPrice(subtotal)} 🪙 - 手数料: ${fmtPrice(fee)} 🪙 = **${fmtPrice(total)}** 🪙\n現在価格: **${fmtPrice(coin.price)}** 🪙`, components: [], ...EPH });
 }
 
 async function showStoreManage(interaction, c, corpData, user) {
@@ -1912,6 +1912,10 @@ async function handleEconInteraction(interaction) {
             )
         );
         return interaction.showModal(modal);
+    }
+    if (cid === 'bank_reload') {
+        const u = getUser(econ, user.id, user);
+        return interaction.update(buildBankPanel(u));
     }
     if (cid === 'bank_repay') {
         const modal = new ModalBuilder().setCustomId('modal_bank_repay').setTitle('💰 ローン返済');
@@ -2373,7 +2377,7 @@ async function handleEconModal(interaction) {
                     { name: '受取', value: `**${receive.toLocaleString()}** 🪙`, inline: true },
                     { name: 'レート', value: `1 UNB = ${rate} 🪙`, inline: true },
                     { name: 'maidbot残高', value: `**${u.balance.toLocaleString()}** 🪙`, inline: true }
-                ).setTimestamp()], components: [delBtn()], ...EPH });
+                ).setTimestamp()], components: [], ...EPH });
         } else {
             const rate = ex.rateBotToUNB || 1;
             const receive = Math.floor(amount * rate);
@@ -2395,7 +2399,7 @@ async function handleEconModal(interaction) {
                     { name: '受取', value: `**${receive.toLocaleString()}** UNB`, inline: true },
                     { name: 'レート', value: `1 🪙 = ${rate} UNB`, inline: true },
                     { name: 'maidbot残高', value: `**${u.balance.toLocaleString()}** 🪙`, inline: true }
-                ).setTimestamp()], components: [delBtn()], ...EPH });
+                ).setTimestamp()], components: [], ...EPH });
         }
     }
 
