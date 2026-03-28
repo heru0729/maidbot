@@ -204,6 +204,13 @@ function createMainSetRow3(s) {
         new ButtonBuilder().setCustomId('set_menu_exchange').setLabel(`UNB換金: ${exchOn ? 'ON' : 'OFF'}`).setStyle(exchOn ? ButtonStyle.Success : ButtonStyle.Secondary)
     );
 }
+function createMainSetRow4(s) {
+    const cm = s.chatMoney;
+    const label = cm?.enabled ? `チャットマネー: ON (最大${cm.max || 10}🪙)` : 'チャットマネー: OFF';
+    return new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('set_menu_chatmoney').setLabel(label).setStyle(cm?.enabled ? ButtonStyle.Success : ButtonStyle.Secondary)
+    );
+}
 function buildExchangePanel(s) {
     const ex = s.exchange || {};
     const r1 = ex.rateUNBtoBot || 10;
@@ -225,8 +232,25 @@ function buildExchangePanel(s) {
     };
 }
 const EPH_FLAG = { flags: MessageFlags.Ephemeral };
+function buildChatMoneyPanel(s) {
+    const cm = s.chatMoney || {};
+    return {
+        embeds: [new EmbedBuilder().setTitle('💬 チャットマネー設定').setDescription(
+            `**状態:** ${cm.enabled ? '✅ ON' : '❌ OFF'}\n` +
+            `**付与額:** 1〜**${cm.max || 10}** 🪙（チャット毎にランダム）`
+        ).setColor(0x2ecc71)],
+        components: [
+            new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('chatmoney_toggle').setLabel(cm.enabled ? '❌ OFFにする' : '✅ ONにする').setStyle(cm.enabled ? ButtonStyle.Danger : ButtonStyle.Success),
+                new ButtonBuilder().setCustomId('chatmoney_set_max').setLabel('上限設定').setStyle(ButtonStyle.Primary),
+                new ButtonBuilder().setCustomId('set_back_main').setLabel('← 戻る').setStyle(ButtonStyle.Secondary)
+            )
+        ],
+        ...EPH_FLAG
+    };
+}
 function buildSetPanel(s) {
-    return { content: '⚙️ **サーバー管理設定パネル**\n下のボタンから各機能の設定を行ってください。', components: [createMainSetRow(s), createMainSetRow2(), createMainSetRow3(s)], flags: MessageFlags.Ephemeral };
+    return { content: '⚙️ **サーバー管理設定パネル**\n下のボタンから各機能の設定を行ってください。', components: [createMainSetRow(s), createMainSetRow2(), createMainSetRow3(s), createMainSetRow4(s)], flags: MessageFlags.Ephemeral };
 }
 
 function buildAutoReplyPanel(s) {
@@ -1691,6 +1715,15 @@ client.on(Events.InteractionCreate, async (interaction) => {
             await interaction.reply({ content: clamped === 0 ? `✅ 低速モードをオフにしました。` : `✅ 低速モードを **${clamped}秒** に設定しました。`, ...EPH });
         }
 
+        if (cid === 'modal_chatmoney_max') {
+            const val = parseInt(interaction.fields.getTextInputValue('max_amount')) || 0;
+            if (val < 1 || val > 100) return interaction.reply({ content: '❌ 1〜100の範囲で入力してください。', ...EPH });
+            if (!servers[guildId].chatMoney) servers[guildId].chatMoney = { enabled: false };
+            servers[guildId].chatMoney.max = val;
+            saveData(SERVERS_FILE, servers);
+            return interaction.reply({ content: `✅ チャットマネーの最大獲得額を **${val}** 🪙 に設定しました。`, ...EPH });
+        }
+
         if (cid === 'modal_autoreply_add') {
             const trigger = interaction.fields.getTextInputValue('ar_trigger').trim();
             const responsesRaw = interaction.fields.getTextInputValue('ar_responses').trim();
@@ -1898,8 +1931,63 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (cid === 'set_menu_autoreply') {
             await interaction.update(buildAutoReplyPanel(servers[guildId]));
         }
+        if (cid === 'set_menu_chatmoney') {
+            await interaction.update(buildChatMoneyPanel(servers[guildId]));
+        }
+        if (cid === 'chatmoney_toggle') {
+            if (!servers[guildId].chatMoney) servers[guildId].chatMoney = {};
+            servers[guildId].chatMoney.enabled = !servers[guildId].chatMoney.enabled;
+            saveData(SERVERS_FILE, servers);
+            await interaction.update(buildChatMoneyPanel(servers[guildId]));
+        }
+        if (cid === 'chatmoney_set_max') {
+            const modal = new ModalBuilder().setCustomId('modal_chatmoney_max').setTitle('チャットマネー上限設定');
+            modal.addComponents(
+                new ActionRowBuilder().addComponents(
+                    new TextInputBuilder().setCustomId('chatmoney_max').setLabel('最大付与額（1〜100）').setStyle(TextInputStyle.Short).setPlaceholder('例: 10').setValue(String(servers[guildId].chatMoney?.max || 10)).setRequired(true)
+                )
+            );
+            return interaction.showModal(modal);
+        }
         if (cid === 'set_menu_exchange') {
             await interaction.update(buildExchangePanel(servers[guildId]));
+        }
+        if (cid === 'set_menu_chatmoney') {
+            const cm = servers[guildId].chatMoney || {};
+            const embed = new EmbedBuilder().setTitle('💬 チャットマネー設定').setColor(0x2ecc71)
+                .setDescription(
+                    `**状態:** ${cm.enabled ? '✅ ON' : '❌ OFF'}\n` +
+                    `**最大獲得額:** ${cm.max || 10} 🪙/メッセージ\n\n` +
+                    'ONにするとチャット時にXPと同時にランダムでコインを獲得します。'
+                );
+            const row = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('chatmoney_toggle').setLabel(cm.enabled ? '❌ OFFにする' : '✅ ONにする').setStyle(cm.enabled ? ButtonStyle.Danger : ButtonStyle.Success),
+                new ButtonBuilder().setCustomId('chatmoney_set_max').setLabel('最大額を設定').setStyle(ButtonStyle.Primary),
+                new ButtonBuilder().setCustomId('set_back_main').setLabel('← 戻る').setStyle(ButtonStyle.Secondary)
+            );
+            return interaction.update({ embeds: [embed], components: [row], ...EPH_FLAG });
+        }
+        if (cid === 'chatmoney_toggle') {
+            if (!servers[guildId].chatMoney) servers[guildId].chatMoney = { enabled: false, max: 10 };
+            servers[guildId].chatMoney.enabled = !servers[guildId].chatMoney.enabled;
+            saveData(SERVERS_FILE, servers);
+            const cm = servers[guildId].chatMoney;
+            const embed = new EmbedBuilder().setTitle('💬 チャットマネー設定').setColor(0x2ecc71)
+                .setDescription(`**状態:** ${cm.enabled ? '✅ ON' : '❌ OFF'}\n**最大獲得額:** ${cm.max || 10} 🪙/メッセージ`);
+            const row = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('chatmoney_toggle').setLabel(cm.enabled ? '❌ OFFにする' : '✅ ONにする').setStyle(cm.enabled ? ButtonStyle.Danger : ButtonStyle.Success),
+                new ButtonBuilder().setCustomId('chatmoney_set_max').setLabel('最大額を設定').setStyle(ButtonStyle.Primary),
+                new ButtonBuilder().setCustomId('set_back_main').setLabel('← 戻る').setStyle(ButtonStyle.Secondary)
+            );
+            return interaction.update({ embeds: [embed], components: [row] });
+        }
+        if (cid === 'chatmoney_set_max') {
+            const modal = new ModalBuilder().setCustomId('modal_chatmoney_max').setTitle('チャットマネー最大額設定');
+            modal.addComponents(new ActionRowBuilder().addComponents(
+                new TextInputBuilder().setCustomId('max_amount').setLabel('最大獲得額（1〜100）').setStyle(TextInputStyle.Short)
+                    .setPlaceholder('例: 10').setValue(String(servers[guildId].chatMoney?.max || 10)).setRequired(true)
+            ));
+            return interaction.showModal(modal);
         }
         if (cid === 'exchange_toggle') {
             if (!servers[guildId].exchange) servers[guildId].exchange = {};
@@ -2094,6 +2182,19 @@ client.on(Events.MessageCreate, async (message) => {
                 message.reply(`🎉 レベルアップ！ **Lv.${users[message.author.id].lv}** になりました！`).then(msg => setTimeout(() => msg.delete().catch(()=>{}), 8000));
             }
             saveData(USERS_FILE, users);
+
+            // チャットマネー（XPと同じクールダウン）
+            const cm = servers[gid]?.chatMoney;
+            if (cm?.enabled) {
+                const max = Math.min(100, Math.max(1, cm.max || 10));
+                const coins = Math.floor(Math.random() * max) + 1;
+                const fs = require('fs'), path = require('path');
+                const econPath = path.join(__dirname, 'data', 'econ.json');
+                const econ = fs.existsSync(econPath) ? JSON.parse(fs.readFileSync(econPath, 'utf8')) : {};
+                if (!econ[message.author.id]) econ[message.author.id] = { balance: 0 };
+                if (!econ[message.author.id].infinite) econ[message.author.id].balance = (econ[message.author.id].balance || 0) + coins;
+                fs.writeFileSync(econPath, JSON.stringify(econ, null, 4));
+            }
         }
     }
 
