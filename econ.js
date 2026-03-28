@@ -170,7 +170,7 @@ function buildBankPanel(u) {
         .addFields(
             { name: '残高', value: `**${u.balance.toLocaleString()}** ${CURRENCY}`, inline: true },
             { name: '借入残高', value: `**${loan.toLocaleString()}** ${CURRENCY}`, inline: true },
-            { name: 'ローン上限', value: `**5,000** ${CURRENCY}`, inline: true }
+            { name: 'ローン上限', value: `**100,000** ${CURRENCY}`, inline: true }
         )
         .setDescription('ローンを借りると3時間ごとに5%の利子が加算されます。')
         .setFooter({ text: '金額は数字・all・halfで指定できます' });
@@ -1908,7 +1908,7 @@ async function handleEconInteraction(interaction) {
         const modal = new ModalBuilder().setCustomId('modal_bank_loan').setTitle('💸 ローンを借りる');
         modal.addComponents(
             new ActionRowBuilder().addComponents(
-                new TextInputBuilder().setCustomId('loan_amount').setLabel('借入額（上限5,000）').setStyle(TextInputStyle.Short).setPlaceholder('例: 1000').setRequired(true)
+                new TextInputBuilder().setCustomId('loan_amount').setLabel('借入額（上限100,000）').setStyle(TextInputStyle.Short).setPlaceholder('例: 10000').setRequired(true)
             )
         );
         return interaction.showModal(modal);
@@ -2427,7 +2427,7 @@ async function handleEconModal(interaction) {
         const input = interaction.fields.getTextInputValue('loan_amount').trim().toLowerCase();
         const u = getUser(econ, user.id, user);
         const current = u.loan || 0;
-        const remaining = 5000 - current;
+        const remaining = 100000 - current;
         let amount;
         if (input === 'all') amount = remaining;
         else if (input === 'half') amount = Math.floor(remaining / 2);
