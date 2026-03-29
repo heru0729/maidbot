@@ -168,7 +168,7 @@ function buildBankPanel(u) {
         .setTitle('🏦 銀行')
         .setColor(0x2ecc71)
         .addFields(
-            { name: '残高', value: `**${u.balance.toLocaleString()}** ${CURRENCY}`, inline: true },
+            { name: '残高', value: `**${isInf(u) ? '∞' : u.balance.toLocaleString()}** ${CURRENCY}`, inline: true },
             { name: '借入残高', value: `**${loan.toLocaleString()}** ${CURRENCY}`, inline: true },
             { name: 'ローン上限', value: `**100,000** ${CURRENCY}`, inline: true }
         )
@@ -179,7 +179,7 @@ function buildBankPanel(u) {
         new ButtonBuilder().setCustomId('bank_repay').setLabel('💰 返済する').setStyle(ButtonStyle.Success).setDisabled(loan <= 0),
         new ButtonBuilder().setCustomId('bank_reload').setLabel('🔄 リロード').setStyle(ButtonStyle.Secondary)
     );
-    return { embeds: [embed], components: [row] };
+    return { embeds: [embed], components: [row, delBtn()] };
 }
 
 function cdStr(remaining) {
